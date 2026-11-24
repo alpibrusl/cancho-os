@@ -4,8 +4,8 @@
 - **Pure cancho, no Linux kernel.** First target: Raspberry Pi 4 (bare metal), developed on QEMU raspi3b.
   Pi 5 avoided for bare metal (I/O behind RP1 over PCIe, poorly documented).
 - **Terminal = UART.** USB keyboard on the Pi (DWC2 / VL805 xHCI) is deferred indefinitely.
-- **Toolchain:** cancho emits target-neutral LLVM IR; clang compiles it for `aarch64-none-elf`.
-  The only host-specific line is the trap (`ud2` on x86 hosts), patched in build.sh.
+- **Toolchain:** `cancho build --target aarch64-none-elf --emit obj`, then the boot stub and `ld.lld`
+  with our own link script.
 
 ## Tracks
 1. **Pi kernel (this repo, active).**
@@ -17,11 +17,13 @@
    a cancho-owned userland on real laptops/phones; rejected for now in favour of "no Linux".
 
 ## No C (2026-11-24)
-- Every driver is cancho. `board/boot.S` keeps boot, the exception stub and eleven primitives of one
-  or two instructions; `board/board.c` is 27 lines of libc stubs for cancho's hosted runtime.
+- There is no C in the repository. Every driver is cancho; `board/boot.S` keeps boot, the exception
+  stub and eleven primitives of one or two instructions.
+- The compiler has a bare-metal target (`--target aarch64-none-elf`, cancho `docs/freestanding.md`):
+  no libc in the object, regions from the memory the link script names. That closed issues 01 and 03.
 - One `kernel8.img` for Pi 3 and Pi 4: the kernel reads MIDR_EL1 to tell them apart.
-- Next: the compiler's bare-metal target and freestanding runtime (issues 01, 03) delete `board.c`
-  and the build's workarounds; MMIO builtins (issue 02) delete the primitives.
+- Next in the compiler: MMIO builtins behind a capability (issue 02) delete the primitives; a rule
+  that refuses a hosted builtin on the bare target instead of leaving it to clang.
 - Pi 5: the SoC debug UART, GIC and timer would work the same way; needs its addresses from the
   BCM2712 documentation and a board to test on (QEMU has no model). Not started.
 
