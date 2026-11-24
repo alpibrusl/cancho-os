@@ -34,3 +34,8 @@ jobs:
           grep -q "data abort: address not mapped" null.txt
           ./test.sh 'crash write' > write.txt; cat write.txt
           grep -q "data abort: write to read-only memory" write.txt
+          # the robot: six simulated servos on the second serial port; ids 7 and 8 are not there
+          SERVOS=1 ./test.sh 'servo scan' 'servo pos' > servo.txt; cat servo.txt
+          grep -q "^6 servos found" servo.txt
+          grep -q "^servo 7: no answer" servo.txt
+          grep -q "^servo 3: position 2348" servo.txt

@@ -1,5 +1,7 @@
 edition 5;
 
+import feetech;
+
 // cancho-os: the kernel. Every driver here is cancho; what it cannot spell yet
 // (a volatile load or store, a system register, `wfi`) is a one-instruction
 // symbol of the foreign library "board" (board/boot.S), so `cancho authority`
@@ -32,6 +34,7 @@ extern fn board_tlb_flush[&f](ffi: &f Ffi("board")) -> [ffi("board")] int;
 //   k[2] GIC CPU interface  k[3] GIC distributor (both 0 on the Pi 3)
 //   k[4] counter units per tick   k[5] ticks so far
 //   k[6] translation tables used  k[7] peripheral window start   k[8] its end
+//   k[9] servo bus UART base
 // The system registers, by the numbers board_sys_read/board_sys_write take:
 //   0 cntfrq_el0  1 cntvct_el0  2 cntv_ctl_el0  3 cntv_cval_el0  4 cntv_tval_el0
 //   5 mair_el1    6 tcr_el1     7 ttbr0_el1     8 sctlr_el1      9 midr_el1
@@ -44,12 +47,14 @@ fn detect[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
         // Cortex-A53: Raspberry Pi 3 (BCM2837), and QEMU raspi3b
         k[1] = 3;
         k[0] = 0x3f201000;
+        k[9] = 0x3f215000;
         k[7] = 0x3f000000;
         k[8] = 0x40200000;
     } else if part == 0xd08 {
         // Cortex-A72: Raspberry Pi 4 (BCM2711)
         k[1] = 4;
         k[0] = 0xfe201000;
+        k[9] = 0xfe215000;
         k[2] = 0xff842000;
         k[3] = 0xff841000;
         k[7] = 0xfc000000;
@@ -190,6 +195,156 @@ fn getc[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
         poll(b, k);
     }
     return board_r32(b, uart) & 255;
+}
+
+fn now_us[&f](b: &f Ffi("board")) -> [ffi("board")] int {
+    let f = board_sys_read(b, 0);
+    let c = board_sys_read(b, 1);
+    return c / f * 1000000 + c % f * 1000000 / f;
+}
+
+// ---- the servo bus --------------------------------------------------------------
+// The arm's servos (Feetech STS) share one serial line. On the emulated boards it is
+// the second UART, the BCM283x "mini UART"; a Pi 5 will use a PL011 behind RP1, so
+// these four functions are the part that is rewritten for it, and nothing above them is.
+// Register offsets: 0x04 enables, 0x40 data, 0x44 interrupt enable, 0x48 FIFO control,
+// 0x4c line control, 0x54 line status (bit 0 a byte is waiting, bit 5 room to send),
+// 0x60 control, 0x68 baud.
+fn bus_init[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
+    let u = k[9];
+    board_w32(b, u + 4, 1);
+    board_w32(b, u + 0x60, 0);
+    board_w32(b, u + 0x44, 0);
+    board_w32(b, u + 0x4c, 3);
+    board_w32(b, u + 0x48, 0xc6);
+    // 1 Mbaud from a 500 MHz core clock would be 61.5: not exact, and the emulator ignores
+    // it. The real bus is the Pi 5 driver's problem.
+    board_w32(b, u + 0x68, 61);
+    return board_w32(b, u + 0x60, 3);
+}
+
+fn bus_put[&f, &s](b: &f Ffi("board"), k: &!s [int], c: int) -> [ffi("board")] int {
+    let u = k[9];
+    while board_r32(b, u + 0x54) & 32 == 0 {
+    }
+    return board_w32(b, u + 0x40, c);
+}
+
+// The next byte, or -1 when none is waiting.
+fn bus_get[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
+    let u = k[9];
+    if board_r32(b, u + 0x54) & 1 == 0 {
+        return -1;
+    }
+    return board_r32(b, u + 0x40) & 255;
+}
+
+// What `transact` answers besides what `feetech.decode` does.
+fn bus_timeout() -> [] int {
+    return -90;
+}
+
+fn bus_overflow() -> [] int {
+    return -91;
+}
+
+// Send `pkt[0..n]` and collect the status packet of servo `id` into `reply`, for at most
+// `timeout_us`. Bytes already waiting are dropped first: a late answer to an earlier
+// request must not be read as this one's. Answers what `feetech.decode` answers (the end
+// of the packet, with `table` filled, or one of its errors), or `bus_timeout`/`bus_overflow`.
+// The same shape as cancho-robot's `serial.transact`, on our own driver.
+fn transact[&f, &s, &p, &r, &t](b: &f Ffi("board"), k: &!s [int], pkt: &p [byte], n: int, reply: &!r [byte], id: int, table: &!t [int], timeout_us: int) -> [ffi("board")] int {
+    while bus_get(b, k) >= 0 {
+    }
+    var i = 0;
+    while i < n {
+        bus_put(b, k, int_of(pkt[i]));
+        i = i + 1;
+    }
+    let start = now_us(b);
+    var got = 0;
+    var result = feetech.need_more();
+    while result == feetech.need_more() {
+        let c = bus_get(b, k);
+        if c >= 0 {
+            if got >= len(reply) {
+                result = bus_overflow();
+            } else {
+                reply[got] = byte_of(c);
+                got = got + 1;
+                result = feetech.decode(reply[0..got], id, table);
+            }
+        } else if now_us(b) - start > timeout_us {
+            result = bus_timeout();
+        }
+    }
+    return result;
+}
+
+fn put_bus_error[&f, &s](b: &f Ffi("board"), k: &!s [int], code: int) -> [ffi("board")] int {
+    if code == bus_timeout() {
+        return puts(b, k, "no answer");
+    }
+    if code == bus_overflow() {
+        return puts(b, k, "answer too long");
+    }
+    return puts(b, k, feetech.error_tag(code));
+}
+
+// `servo scan`: ping ids 1 to 8 and say who answered. Read-only: this kernel builds no
+// packet that can move a servo (src/feetech.cho has none).
+fn servo_scan[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
+    var found = 0;
+    region r {
+        let pkt = alloc_slice[r](16, byte_of(0));
+        let reply = alloc_slice[r](64, byte_of(0));
+        let table = alloc_slice[r](feetech.slots(), 0);
+        var id = 1;
+        while id <= 8 {
+            let n = feetech.ping(pkt, id);
+            let got = transact(b, k, pkt, n, reply, id, table, 20000);
+            puts(b, k, "servo ");
+            put_dec(b, k, id);
+            if got > 0 {
+                puts(b, k, ": present\r\n");
+                found = found + 1;
+            } else {
+                puts(b, k, ": ");
+                put_bus_error(b, k, got);
+                puts(b, k, "\r\n");
+            }
+            id = id + 1;
+        }
+    }
+    put_dec(b, k, found);
+    return puts(b, k, " servos found\r\n");
+}
+
+// `servo pos`: the present position (register 56, two bytes) of servos 1 to 6, in raw ticks.
+fn servo_pos[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
+    region r {
+        let pkt = alloc_slice[r](16, byte_of(0));
+        let reply = alloc_slice[r](64, byte_of(0));
+        let table = alloc_slice[r](feetech.slots(), 0);
+        var id = 1;
+        while id <= 6 {
+            let n = feetech.read(pkt, id, 56, 2);
+            let got = transact(b, k, pkt, n, reply, id, table, 20000);
+            puts(b, k, "servo ");
+            put_dec(b, k, id);
+            if got > 0 && table[3] == 2 {
+                puts(b, k, ": position ");
+                put_dec(b, k, feetech.u16(reply, table[2]));
+                puts(b, k, "\r\n");
+            } else {
+                puts(b, k, ": ");
+                put_bus_error(b, k, got);
+                puts(b, k, "\r\n");
+            }
+            id = id + 1;
+        }
+    }
+    return 0;
 }
 
 // ---- memory: identity-mapped translation tables ---------------------------------
@@ -393,9 +548,9 @@ fn run[&f, &s, &r](b: &f Ffi("board"), k: &!s [int], line: &r [byte], n: int) ->
         return 0;
     }
     if same(line, n, "help") {
-        puts(b, k, "commands: help, about, echo <text>, uptime, ticks, mem, crash [null|write]\r\n");
+        puts(b, k, "commands: help, about, echo <text>, uptime, ticks, mem, servo scan, servo pos, crash [null|write]\r\n");
     } else if same(line, n, "about") {
-        puts(b, k, "cancho-os 0.0.4: a kernel written in cancho, no Linux underneath (Raspberry Pi ");
+        puts(b, k, "cancho-os 0.0.5: a kernel written in cancho, no Linux underneath (Raspberry Pi ");
         put_dec(b, k, k[1]);
         puts(b, k, ")\r\n");
     } else if n > 5 && same(line, 5, "echo ") {
@@ -418,6 +573,10 @@ fn run[&f, &s, &r](b: &f Ffi("board"), k: &!s [int], line: &r [byte], n: int) ->
         puts(b, k, " timer interrupts\r\n");
     } else if same(line, n, "mem") {
         memory_map(b, k, false);
+    } else if same(line, n, "servo scan") {
+        servo_scan(b, k);
+    } else if same(line, n, "servo pos") {
+        servo_pos(b, k);
     } else if same(line, n, "crash null") {
         // page 0 is not mapped
         board_r8(b, 0);
@@ -482,6 +641,7 @@ fn kernel[&f](b: &f Ffi("board")) -> [ffi("board")] int {
             mmu_on(b);
         }
         tick_start(b, k, 100);
+        bus_init(b, k);
         shell(b, k);
     }
     return 0;

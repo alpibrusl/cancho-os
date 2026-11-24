@@ -6,6 +6,8 @@ driver, the timer and interrupt controller, the page tables, the fault report, t
 
 ```
 src/kernel.cho   the kernel, drivers included (cancho)
+src/feetech.cho  the Feetech servo protocol, read side only (vendored from cancho-robot)
+sim/servos.cho   six simulated servos for QEMU: a program for the host, not in the image
 board/boot.S     boot (park cores 1-3, EL2 -> EL1, stack, zero .bss), the exception stub,
                  and the primitives cancho cannot spell yet, one or two instructions each:
                  load/store a byte, word or doubleword, read/write a system register, wfi
@@ -38,6 +40,7 @@ repo, `sh scripts/build-standalone.sh --out /tmp/cancho-out --rev $(git rev-pars
 ./build.sh && ./run.sh            # QEMU raspi3b
 ./test.sh about ticks crash       # scripted: type three lines, print what came back
 MACHINE=raspi4b ./test.sh about   # the same image as a Pi 4 (QEMU >= 9)
+SERVOS=1 ./test.sh 'servo scan'   # with the simulated servo bus on the second serial port
 ```
 
 On macOS: `brew install llvm lld qemu` and put `$(brew --prefix llvm)/bin` on `PATH`
@@ -47,7 +50,24 @@ Shell: `help`, `about`, `echo <text>`, `uptime` (from the ARM counter), `ticks` 
 interrupts taken), `mem` (the memory map), and three ways to fault on purpose, each named
 by the kernel with ESR/ELR/FAR before the core halts: `crash` (out-of-bounds
 read, caught by cancho's own check), `crash null` (page 0 is unmapped), `crash write`
-(kernel code is read-only).
+(kernel code is read-only). `servo scan` and `servo pos` are described below.
+
+## The robot
+
+The first real job for cancho-os is the safety controller of a robot arm (the SO-101 arms
+of [cancho-robot](https://github.com/alpibrusl/cancho-robot)): a machine where the only
+program that can reach the servo bus is the one the kernel hands it to.
+
+Today the kernel can talk to the bus and only read: `servo scan` pings ids 1 to 8,
+`servo pos` reads each servo's position. It contains no packet that can move a servo.
+In QEMU the bus is the board's second serial port, connected by `test.sh` to
+`sim/servos.cho`. The simulator is a model written from the protocol, not a recording of
+a servo, so it can share a misreading with the driver; the real check is the arm.
+
+The target board is a Pi 5, which QEMU does not model. What changes there is the address
+table and the four `bus_` functions (a PL011 behind the RP1 chip instead of the mini
+UART); the protocol, and everything built on it, does not. Not verified in QEMU: timing at
+1 Mbaud, half-duplex behaviour, RP1.
 
 ## Real Pi 4
 
