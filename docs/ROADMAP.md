@@ -35,6 +35,12 @@
    fixes to the compiler's bare target (hosted support modules were written whenever `--std` was given,
    and statics are made with `calloc`). Inverse kinematics is not here yet: it comes with step 3.
 3. The safety core as the only holder of the bus; a motion request that goes through it or not at all.
+   - ✅ Judging: `arm check` runs `safety.approve`, unchanged from cancho-robot, on the pose read from the
+     bus, and sends nothing. Four verdicts held to the host in CI.
+   - Sending: waits for cancho-robot's actuation core (its PR 27), so that the write path here is the one
+     reviewed there, and for a simulator that moves.
+   - "The only holder" as something the compiler shows needs the MMIO capability (issue 02): today
+     every kernel function that holds the board can reach every register.
 4. Pi 5: console on the debug UART, addresses from the board's own device tree, then the bus behind RP1.
 5. The real arm, read-only first, checked against LeRobot reading the same bus.
 

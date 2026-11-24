@@ -3,6 +3,7 @@ edition 5;
 import feetech;
 import calibration;
 import kinematics;
+import safety;
 
 // cancho-os: the kernel. Every driver here is cancho; what it cannot spell yet
 // (a volatile load or store, a system register, `wfi`) is a one-instruction
@@ -461,6 +462,143 @@ fn arm_pose[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
     return 0;
 }
 
+// ---- the safety core, judging -----------------------------------------------------
+// `arm check a1 a2 a3 a4 a5`: would the safety core let the arm go to these five angles
+// (whole degrees) from where it is now? cancho-robot's `safety.approve`, unchanged, on the
+// pose read from the bus: joint limits from the calibration spans, the workspace in the
+// arm's own frame, the jump bound, the capsule collisions (tower and tray; the other arm
+// is taken as absent), then the speed clamp for a 10 ms cycle. It answers and sends
+// nothing: the kernel still holds no packet that moves a servo.
+
+// Up to `len(out)` whole numbers, each possibly negative, from `line[from..n]`, separated
+// by spaces. How many were read; -1 for anything that is not one.
+fn numbers[&r, &o](line: &r [byte], from: int, n: int, out: &!o [int]) -> [] int {
+    var i = from;
+    var count = 0;
+    var bad = false;
+    while i < n && !bad {
+        if int_of(line[i]) == 32 {
+            i = i + 1;
+        } else {
+            var negative = false;
+            if int_of(line[i]) == 45 {
+                negative = true;
+                i = i + 1;
+            }
+            var digits = 0;
+            var v = 0;
+            while i < n && int_of(line[i]) >= 48 && int_of(line[i]) <= 57 && digits < 6 {
+                v = v * 10 + int_of(line[i]) - 48;
+                digits = digits + 1;
+                i = i + 1;
+            }
+            if digits == 0 || count >= len(out) || i < n && int_of(line[i]) != 32 {
+                bad = true;
+            } else {
+                if negative {
+                    v = 0 - v;
+                }
+                out[count] = v;
+                count = count + 1;
+            }
+        }
+    }
+    if bad {
+        return -1;
+    }
+    return count;
+}
+
+// Joints 1 to 5 from the bus, in degrees. 0, or the bus error (and which joint in `at`).
+fn read_joints[&f, &s, &d, &a](b: &f Ffi("board"), k: &!s [int], degrees: &!d [float], at: &!a [int]) -> [ffi("board")] int {
+    var result = 0;
+    region r {
+        let pkt = alloc_slice[r](16, byte_of(0));
+        let reply = alloc_slice[r](64, byte_of(0));
+        let table = alloc_slice[r](feetech.slots(), 0);
+        var joint = 0;
+        while joint < 5 && result == 0 {
+            let n = feetech.read(pkt, joint + 1, 56, 2);
+            let got = transact(b, k, pkt, n, reply, joint + 1, table, 20000);
+            if got > 0 && table[3] == 2 {
+                degrees[joint] = calibration.degrees(feetech.u16(reply, table[2]), span_min(joint), span_max(joint));
+            } else {
+                at[0] = joint;
+                result = got;
+                if got >= 0 {
+                    result = feetech.error_bad_length();
+                }
+            }
+            joint = joint + 1;
+        }
+    }
+    return result;
+}
+
+fn arm_check[&f, &s, &l](b: &f Ffi("board"), k: &!s [int], line: &l [byte], from: int, n: int) -> [ffi("board")] int {
+    region r {
+        let wanted = alloc_slice[r](5, 0);
+        if numbers(line, from, n, wanted) != 5 {
+            return puts(b, k, "usage: arm check a1 a2 a3 a4 a5 (whole degrees)\r\n");
+        }
+        let current = alloc_slice[r](5, 0.0);
+        let at = alloc_slice[r](1, 0);
+        let read = read_joints(b, k, current, at);
+        if read != 0 {
+            puts(b, k, "joint ");
+            put_dec(b, k, at[0] + 1);
+            puts(b, k, ": ");
+            put_bus_error(b, k, read);
+            return puts(b, k, "\r\n");
+        }
+        let request = alloc_slice[r](5, 0.0);
+        let limits = alloc_slice[r](10, 0.0);
+        var j = 0;
+        while j < 5 {
+            request[j] = float_of(wanted[j]);
+            limits[j * 2] = calibration.degrees(span_min(j), span_min(j), span_max(j));
+            limits[j * 2 + 1] = calibration.degrees(span_max(j), span_min(j), span_max(j));
+            j = j + 1;
+        }
+        let goals = alloc_slice[r](5, 0.0);
+        let scale = alloc_slice[r](1, 0.0);
+        let joint = alloc_slice[r](1, 0);
+        let other = alloc_slice[r](0, 0.0);
+        // the left arm's mount on the robot (cancho-robot tests/safety_driver.cho)
+        let mount = safety.Mount { x: -0.135, y: 0.133, z: 0.76, yaw_deg: 0.0 };
+        var rule = 0;
+        borrow mount as &m in {
+            rule = safety.approve(request, current, limits, m, other, 0, 10, goals, scale, joint);
+        }
+        if rule == safety.rule_ok() {
+            puts(b, k, "approved");
+            if scale[0] < 1.0 {
+                puts(b, k, ", slowed to ");
+                put_int(b, k, truncate(scale[0] * 1000.0));
+                puts(b, k, " per mille of the step");
+            }
+            puts(b, k, "\r\ngoals:");
+            j = 0;
+            while j < 5 {
+                puts(b, k, " ");
+                put_int(b, k, truncate(goals[j] * 1000.0));
+                j = j + 1;
+            }
+            puts(b, k, " mdeg\r\n");
+        } else {
+            puts(b, k, "refused: ");
+            puts(b, k, safety.rule_name(rule));
+            if joint[0] >= 0 {
+                puts(b, k, " (joint ");
+                put_dec(b, k, joint[0] + 1);
+                puts(b, k, ")");
+            }
+            puts(b, k, "\r\n");
+        }
+    }
+    return puts(b, k, "nothing was sent\r\n");
+}
+
 // ---- memory: identity-mapped translation tables ---------------------------------
 // 4 KB granule, 39-bit addresses, so level 1 is the top table. A descriptor is the
 // address, the attributes below, and bit 0 (valid); bit 1 says "table" at levels 1
@@ -662,9 +800,9 @@ fn run[&f, &s, &r](b: &f Ffi("board"), k: &!s [int], line: &r [byte], n: int) ->
         return 0;
     }
     if same(line, n, "help") {
-        puts(b, k, "commands: help, about, echo <text>, uptime, ticks, mem, servo scan, servo pos, arm zero, arm pose, crash [null|write]\r\n");
+        puts(b, k, "commands: help, about, echo <text>, uptime, ticks, mem, servo scan, servo pos, arm zero, arm pose, arm check <5 angles>, crash [null|write]\r\n");
     } else if same(line, n, "about") {
-        puts(b, k, "cancho-os 0.0.6: a kernel written in cancho, no Linux underneath (Raspberry Pi ");
+        puts(b, k, "cancho-os 0.0.7: a kernel written in cancho, no Linux underneath (Raspberry Pi ");
         put_dec(b, k, k[1]);
         puts(b, k, ")\r\n");
     } else if n > 5 && same(line, 5, "echo ") {
@@ -695,6 +833,8 @@ fn run[&f, &s, &r](b: &f Ffi("board"), k: &!s [int], line: &r [byte], n: int) ->
         arm_zero(b, k);
     } else if same(line, n, "arm pose") {
         arm_pose(b, k);
+    } else if n > 10 && same(line, 10, "arm check ") {
+        arm_check(b, k, line, 10, n);
     } else if same(line, n, "crash null") {
         // page 0 is not mapped
         board_r8(b, 0);

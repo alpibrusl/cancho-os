@@ -1,4 +1,10 @@
-# cancho-os — a cancho shell on bare-metal Raspberry Pi
+# cancho-os — an operating system written in cancho, on bare metal
+
+Raspberry Pi first: that is the board it boots on today (Pi 3 and Pi 4 in QEMU; a Pi 5 is the
+robot's board and is next). Nothing in the design is tied to it: the shell, the servo
+protocol, the kinematics and the safety core are plain cancho, and what is specific to the
+board is the boot assembly, three drivers and the page-table format. A PC with UEFI is the
+planned second target (docs/ROADMAP.md).
 
 No Linux and no C: the firmware loads `kernel8.img`, a page of assembly
 drops to EL1 and calls `main`, and everything after that is cancho — the PL011 UART
@@ -9,6 +15,7 @@ src/kernel.cho   the kernel, drivers included (cancho)
 src/feetech.cho  the Feetech servo protocol, read side only        } vendored from
 src/calibration.cho, kinematics.cho, so101.cho  ticks to degrees,  } cancho-robot,
                  and the SO-101's forward kinematics               } unchanged
+src/safety.cho   the safety core: one `approve` every motion must pass }
 sim/servos.cho   six simulated servos for QEMU: a program for the host, not in the image
 sim/expect.cho   what `arm pose` must print for them, computed on the host
 board/boot.S     boot (park cores 1-3, EL2 -> EL1, stack, zero .bss), the exception stub,
@@ -72,6 +79,14 @@ it: `arm zero` prints the position placo gives (391361, -9, 226469 micrometres),
 `arm pose` prints, line for line, what the same sources print when built for the host
 (`build/expect`). Both compare at the printed precision (a micrometre, a thousandth of a
 degree), not bit for bit.
+
+And it can judge a motion without making it. `arm check 5 14 33 -41 44` asks the safety
+core (cancho-robot's `safety.approve`, unchanged) whether the arm may go to those five
+angles from where it is: joint limits, the workspace, the jump bound, collisions with the
+tower and the tray, then the speed clamp. It answers `approved` with the goals it would
+send, or `refused:` with the rule, and always ends `nothing was sent`. CI sends four
+requests with four different verdicts and compares them with the host, as above. Actually
+sending a goal waits for cancho-robot's actuation core, which is still in review there.
 In QEMU the bus is the board's second serial port, connected by `test.sh` to
 `sim/servos.cho`. The simulator is a model written from the protocol, not a recording of
 a servo, so it can share a misreading with the driver; the real check is the arm.

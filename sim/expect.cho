@@ -1,11 +1,12 @@
 edition 5;
 
-// expect.cho -- what `arm pose` must print for the simulated servos, computed on this machine from the same
+// expect.cho -- what `arm pose` and four `arm check` requests must print for the simulated servos, computed on this machine from the same
 // calibration and kinematics the kernel carries. Not part of the kernel. test.sh's caller compares the two: the
 // kernel's arithmetic, with no system under it, against the same code under a system.
 import std.io;
 import calibration;
 import kinematics;
+import safety;
 
 fn span_min(joint: int) -> [] int {
     if joint == 0 {
@@ -43,6 +44,60 @@ fn say[&i, &t](io: &!i Io, text: &t [byte]) -> [io_write] int {
     return io.write_all(io, text);
 }
 
+// What `arm check a1 .. a5` prints, from the pose `current`.
+fn check[&i, &c](out: &!i Io, current: &c [float], a1: int, a2: int, a3: int, a4: int, a5: int) -> [io_write] int {
+    region r {
+        let request = alloc_slice[r](5, 0.0);
+        request[0] = float_of(a1);
+        request[1] = float_of(a2);
+        request[2] = float_of(a3);
+        request[3] = float_of(a4);
+        request[4] = float_of(a5);
+        let limits = alloc_slice[r](10, 0.0);
+        var j = 0;
+        while j < 5 {
+            limits[j * 2] = calibration.degrees(span_min(j), span_min(j), span_max(j));
+            limits[j * 2 + 1] = calibration.degrees(span_max(j), span_min(j), span_max(j));
+            j = j + 1;
+        }
+        let goals = alloc_slice[r](5, 0.0);
+        let scale = alloc_slice[r](1, 0.0);
+        let joint = alloc_slice[r](1, 0);
+        let other = alloc_slice[r](0, 0.0);
+        let mount = safety.Mount { x: -0.135, y: 0.133, z: 0.76, yaw_deg: 0.0 };
+        var rule = 0;
+        borrow mount as &m in {
+            rule = safety.approve(request, current, limits, m, other, 0, 10, goals, scale, joint);
+        }
+        if rule == safety.rule_ok() {
+            say(out, "approved");
+            if scale[0] < 1.0 {
+                say(out, ", slowed to ");
+                io.print_int(out, truncate(scale[0] * 1000.0));
+                say(out, " per mille of the step");
+            }
+            say(out, "\ngoals:");
+            j = 0;
+            while j < 5 {
+                say(out, " ");
+                io.print_int(out, truncate(goals[j] * 1000.0));
+                j = j + 1;
+            }
+            say(out, " mdeg\n");
+        } else {
+            say(out, "refused: ");
+            say(out, safety.rule_name(rule));
+            if joint[0] >= 0 {
+                say(out, " (joint ");
+                io.print_int(out, joint[0] + 1);
+                say(out, ")");
+            }
+            say(out, "\n");
+        }
+    }
+    return say(out, "nothing was sent\n");
+}
+
 fn run[&i](out: &!i Io) -> [io_write] int {
     region r {
         let degrees = alloc_slice[r](5, 0.0);
@@ -66,6 +121,11 @@ fn run[&i](out: &!i Io) -> [io_write] int {
         say(out, " z ");
         io.print_int(out, truncate(pose[11] * 1000000.0));
         say(out, " um\n");
+        // the four requests test.sh's caller sends, in the same order
+        check(out, degrees, -2, 14, 33, -41, 44);
+        check(out, degrees, 5, 14, 33, -41, 44);
+        check(out, degrees, -2, 14, 33, -41, 400);
+        check(out, degrees, 60, 14, 33, -41, 44);
     }
     return 0;
 }
