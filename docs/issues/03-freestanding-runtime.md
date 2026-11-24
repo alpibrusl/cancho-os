@@ -1,5 +1,7 @@
 # A freestanding runtime profile (no libc, no pthreads)
 
+> **Done (2026-11-24):** `compiler/runtime/bare.ll` in cancho (`docs/freestanding.md` §4): regions from `__cancho_heap_start`..`__cancho_heap_end`, no pthreads, none of the hosted runtime in the module. `board/board.c` is deleted. Not done: a `World` shaped for a machine with no files, and a heap. What follows is the issue as drafted.
+
 **Today:** after `--gc-sections`, what a minimal kernel still needs from libc is: `malloc`/`free`
 (region chunks of 64 KB, `cancho_region_take/give`), `memset`/`memcpy`/`memmove`, and
 `pthread_key_create/getspecific/setspecific` (the per-thread region-chunk stack). cancho-os stubs

@@ -1,6 +1,6 @@
 # cancho-os — a cancho shell on bare-metal Raspberry Pi
 
-No Linux, and no C in the kernel: the firmware loads `kernel8.img`, a page of assembly
+No Linux and no C: the firmware loads `kernel8.img`, a page of assembly
 drops to EL1 and calls `main`, and everything after that is cancho — the PL011 UART
 driver, the timer and interrupt controller, the page tables, the fault report, the shell.
 
@@ -9,10 +9,8 @@ src/kernel.cho   the kernel, drivers included (cancho)
 board/boot.S     boot (park cores 1-3, EL2 -> EL1, stack, zero .bss), the exception stub,
                  and the primitives cancho cannot spell yet, one or two instructions each:
                  load/store a byte, word or doubleword, read/write a system register, wfi
-board/board.c    not hardware: malloc/memcpy/pthread stubs for cancho's hosted runtime
-                 (docs/issues/03 deletes it, and with it the last C)
 board/link.ld    load at 0x80000; code, constants and data on page boundaries
-build.sh         cancho -> LLVM IR -> clang --target=aarch64-none-elf -> kernel8.img
+build.sh         cancho build --target aarch64-none-elf, assemble boot.S, link, objcopy
 run.sh           boot it in QEMU
 test.sh          boot it in QEMU, type the given lines, print the UART (what CI runs)
 ```
@@ -32,8 +30,9 @@ Two choices keep everything in cancho without the compiler's help:
 
 ## Build and run
 
-Needs `cancho` (or the seed: `sh scripts/seed-build.sh --out /tmp/cseed` in the cancho repo,
-then `CANCHO=/tmp/cseed/cancho0`), clang ≥ 15, ld.lld, llvm-objcopy, qemu-system-arm.
+Needs a `cancho` with the bare-metal target (cancho `docs/freestanding.md`; in the cancho
+repo, `sh scripts/build-standalone.sh --out /tmp/cancho-out --rev $(git rev-parse HEAD)`, then
+`CANCHO=/tmp/cancho-out/cancho`), clang, ld.lld, llvm-objcopy, qemu-system-aarch64.
 
 ```sh
 ./build.sh && ./run.sh            # QEMU raspi3b
@@ -67,14 +66,14 @@ RX→pin 8 (GPIO14, TXD), TX→pin 10 (GPIO15, RXD). Then `picocom -b 115200 /de
 
 ## How it is built, and what is left to remove
 
-- cancho emits target-neutral LLVM IR; `build.sh` keeps it (a `--clang` wrapper) and
-  compiles it for `aarch64-none-elf`, with `-mstrict-align` (before the MMU is on, an
-  unaligned access faults). The one host-specific line is the trap instruction (`ud2`
-  on x86), patched to `udf`. docs/issues/01 (a real bare-metal target) removes both.
-- cancho's hosted runtime is still in the module; `--gc-sections` drops what `main`
-  does not reach. What is left needs malloc/free (regions take 64 KB chunks),
-  memset/memcpy/memmove and three pthread calls — `board.c`. docs/issues/03.
-- The primitives in `boot.S` become builtins behind a capability. docs/issues/02.
+- `cancho build --target aarch64-none-elf --emit obj` writes an ELF object with no libc in
+  it: regions take their 64 KB chunks from the memory `board/link.ld` names
+  (`__cancho_heap_start` to `__cancho_heap_end`), and `memset`/`memcpy` are the module's
+  own. `nm -u` on the kernel object lists the eleven `board_` primitives, those two
+  symbols, and nothing else.
+- What is left outside cancho is `board/boot.S`: boot, the exception stub, and the
+  primitives. The primitives become builtins behind a capability (docs/issues/02), which
+  also lets the authority report name the address ranges a driver touches.
 
 Context and decisions: [`docs/ROADMAP.md`](docs/ROADMAP.md). Compiler issues to file in cancho: [`docs/issues/`](docs/issues/).
 

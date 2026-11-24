@@ -16,6 +16,8 @@ SECTIONS {
     __tables = .;                 /* eight 4 KB translation tables, zeroed with .bss */
     . += 8 * 4096;
     __bss_end = .;
-    __heap_start = ALIGN(4096);
+    /* what cancho's runtime takes its region chunks from: the rest of the RAM the kernel maps */
+    __cancho_heap_start = ALIGN(4096);
+    __cancho_heap_end = 0x3c000000;
     /DISCARD/ : { *(.comment) *(.note*) *(.eh_frame*) }
 }

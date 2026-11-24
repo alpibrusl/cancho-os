@@ -1,5 +1,8 @@
 name: boot in qemu
 on: [push, pull_request]
+env:
+  # the cancho branch that has `--target aarch64-none-elf`; `main` once it is merged there
+  CANCHO_REF: freestanding
 jobs:
   boot:
     runs-on: ubuntu-24.04
@@ -7,12 +10,14 @@ jobs:
       - uses: actions/checkout@v4
       - name: tools
         run: sudo apt-get update && sudo apt-get install -y clang lld llvm qemu-system-arm
-      - name: cancho from its seed
+      - name: cancho, built from its seed by itself
+        # The bare-metal target (cancho docs/freestanding.md) is newer than the committed seed, so the
+        # compiler is built from source: the seed builds stage 1, which builds the cancho used here.
         run: |
-          git clone --depth 1 https://github.com/alpibrusl/cancho /tmp/cancho
-          sh /tmp/cancho/scripts/seed-build.sh --out /tmp/cseed
+          git clone --depth 1 --branch "$CANCHO_REF" https://github.com/alpibrusl/cancho /tmp/cancho
+          sh /tmp/cancho/scripts/build-standalone.sh --out /tmp/cancho-out --rev "$(git -C /tmp/cancho rev-parse HEAD)"
       - name: build
-        run: CANCHO=/tmp/cseed/cancho0 ./build.sh
+        run: CANCHO=/tmp/cancho-out/cancho ./build.sh
       - name: boot and drive the shell
         run: |
           ./test.sh about 'echo ci' ticks crash about > out.txt
