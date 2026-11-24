@@ -17,3 +17,7 @@ Rules of the road
   `CANCHO=/tmp/cancho-out/cancho ./build.sh`. The seed alone (`seed-build.sh`) is too old until a reseed.
 - QEMU 8.x has only raspi3b; raspi4b needs QEMU ≥ 9. One kernel8.img serves both: the kernel reads
   MIDR_EL1 (`detect` in kernel.cho). A new board is a new branch there, from its datasheet.
+- Direction and the robot steps are in docs/ROADMAP.md ("Direction"). `src/feetech.cho` is vendored from
+  cancho-robot: change it there. The kernel must stay unable to move a servo until the safety core
+  exists: do not vendor `feetech_write.cho` before then.
+- `SERVOS=1 ./test.sh 'servo scan'` attaches `sim/servos.cho` (built for the host by build.sh).

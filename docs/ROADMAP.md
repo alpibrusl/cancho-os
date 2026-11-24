@@ -16,6 +16,25 @@
 3. **Not chosen, for reference:** cancho as PID 1 on a Linux kernel (Android model) — fastest way to
    a cancho-owned userland on real laptops/phones; rejected for now in favour of "no Linux".
 
+## Direction (2026-11-24)
+- **Independent of C and Linux, and only cancho runs here.** Bare metal on few boards rather than a
+  guest of someone else's kernel. The loader, when there is one, accepts checked cancho and nothing else.
+- **First real job: a robot's safety controller** (cancho-robot's SO-101 arms). The claim to earn: the
+  only program that can move the arm is the safety core, for the whole machine and not for one process.
+- **The human is the source of authority, not the operator:** grants, approves what cannot be undone,
+  reads the record, holds the off switch.
+- **Board for the robot: Pi 5.** Developed in QEMU on the Pi 3/4 models with a simulated servo bus, then
+  moved. Needs from hardware: the debug UART for the console, a header UART behind RP1 for the bus.
+- **The model stays on another machine** (cancho-gpu needs Metal or CUDA, which need macOS or Linux).
+
+### Robot steps
+1. ✅ Read-only bus in QEMU: second UART, Feetech PING and READ, six simulated servos (`servo scan`,
+   `servo pos`).
+2. Calibration and kinematics from cancho-robot (they use `std.math`: check what that needs on bare metal).
+3. The safety core as the only holder of the bus; a motion request that goes through it or not at all.
+4. Pi 5: console on the debug UART, addresses from the board's own device tree, then the bus behind RP1.
+5. The real arm, read-only first, checked against LeRobot reading the same bus.
+
 ## No C (2026-11-24)
 - There is no C in the repository. Every driver is cancho; `board/boot.S` keeps boot, the exception
   stub and eleven primitives of one or two instructions.
