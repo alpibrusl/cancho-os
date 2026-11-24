@@ -1,6 +1,6 @@
 # `--target aarch64-none-elf` (and x86_64-unknown-uefi): freestanding code generation
 
-> **Done (2026-11-24):** `cancho build --target aarch64-none-elf --emit obj|ll` (cancho `docs/freestanding.md`, branch `freestanding`). Not done from the list below: `x86_64-unknown-uefi`, `--entry`. What follows is the issue as drafted.
+> **Done (2026-11-24):** `cancho build --target aarch64-none-elf --emit obj|ll` (cancho `docs/freestanding.md`, alpibrusl/cancho#826). Not done from the list below: `x86_64-unknown-uefi`, `--entry`. What follows is the issue as drafted.
 
 **Today:** `--target` must equal the host triple. cancho-os works around it by capturing the IR via a
 `--clang` wrapper and recompiling with `clang --target=aarch64-none-elf`.
