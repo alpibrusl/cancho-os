@@ -1,6 +1,8 @@
 edition 5;
 
 import feetech;
+import calibration;
+import kinematics;
 
 // cancho-os: the kernel. Every driver here is cancho; what it cannot spell yet
 // (a volatile load or store, a system register, `wfi`) is a one-instruction
@@ -347,6 +349,118 @@ fn servo_pos[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
     return 0;
 }
 
+// ---- the arm: ticks to degrees to where the gripper is ----------------------------
+// Calibration and kinematics are cancho-robot's, unchanged (src/calibration.cho,
+// src/kinematics.cho, src/so101.cho): there they are held to LeRobot and to placo. What
+// is checked here is that they compute the same with no system under them.
+//
+// The span of each joint, in ticks: the left arm's calibration in cancho-robot
+// (tests/fixtures/calibration/xle_left.json). A table in the kernel for now; it belongs
+// to the robot, and will come with whatever hands the kernel its bus.
+fn span_min(joint: int) -> [] int {
+    if joint == 0 {
+        return 884;
+    }
+    if joint == 1 {
+        return 1056;
+    }
+    if joint == 2 {
+        return 885;
+    }
+    if joint == 3 {
+        return 2060;
+    }
+    return 0;
+}
+
+fn span_max(joint: int) -> [] int {
+    if joint == 0 {
+        return 3460;
+    }
+    if joint == 1 {
+        return 3116;
+    }
+    if joint == 2 {
+        return 3057;
+    }
+    if joint == 3 {
+        return 3773;
+    }
+    return 4095;
+}
+
+fn put_int[&f, &s](b: &f Ffi("board"), k: &!s [int], v: int) -> [ffi("board")] int {
+    if v < 0 {
+        putc(b, k, 45);
+        return put_dec(b, k, 0 - v);
+    }
+    return put_dec(b, k, v);
+}
+
+// Where the gripper frame is for five joint angles, in micrometres, in the base's frame.
+fn put_gripper[&f, &s, &d](b: &f Ffi("board"), k: &!s [int], degrees: &d [float]) -> [ffi("board")] int {
+    region r {
+        let pose = alloc_slice[r](16, 0.0);
+        if kinematics.forward(degrees, pose) != 0 {
+            return puts(b, k, "kinematics refused the angles\r\n");
+        }
+        puts(b, k, "gripper at x ");
+        put_int(b, k, truncate(pose[3] * 1000000.0));
+        puts(b, k, " y ");
+        put_int(b, k, truncate(pose[7] * 1000000.0));
+        puts(b, k, " z ");
+        put_int(b, k, truncate(pose[11] * 1000000.0));
+    }
+    return puts(b, k, " um\r\n");
+}
+
+// `arm zero`: the pose with every joint at zero. No bus involved: placo puts it at
+// x 0.3913614702201581, y -9.212063114501261e-06, z 0.2264697102403328 metres.
+fn arm_zero[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
+    region r {
+        let degrees = alloc_slice[r](5, 0.0);
+        put_gripper(b, k, degrees);
+    }
+    return 0;
+}
+
+// `arm pose`: read joints 1 to 5 from the bus, turn ticks into degrees, and say where
+// that puts the gripper. Read-only.
+fn arm_pose[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
+    region r {
+        let pkt = alloc_slice[r](16, byte_of(0));
+        let reply = alloc_slice[r](64, byte_of(0));
+        let table = alloc_slice[r](feetech.slots(), 0);
+        let degrees = alloc_slice[r](5, 0.0);
+        var joint = 0;
+        var bad = 0;
+        while joint < 5 && bad == 0 {
+            let n = feetech.read(pkt, joint + 1, 56, 2);
+            let got = transact(b, k, pkt, n, reply, joint + 1, table, 20000);
+            if got > 0 && table[3] == 2 {
+                degrees[joint] = calibration.degrees(feetech.u16(reply, table[2]), span_min(joint), span_max(joint));
+                puts(b, k, "joint ");
+                put_dec(b, k, joint + 1);
+                puts(b, k, ": ");
+                put_int(b, k, truncate(degrees[joint] * 1000.0));
+                puts(b, k, " mdeg\r\n");
+            } else {
+                puts(b, k, "joint ");
+                put_dec(b, k, joint + 1);
+                puts(b, k, ": ");
+                put_bus_error(b, k, got);
+                puts(b, k, "\r\n");
+                bad = 1;
+            }
+            joint = joint + 1;
+        }
+        if bad == 0 {
+            put_gripper(b, k, degrees);
+        }
+    }
+    return 0;
+}
+
 // ---- memory: identity-mapped translation tables ---------------------------------
 // 4 KB granule, 39-bit addresses, so level 1 is the top table. A descriptor is the
 // address, the attributes below, and bit 0 (valid); bit 1 says "table" at levels 1
@@ -548,9 +662,9 @@ fn run[&f, &s, &r](b: &f Ffi("board"), k: &!s [int], line: &r [byte], n: int) ->
         return 0;
     }
     if same(line, n, "help") {
-        puts(b, k, "commands: help, about, echo <text>, uptime, ticks, mem, servo scan, servo pos, crash [null|write]\r\n");
+        puts(b, k, "commands: help, about, echo <text>, uptime, ticks, mem, servo scan, servo pos, arm zero, arm pose, crash [null|write]\r\n");
     } else if same(line, n, "about") {
-        puts(b, k, "cancho-os 0.0.5: a kernel written in cancho, no Linux underneath (Raspberry Pi ");
+        puts(b, k, "cancho-os 0.0.6: a kernel written in cancho, no Linux underneath (Raspberry Pi ");
         put_dec(b, k, k[1]);
         puts(b, k, ")\r\n");
     } else if n > 5 && same(line, 5, "echo ") {
@@ -577,6 +691,10 @@ fn run[&f, &s, &r](b: &f Ffi("board"), k: &!s [int], line: &r [byte], n: int) ->
         servo_scan(b, k);
     } else if same(line, n, "servo pos") {
         servo_pos(b, k);
+    } else if same(line, n, "arm zero") {
+        arm_zero(b, k);
+    } else if same(line, n, "arm pose") {
+        arm_pose(b, k);
     } else if same(line, n, "crash null") {
         // page 0 is not mapped
         board_r8(b, 0);

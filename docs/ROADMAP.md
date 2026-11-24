@@ -30,7 +30,10 @@
 ### Robot steps
 1. ✅ Read-only bus in QEMU: second UART, Feetech PING and READ, six simulated servos (`servo scan`,
    `servo pos`).
-2. Calibration and kinematics from cancho-robot (they use `std.math`: check what that needs on bare metal).
+2. ✅ Calibration and forward kinematics from cancho-robot, unchanged, on the bare target (`arm zero`,
+   `arm pose`). `std.math` is pure cancho, so it needed nothing from a libc; what it did need was two
+   fixes to the compiler's bare target (hosted support modules were written whenever `--std` was given,
+   and statics are made with `calloc`). Inverse kinematics is not here yet: it comes with step 3.
 3. The safety core as the only holder of the bus; a motion request that goes through it or not at all.
 4. Pi 5: console on the debug UART, addresses from the board's own device tree, then the bus behind RP1.
 5. The real arm, read-only first, checked against LeRobot reading the same bus.

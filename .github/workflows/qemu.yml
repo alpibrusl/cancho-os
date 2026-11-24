@@ -39,3 +39,10 @@ jobs:
           grep -q "^6 servos found" servo.txt
           grep -q "^servo 7: no answer" servo.txt
           grep -q "^servo 3: position 2348" servo.txt
+          # the arm: the zero pose is where placo puts it (cancho-robot tests/kinematics_test.cho), to the micrometre
+          ./test.sh 'arm zero' > zero.txt; cat zero.txt
+          grep -q "^gripper at x 391361 y -9 z 226469 um" zero.txt
+          # and the pose from the simulated servos is what the same sources compute on this machine
+          SERVOS=1 ./test.sh 'arm pose' | grep -E "^(joint|gripper)" > pose.txt; cat pose.txt
+          ./build/expect > expect.txt
+          test -s pose.txt && diff pose.txt expect.txt

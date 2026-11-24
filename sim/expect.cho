@@ -1,0 +1,87 @@
+edition 5;
+
+// expect.cho -- what `arm pose` must print for the simulated servos, computed on this machine from the same
+// calibration and kinematics the kernel carries. Not part of the kernel. test.sh's caller compares the two: the
+// kernel's arithmetic, with no system under it, against the same code under a system.
+import std.io;
+import calibration;
+import kinematics;
+
+fn span_min(joint: int) -> [] int {
+    if joint == 0 {
+        return 884;
+    }
+    if joint == 1 {
+        return 1056;
+    }
+    if joint == 2 {
+        return 885;
+    }
+    if joint == 3 {
+        return 2060;
+    }
+    return 0;
+}
+
+fn span_max(joint: int) -> [] int {
+    if joint == 0 {
+        return 3460;
+    }
+    if joint == 1 {
+        return 3116;
+    }
+    if joint == 2 {
+        return 3057;
+    }
+    if joint == 3 {
+        return 3773;
+    }
+    return 4095;
+}
+
+fn say[&i, &t](io: &!i Io, text: &t [byte]) -> [io_write] int {
+    return io.write_all(io, text);
+}
+
+fn run[&i](out: &!i Io) -> [io_write] int {
+    region r {
+        let degrees = alloc_slice[r](5, 0.0);
+        let pose = alloc_slice[r](16, 0.0);
+        var joint = 0;
+        while joint < 5 {
+            // sim/servos.cho: servo `id` is at 2048 + 100 * id
+            degrees[joint] = calibration.degrees(2048 + 100 * (joint + 1), span_min(joint), span_max(joint));
+            say(out, "joint ");
+            io.print_int(out, joint + 1);
+            say(out, ": ");
+            io.print_int(out, truncate(degrees[joint] * 1000.0));
+            say(out, " mdeg\n");
+            joint = joint + 1;
+        }
+        kinematics.forward(degrees, pose);
+        say(out, "gripper at x ");
+        io.print_int(out, truncate(pose[3] * 1000000.0));
+        say(out, " y ");
+        io.print_int(out, truncate(pose[7] * 1000000.0));
+        say(out, " z ");
+        io.print_int(out, truncate(pose[11] * 1000000.0));
+        say(out, " um\n");
+    }
+    return 0;
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock } = split(world);
+    release(ffi);
+    release(fs);
+    release(heap);
+    release(args);
+    release(net);
+    release(clock);
+    var status = 0;
+    borrow mut io as &!i in {
+        status = run(i);
+    }
+    release(io);
+    return status;
+}

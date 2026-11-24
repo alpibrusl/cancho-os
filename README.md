@@ -6,8 +6,11 @@ driver, the timer and interrupt controller, the page tables, the fault report, t
 
 ```
 src/kernel.cho   the kernel, drivers included (cancho)
-src/feetech.cho  the Feetech servo protocol, read side only (vendored from cancho-robot)
+src/feetech.cho  the Feetech servo protocol, read side only        } vendored from
+src/calibration.cho, kinematics.cho, so101.cho  ticks to degrees,  } cancho-robot,
+                 and the SO-101's forward kinematics               } unchanged
 sim/servos.cho   six simulated servos for QEMU: a program for the host, not in the image
+sim/expect.cho   what `arm pose` must print for them, computed on the host
 board/boot.S     boot (park cores 1-3, EL2 -> EL1, stack, zero .bss), the exception stub,
                  and the primitives cancho cannot spell yet, one or two instructions each:
                  load/store a byte, word or doubleword, read/write a system register, wfi
@@ -60,6 +63,15 @@ program that can reach the servo bus is the one the kernel hands it to.
 
 Today the kernel can talk to the bus and only read: `servo scan` pings ids 1 to 8,
 `servo pos` reads each servo's position. It contains no packet that can move a servo.
+
+It also knows where the arm is. `arm pose` reads the five joints, turns ticks into degrees
+with the arm's calibration and runs the SO-101's forward kinematics; `arm zero` does the
+same for the all-zero pose, with no bus. That code is cancho-robot's, where it is held to
+LeRobot and to the placo solver. Two checks say it computes the same with no system under
+it: `arm zero` prints the position placo gives (391361, -9, 226469 micrometres), and
+`arm pose` prints, line for line, what the same sources print when built for the host
+(`build/expect`). Both compare at the printed precision (a micrometre, a thousandth of a
+degree), not bit for bit.
 In QEMU the bus is the board's second serial port, connected by `test.sh` to
 `sim/servos.cho`. The simulator is a model written from the protocol, not a recording of
 a servo, so it can share a misreading with the driver; the real check is the arm.
