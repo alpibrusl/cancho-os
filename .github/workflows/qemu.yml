@@ -1,0 +1,23 @@
+name: boot in qemu
+on: [push, pull_request]
+jobs:
+  boot:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: tools
+        run: sudo apt-get update && sudo apt-get install -y clang lld llvm qemu-system-arm
+      - name: cancho from its seed
+        run: |
+          git clone --depth 1 https://github.com/alpibrusl/cancho /tmp/cancho
+          sh /tmp/cancho/scripts/seed-build.sh --out /tmp/cseed
+      - name: build
+        run: CANCHO=/tmp/cseed/cancho0 ./build.sh && BOARD=pi4 CANCHO=/tmp/cseed/cancho0 ./build.sh
+      - name: boot and drive the shell
+        run: |
+          CANCHO=/tmp/cseed/cancho0 ./build.sh
+          (sleep 2; printf 'about\r'; sleep 1; printf 'echo ci\r'; sleep 1) \
+            | timeout 8 qemu-system-aarch64 -M raspi3b -kernel build/kernel8.img -serial stdio -display none -monitor none > out.txt || true
+          cat out.txt
+          grep -q "no Linux underneath" out.txt
+          grep -q "^ci" out.txt
