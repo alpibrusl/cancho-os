@@ -1,20 +1,26 @@
-# cancho-os — milestone 1: a cancho shell on bare-metal Raspberry Pi
+# cancho-os — a cancho shell on bare-metal Raspberry Pi
 
-No Linux. The firmware loads `kernel8.img`, 40 lines of assembly drop to EL1
-and call `main`, and the rest is cancho talking to the PL011 UART.
+No Linux. The firmware loads `kernel8.img`, a page of assembly drops to EL1,
+installs the exception vectors and calls `main`, and the rest is cancho talking
+to the PL011 UART. A 100 Hz timer interrupt ticks underneath (milestone 2), and
+the MMU is on with an identity map the kernel chose (milestone 3).
 
 ```
 src/kernel.cho   the kernel: line editor + shell (cancho)
-board/boot.S     park cores 1-3, EL2 -> EL1, FP on, stack, zero .bss
-board/board.c    UART driver (volatile MMIO) + the few libc symbols cancho's runtime calls
+board/boot.S     park cores 1-3, EL2 -> EL1, FP on, stack, zero .bss, exception vectors
+board/board.c    UART driver, timer + interrupt controller, page-table filler, fault
+                 report, and the few libc symbols cancho's runtime calls
 board/link.ld    load at 0x80000
 build.sh         cancho -> LLVM IR -> clang --target=aarch64-none-elf -> kernel8.img
 run.sh           boot it in QEMU
+test.sh          boot it in QEMU, type the given lines, print the UART (what CI runs)
 ```
 
 Hardware is a capability: the board is the foreign library `"board"`, so
-`cancho authority src/kernel.cho` lists exactly `board:board_putc` and
-`board:board_getc` and says the kernel never touches anything else.
+`cancho authority src/kernel.cho` lists exactly the `board:` symbols the kernel
+uses (ten today: UART, tick, memory map, and `board_peek`/`board_poke`) and says it
+never touches anything else. `board_peek`/`board_poke` reach any address; they exist
+only for the shell's `crash null` / `crash write` and go when there is a better test.
 
 ## Build and run
 
@@ -23,8 +29,18 @@ then `CANCHO=/tmp/cseed/cancho0`), clang ≥ 15, ld.lld, llvm-objcopy, qemu-syst
 
 ```sh
 ./build.sh && ./run.sh            # QEMU raspi3b
-BOARD=pi4 ./build.sh              # real Pi 4
+BOARD=pi4 ./build.sh              # real Pi 4 (or MACHINE=raspi4b ./test.sh, QEMU >= 9)
+./test.sh about ticks crash       # scripted: type three lines, print what came back
 ```
+
+On macOS: `brew install llvm lld qemu` and put `$(brew --prefix llvm)/bin` on `PATH`
+(Apple's clang has no `llvm-objcopy`).
+
+Shell: `help`, `about`, `echo <text>`, `uptime` (from the ARM counter), `ticks` (timer
+interrupts taken), `mem` (the memory map), and three ways to fault on purpose, each named
+by the exception vector with ESR/ELR/FAR before the core halts: `crash` (out-of-bounds
+read, caught by cancho's own check), `crash null` (page 0 is unmapped), `crash write`
+(kernel code is read-only).
 
 ## Real Pi 4
 
@@ -55,12 +71,14 @@ RX→pin 8 (GPIO14, TXD), TX→pin 10 (GPIO15, RXD). Then `picocom -b 115200 /de
   would let the UART driver itself be cancho — and the authority report would
   name the address ranges a driver can touch.
 
+- The interrupt and fault handlers are C because nothing outside a cancho program can
+  call into it, and it has no state that outlives a call (docs/issues/04).
+
 Context and decisions: [`docs/ROADMAP.md`](docs/ROADMAP.md). Compiler issues to file in cancho: [`docs/issues/`](docs/issues/).
 
 ## Next milestones
 
-2. exception vectors + GIC + ARM generic timer (needs `msr`/`mrs`: more asm or intrinsics)
-3. MMU, identity map then kernel/user split
+3. (identity map done) kernel/user split, together with
 4. tasks, scheduler, capability IPC
 5. framebuffer via the firmware mailbox
 6. SD card + FAT

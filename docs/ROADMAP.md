@@ -18,8 +18,16 @@
 
 ## Milestones
 1. ✅ UART shell (help/about/echo) — boots in QEMU; not yet tried on real hardware.
-2. Exception vectors, GIC-400 (Pi 4) / local IRQ controller (Pi 3), ARM generic timer.
+2. ✅ Exception vectors, GIC-400 (Pi 4) / local IRQ controller (Pi 3), ARM generic timer — 100 Hz tick,
+   `uptime`/`ticks`/`crash` in the shell; boots in QEMU raspi3b and raspi4b; not yet tried on real hardware.
+   The handlers are C in `board/` (docs/issues/04).
 3. MMU: identity map, then kernel/user split.
+   - ✅ Identity map with the MMU and caches on: code read+execute, constants read-only, data/heap/stack
+     read+write and never executable (WXN), peripherals as device memory, page 0 unmapped. The map is
+     decided in cancho (`memory_map` in `src/kernel.cho`); the board only fills tables. `mem`,
+     `crash null`, `crash write` in the shell. QEMU raspi3b and raspi4b; not yet on real hardware
+     (the data cache is enabled without an invalidate first — check on a real Pi).
+   - Kernel/user split (TTBR1 for the kernel, EL0, per-task tables): with milestone 4, which gives it a user.
 4. Tasks, scheduler, capability-based IPC (seL4-like; cancho's effect rows ≈ capabilities).
 5. Framebuffer via firmware mailbox + bitmap font (text on HDMI).
 6. SD card (EMMC2) + FAT; load programs.

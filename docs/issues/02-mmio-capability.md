@@ -15,3 +15,7 @@
 mainstream kernel language gives you at compile time.
 
 **Deletes in cancho-os:** the UART/GPIO parts of `board.c`; drivers become cancho.
+
+**Also wanted by milestone 3 (page tables):** the same shape for RAM the kernel owns — a capability over
+an address range with `read64/write64` — would let the page-table filler (`board_map`) be cancho, and
+`msr` for `ttbr0_el1`/`tcr_el1`/`mair_el1`/`sctlr_el1` (see 04) would do the same for `board_mmu_on`.

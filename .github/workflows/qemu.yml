@@ -16,8 +16,17 @@ jobs:
       - name: boot and drive the shell
         run: |
           CANCHO=/tmp/cseed/cancho0 ./build.sh
-          (sleep 2; printf 'about\r'; sleep 1; printf 'echo ci\r'; sleep 1) \
-            | timeout 8 qemu-system-aarch64 -M raspi3b -kernel build/kernel8.img -serial stdio -display none -monitor none > out.txt || true
+          ./test.sh about 'echo ci' ticks crash about > out.txt
           cat out.txt
           grep -q "no Linux underneath" out.txt
           grep -q "^ci" out.txt
+          # milestone 2: the timer interrupt fires, and a cancho trap is reported, then the core halts
+          grep -Eq "^[1-9][0-9]* timer interrupts" out.txt
+          grep -q "cancho trap" out.txt
+          test "$(grep -c "no Linux underneath" out.txt)" = 1
+          # milestone 3: the MMU is on: page 0 is unmapped and kernel code is read-only
+          ./test.sh mem 'crash null' > null.txt; cat null.txt
+          grep -q "r-x  kernel code" null.txt
+          grep -q "data abort: address not mapped" null.txt
+          ./test.sh 'crash write' > write.txt; cat write.txt
+          grep -q "data abort: write to read-only memory" write.txt
