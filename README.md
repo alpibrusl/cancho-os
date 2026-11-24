@@ -55,6 +55,8 @@ RX→pin 8 (GPIO14, TXD), TX→pin 10 (GPIO15, RXD). Then `picocom -b 115200 /de
   would let the UART driver itself be cancho — and the authority report would
   name the address ranges a driver can touch.
 
+Context and decisions: [`docs/ROADMAP.md`](docs/ROADMAP.md). Compiler issues to file in cancho: [`docs/issues/`](docs/issues/).
+
 ## Next milestones
 
 2. exception vectors + GIC + ARM generic timer (needs `msr`/`mrs`: more asm or intrinsics)
