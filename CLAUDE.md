@@ -18,6 +18,6 @@ Rules of the road
 - QEMU 8.x has only raspi3b; raspi4b needs QEMU ≥ 9. One kernel8.img serves both: the kernel reads
   MIDR_EL1 (`detect` in kernel.cho). A new board is a new branch there, from its datasheet.
 - Direction and the robot steps are in docs/ROADMAP.md ("Direction"). `src/feetech.cho`, `calibration.cho`,
-  `kinematics.cho` and `so101.cho` are vendored from cancho-robot: change them there. The kernel must stay unable to move a servo until the safety core
+  `kinematics.cho`, `so101.cho` and `safety.cho` are vendored from cancho-robot: change them there. The kernel must stay unable to move a servo until the safety core
   exists: do not vendor `feetech_write.cho` before then.
 - `SERVOS=1 ./test.sh 'servo scan'` attaches `sim/servos.cho` (built for the host by build.sh).

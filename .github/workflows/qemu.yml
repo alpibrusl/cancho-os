@@ -42,7 +42,11 @@ jobs:
           # the arm: the zero pose is where placo puts it (cancho-robot tests/kinematics_test.cho), to the micrometre
           ./test.sh 'arm zero' > zero.txt; cat zero.txt
           grep -q "^gripper at x 391361 y -9 z 226469 um" zero.txt
-          # and the pose from the simulated servos is what the same sources compute on this machine
-          SERVOS=1 ./test.sh 'arm pose' | grep -E "^(joint|gripper)" > pose.txt; cat pose.txt
+          # the pose from the simulated servos, and the safety core's verdict on four requests (approved,
+          # approved but slowed, a joint limit, a collision), are what the same sources say on this machine
+          SERVOS=1 ./test.sh 'arm pose' 'arm check -2 14 33 -41 44' 'arm check 5 14 33 -41 44' \
+              'arm check -2 14 33 -41 400' 'arm check 60 14 33 -41 44' > arm.txt; cat arm.txt
+          grep -E "^(joint|gripper|approved|refused|goals|nothing)" arm.txt > arm-kernel.txt
           ./build/expect > expect.txt
-          test -s pose.txt && diff pose.txt expect.txt
+          test "$(wc -l < arm-kernel.txt)" -eq 16 && diff arm-kernel.txt expect.txt
+          grep -q "^refused: limit.joint (joint 5)" arm-kernel.txt
