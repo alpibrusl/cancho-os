@@ -1,160 +1,505 @@
 edition 5;
 
-// The board is a capability: everything that touches hardware is a foreign
-// symbol of the library "board", so `cancho authority` lists it exactly.
-extern fn board_putc[&f](ffi: &f Ffi("board"), c: int) -> [ffi("board")] int;
-extern fn board_getc[&f](ffi: &f Ffi("board")) -> [ffi("board")] int;
-// Interrupts: a periodic timer tick. The handler itself is still in the board
-// (docs/issues/04); the kernel starts it and reads what it counted.
-extern fn board_tick_start[&f](ffi: &f Ffi("board"), hz: int) -> [ffi("board")] int;
-extern fn board_ticks[&f](ffi: &f Ffi("board")) -> [ffi("board")] int;
-extern fn board_uptime_ms[&f](ffi: &f Ffi("board")) -> [ffi("board")] int;
+// cancho-os: the kernel. Every driver here is cancho; what it cannot spell yet
+// (a volatile load or store, a system register, `wfi`) is a one-instruction
+// symbol of the foreign library "board" (board/boot.S), so `cancho authority`
+// lists exactly the primitives the kernel is built on.
+extern fn board_info[&f](ffi: &f Ffi("board"), which: int) -> [ffi("board")] int;
 
-fn puts[&f, &r](b: &f Ffi("board"), s: &r [byte]) -> [ffi("board")] int {
+extern fn board_r8[&f](ffi: &f Ffi("board"), addr: int) -> [ffi("board")] int;
+
+extern fn board_w8[&f](ffi: &f Ffi("board"), addr: int, v: int) -> [ffi("board")] int;
+
+extern fn board_r32[&f](ffi: &f Ffi("board"), addr: int) -> [ffi("board")] int;
+
+extern fn board_w32[&f](ffi: &f Ffi("board"), addr: int, v: int) -> [ffi("board")] int;
+
+extern fn board_r64[&f](ffi: &f Ffi("board"), addr: int) -> [ffi("board")] int;
+
+extern fn board_w64[&f](ffi: &f Ffi("board"), addr: int, v: int) -> [ffi("board")] int;
+
+extern fn board_sys_read[&f](ffi: &f Ffi("board"), reg: int) -> [ffi("board")] int;
+
+extern fn board_sys_write[&f](ffi: &f Ffi("board"), reg: int, v: int) -> [ffi("board")] int;
+
+extern fn board_wfi[&f](ffi: &f Ffi("board")) -> [ffi("board")] int;
+
+extern fn board_tlb_flush[&f](ffi: &f Ffi("board")) -> [ffi("board")] int;
+
+// The kernel's state is one slice of ints, lent to whoever needs it (cancho has no
+// mutable globals, and does not need them here):
+//   k[0] UART base          k[1] board: 3 or 4 (0: not recognised)
+//   k[2] GIC CPU interface  k[3] GIC distributor (both 0 on the Pi 3)
+//   k[4] counter units per tick   k[5] ticks so far
+//   k[6] translation tables used  k[7] peripheral window start   k[8] its end
+// The system registers, by the numbers board_sys_read/board_sys_write take:
+//   0 cntfrq_el0  1 cntvct_el0  2 cntv_ctl_el0  3 cntv_cval_el0  4 cntv_tval_el0
+//   5 mair_el1    6 tcr_el1     7 ttbr0_el1     8 sctlr_el1      9 midr_el1
+
+// ---- which board ------------------------------------------------------------
+// One image for every board: the CPU says which one this is.
+fn detect[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
+    let part = board_sys_read(b, 9) >> 4 & 0xfff;
+    if part == 0xd03 {
+        // Cortex-A53: Raspberry Pi 3 (BCM2837), and QEMU raspi3b
+        k[1] = 3;
+        k[0] = 0x3f201000;
+        k[7] = 0x3f000000;
+        k[8] = 0x40200000;
+    } else if part == 0xd08 {
+        // Cortex-A72: Raspberry Pi 4 (BCM2711)
+        k[1] = 4;
+        k[0] = 0xfe201000;
+        k[2] = 0xff842000;
+        k[3] = 0xff841000;
+        k[7] = 0xfc000000;
+        k[8] = 0x100000000;
+    }
+    return k[1];
+}
+
+// ---- UART (PL011) -----------------------------------------------------------
+fn uart_init[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
+    let uart = k[0];
+    let gpio = uart - 0x1000;
+    board_w32(b, uart + 0x30, 0);
+    // GPFSEL1: GPIO14/15 to ALT0 (TXD0/RXD0)
+    let sel = board_r32(b, gpio + 4) & ~(7 << 12 | 7 << 15);
+    board_w32(b, gpio + 4, sel | 4 << 12 | 4 << 15);
+    board_w32(b, uart + 0x44, 0x7ff);
+    // 115200 baud from a 48 MHz UART clock; 8N1, FIFOs on; enable, TX, RX
+    board_w32(b, uart + 0x24, 26);
+    board_w32(b, uart + 0x28, 3);
+    board_w32(b, uart + 0x2c, 3 << 5 | 1 << 4);
+    return board_w32(b, uart + 0x30, 1 | 1 << 8 | 1 << 9);
+}
+
+fn putc[&f, &s](b: &f Ffi("board"), k: &!s [int], c: int) -> [ffi("board")] int {
+    let uart = k[0];
+    while board_r32(b, uart + 0x18) & 32 != 0 {
+    }
+    return board_w32(b, uart, c);
+}
+
+fn puts[&f, &s, &r](b: &f Ffi("board"), k: &!s [int], s: &r [byte]) -> [ffi("board")] int {
     var i = 0;
     while i < len(s) {
-        board_putc(b, int_of(s[i]));
+        putc(b, k, int_of(s[i]));
         i = i + 1;
     }
     return 0;
 }
-// Memory: the board fills page tables and flips the switch; which ranges exist
-// and what each may be used for is decided below, in map_memory.
-extern fn board_layout[&f](ffi: &f Ffi("board"), which: int) -> [ffi("board")] int;
-extern fn board_map[&f](ffi: &f Ffi("board"), start: int, end: int, perm: int) -> [ffi("board")] int;
-extern fn board_mmu_on[&f](ffi: &f Ffi("board")) -> [ffi("board")] int;
-extern fn board_peek[&f](ffi: &f Ffi("board"), addr: int) -> [ffi("board")] int;
-extern fn board_poke[&f](ffi: &f Ffi("board"), addr: int, v: int) -> [ffi("board")] int;
 
-fn put_dec[&f](b: &f Ffi("board"), v: int) -> [ffi("board")] int {
-    if v >= 10 { put_dec(b, v / 10); }
-    board_putc(b, 48 + v % 10);
+fn put_dec[&f, &s](b: &f Ffi("board"), k: &!s [int], v: int) -> [ffi("board")] int {
+    if v >= 10 {
+        put_dec(b, k, v / 10);
+    }
+    return putc(b, k, 48 + v % 10);
+}
+
+fn put_digit[&f, &s](b: &f Ffi("board"), k: &!s [int], d: int) -> [ffi("board")] int {
+    if d < 10 {
+        return putc(b, k, 48 + d);
+    }
+    return putc(b, k, 87 + d);
+}
+
+fn put_hex[&f, &s](b: &f Ffi("board"), k: &!s [int], v: int) -> [ffi("board")] int {
+    if v >= 16 {
+        put_hex(b, k, v >> 4);
+    }
+    return put_digit(b, k, v & 15);
+}
+
+// All sixteen digits, for a register.
+fn put_reg[&f, &s](b: &f Ffi("board"), k: &!s [int], v: int) -> [ffi("board")] int {
+    puts(b, k, "0x");
+    var shift = 60;
+    while shift >= 0 {
+        put_digit(b, k, v >> shift & 15);
+        shift = shift - 4;
+    }
     return 0;
 }
 
-fn put_hex[&f](b: &f Ffi("board"), v: int) -> [ffi("board")] int {
-    if v >= 16 { put_hex(b, v >> 4); }
-    let d = v & 15;
-    if d < 10 { board_putc(b, 48 + d); } else { board_putc(b, 87 + d); }
+// ---- time: the ARM generic timer, polled -------------------------------------
+// Interrupts stay masked in the CPU. The timer still raises its line through the
+// board's interrupt controller, which is what wakes `wfi`; the kernel then asks
+// the controller what happened. No handler runs behind cancho's back, so there
+// is no state shared with one.
+fn tick_start[&f, &s](b: &f Ffi("board"), k: &!s [int], hz: int) -> [ffi("board")] int {
+    k[4] = board_sys_read(b, 0) / hz;
+    if k[1] == 4 {
+        // GIC-400: virtual timer is private interrupt 27
+        let gicd = k[3];
+        board_w32(b, gicd, 0);
+        let prio = board_r32(b, gicd + 0x400 + 24) & 0xffffff;
+        board_w32(b, gicd + 0x400 + 24, prio | 0xa0 << 24);
+        board_w32(b, gicd + 0x100, 1 << 27);
+        board_w32(b, gicd, 1);
+        board_w32(b, k[2] + 4, 0xff);
+        board_w32(b, k[2], 1);
+    } else {
+        // BCM2836 per-core block: route the virtual timer to core 0
+        board_w32(b, 0x40000040, 8);
+    }
+    board_sys_write(b, 4, k[4]);
+    return board_sys_write(b, 2, 1);
+}
+
+fn tick[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
+    // from the last deadline, not from now: no drift
+    board_sys_write(b, 3, board_sys_read(b, 3) + k[4]);
+    k[5] = k[5] + 1;
     return 0;
+}
+
+// What the interrupt controller has pending, handled here and now.
+fn poll[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
+    if k[4] == 0 {
+        return 0;
+    }
+    if k[1] == 4 {
+        let iar = board_r32(b, k[2] + 0xc);
+        let id = iar & 0x3ff;
+        if id == 27 {
+            tick(b, k);
+        }
+        if id < 1020 {
+            board_w32(b, k[2] + 0x10, iar);
+        }
+    } else if board_r32(b, 0x40000060) & 8 != 0 {
+        tick(b, k);
+    }
+    return 0;
+}
+
+fn uptime_ms[&f](b: &f Ffi("board")) -> [ffi("board")] int {
+    let f = board_sys_read(b, 0);
+    let c = board_sys_read(b, 1);
+    return c / f * 1000 + c % f * 1000 / f;
+}
+
+// Sleep until a key arrives, handling whatever else wakes the core meanwhile.
+fn getc[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
+    let uart = k[0];
+    while board_r32(b, uart + 0x18) & 16 != 0 {
+        if k[4] != 0 {
+            board_wfi(b);
+        }
+        poll(b, k);
+    }
+    return board_r32(b, uart) & 255;
+}
+
+// ---- memory: identity-mapped translation tables ---------------------------------
+// 4 KB granule, 39-bit addresses, so level 1 is the top table. A descriptor is the
+// address, the attributes below, and bit 0 (valid); bit 1 says "table" at levels 1
+// and 2, and "page" at level 3.
+// perm: 0 read+execute, 1 read-only, 2 read+write, 3 device (read+write, uncached)
+fn attrs(perm: int) -> [] int {
+    let af = 1 << 10;
+    let inner = 3 << 8;
+    let ro = 1 << 7;
+    let pxn = 1 << 53;
+    let uxn = 1 << 54;
+    if perm == 0 {
+        return af | inner | ro | uxn;
+    }
+    if perm == 1 {
+        return af | inner | ro | pxn | uxn;
+    }
+    if perm == 2 {
+        return af | inner | pxn | uxn;
+    }
+    // memory attribute 1 (device)
+    return af | pxn | uxn | 4;
+}
+
+// The table a descriptor slot points to, made if the slot is empty. 0: none left,
+// or the slot already maps a block.
+fn next_table[&f, &s](b: &f Ffi("board"), k: &!s [int], slot: int) -> [ffi("board")] int {
+    let d = board_r64(b, slot);
+    if d & 1 != 0 {
+        if d & 2 == 0 {
+            return 0;
+        }
+        return d & 0xfffffffff000;
+    }
+    if k[6] >= board_info(b, 4) {
+        return 0;
+    }
+    let table = board_info(b, 3) + k[6] * 4096;
+    k[6] = k[6] + 1;
+    board_w64(b, slot, table | 3);
+    return table;
+}
+
+// Identity-map [start, end) with one permission: 1 GB and 2 MB blocks where the
+// range allows, 4 KB pages elsewhere. 0, or 1 when it cannot be done.
+fn map[&f, &s](b: &f Ffi("board"), k: &!s [int], start: int, end: int, perm: int) -> [ffi("board")] int {
+    if (start | end) & 0xfff != 0 || start > end || end > 1 << 39 {
+        return 1;
+    }
+    let a = attrs(perm);
+    let top = board_info(b, 3);
+    var va = start;
+    var bad = 0;
+    while va < end && bad == 0 {
+        let l1 = top + (va >> 30) * 8;
+        if va & 0x3fffffff == 0 && end - va >= 1 << 30 && board_r64(b, l1) & 1 == 0 {
+            board_w64(b, l1, va | a | 1);
+            va = va + (1 << 30);
+        } else {
+            let l2t = next_table(b, k, l1);
+            if l2t == 0 {
+                bad = 1;
+            } else {
+                let l2 = l2t + (va >> 21 & 511) * 8;
+                if va & 0x1fffff == 0 && end - va >= 1 << 21 && board_r64(b, l2) & 1 == 0 {
+                    board_w64(b, l2, va | a | 1);
+                    va = va + (1 << 21);
+                } else {
+                    let l3t = next_table(b, k, l2);
+                    if l3t == 0 {
+                        bad = 1;
+                    } else {
+                        board_w64(b, l3t + (va >> 12 & 511) * 8, va | a | 3);
+                        va = va + 4096;
+                    }
+                }
+            }
+        }
+    }
+    return bad;
 }
 
 // One line of the memory map: map the range (when `apply`) or print it.
-// perm: 0 read+execute, 1 read-only, 2 read+write, 3 device.
-fn range[&f, &r](b: &f Ffi("board"), apply: bool, name: &r [byte], start: int, end: int, perm: int) -> [ffi("board")] int {
-    if start == end { return 0; }
-    if apply { return board_map(b, start, end, perm); }
-    puts(b, "  0x"); put_hex(b, start); puts(b, " - 0x"); put_hex(b, end);
-    if perm == 0 { puts(b, "  r-x  "); }
-    else if perm == 1 { puts(b, "  r--  "); }
-    else if perm == 2 { puts(b, "  rw-  "); }
-    else { puts(b, "  rw- device  "); }
-    puts(b, name); puts(b, "\r\n");
+fn range[&f, &s, &r](b: &f Ffi("board"), k: &!s [int], apply: bool, name: &r [byte], start: int, end: int, perm: int) -> [ffi("board")] int {
+    if apply {
+        return map(b, k, start, end, perm);
+    }
+    puts(b, k, "  0x");
+    put_hex(b, k, start);
+    puts(b, k, " - 0x");
+    put_hex(b, k, end);
+    if perm == 0 {
+        puts(b, k, "  r-x  ");
+    } else if perm == 1 {
+        puts(b, k, "  r--  ");
+    } else if perm == 2 {
+        puts(b, k, "  rw-  ");
+    } else {
+        puts(b, k, "  rw- device  ");
+    }
+    puts(b, k, name);
+    puts(b, k, "\r\n");
     return 0;
 }
 
 // The whole address space the kernel may touch. Everything else, page 0 included,
-// is unmapped: a null dereference is a fault, not a read of the vector table.
-fn memory_map[&f](b: &f Ffi("board"), apply: bool) -> [ffi("board")] int {
-    let image = board_layout(b, 0);
-    let code_end = board_layout(b, 1);
-    let const_end = board_layout(b, 2);
-    var bad = 0;
-    bad = bad + range(b, apply, "stack", 4096, image, 2);
-    bad = bad + range(b, apply, "kernel code", image, code_end, 0);
-    bad = bad + range(b, apply, "kernel constants", code_end, const_end, 1);
-    bad = bad + range(b, apply, "kernel data and heap", const_end, board_layout(b, 3), 2);
-    bad = bad + range(b, apply, "peripherals", board_layout(b, 4), board_layout(b, 5), 3);
-    bad = bad + range(b, apply, "per-core peripherals", board_layout(b, 6), board_layout(b, 7), 3);
+// is unmapped: a null dereference is a fault, not a read of whatever is there.
+fn memory_map[&f, &s](b: &f Ffi("board"), k: &!s [int], apply: bool) -> [ffi("board")] int {
+    let image = board_info(b, 0);
+    let code_end = board_info(b, 1);
+    let const_end = board_info(b, 2);
+    var bad = range(b, k, apply, "stack", 4096, image, 2);
+    bad = bad + range(b, k, apply, "kernel code", image, code_end, 0);
+    bad = bad + range(b, k, apply, "kernel constants", code_end, const_end, 1);
+    // the first 960 MB: present on every board, below the GPU's share
+    bad = bad + range(b, k, apply, "kernel data and heap", const_end, 0x3c000000, 2);
+    bad = bad + range(b, k, apply, "peripherals", k[7], k[8], 3);
     return bad;
 }
 
+// Translation and the caches on. From here an access outside the map is a fault,
+// and so is a write to code or constants, or a jump into data (WXN).
+fn mmu_on[&f](b: &f Ffi("board")) -> [ffi("board")] int {
+    // attribute 0: normal memory, write-back; attribute 1: device
+    board_sys_write(b, 5, 0xff | 4 << 8);
+    // 39-bit addresses; cacheable, inner-shareable table walks; no upper half yet; 40-bit physical
+    board_sys_write(b, 6, 25 | 1 << 8 | 1 << 10 | 3 << 12 | 1 << 23 | 2 << 32);
+    board_sys_write(b, 7, board_info(b, 3));
+    board_tlb_flush(b);
+    // the bits that must be one, then MMU, data cache, instruction cache, WXN
+    return board_sys_write(b, 8, 0x30d00800 | 1 | 1 << 2 | 1 << 12 | 1 << 19);
+}
+
+// ---- faults -------------------------------------------------------------------
+// board/boot.S records an exception and calls main again; this is what main does then.
+fn report_fault[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
+    let kind = board_info(b, 5);
+    let esr = board_info(b, 6);
+    let elr = board_info(b, 7);
+    let class = esr >> 26 & 63;
+    let sync = kind & 3 == 0;
+    puts(b, k, "\r\n*** ");
+    if sync && class == 0 && board_r32(b, elr) == 0xc11f {
+        // cancho's own checks (bounds, overflow, ...) end in `udf #0xc11f`
+        puts(b, k, "cancho trap");
+    } else if sync && (class == 0x25 || class == 0x21) {
+        if class == 0x25 {
+            puts(b, k, "data abort: ");
+        } else {
+            puts(b, k, "instruction abort: ");
+        }
+        let why = esr >> 2 & 15;
+        if why == 1 {
+            puts(b, k, "address not mapped");
+        } else if why == 3 && class == 0x25 && esr & 64 != 0 {
+            puts(b, k, "write to read-only memory");
+        } else if why == 3 {
+            puts(b, k, "permission denied");
+        } else {
+            puts(b, k, "other");
+        }
+    } else if sync {
+        puts(b, k, "synchronous exception");
+    } else if kind & 3 == 1 {
+        puts(b, k, "unexpected irq");
+    } else if kind & 3 == 2 {
+        puts(b, k, "unexpected fiq");
+    } else {
+        puts(b, k, "serror");
+    }
+    puts(b, k, " (vector ");
+    put_dec(b, k, kind);
+    puts(b, k, ")\r\n    esr ");
+    put_reg(b, k, esr);
+    puts(b, k, "\r\n    elr ");
+    put_reg(b, k, elr);
+    puts(b, k, "\r\n    far ");
+    put_reg(b, k, board_info(b, 8));
+    return puts(b, k, "\r\nhalted.\r\n");
+}
+
+// ---- shell --------------------------------------------------------------------
 fn same[&r, &s](line: &r [byte], n: int, word: &s [byte]) -> [] bool {
-    if n != len(word) { return false; }
+    if n != len(word) {
+        return false;
+    }
     var i = 0;
     while i < n {
-        if int_of(line[i]) != int_of(word[i]) { return false; }
+        if int_of(line[i]) != int_of(word[i]) {
+            return false;
+        }
         i = i + 1;
     }
     return true;
 }
 
-fn run[&f, &r](b: &f Ffi("board"), line: &r [byte], n: int) -> [ffi("board")] int {
-    if n == 0 { return 0; }
+fn run[&f, &s, &r](b: &f Ffi("board"), k: &!s [int], line: &r [byte], n: int) -> [ffi("board")] int {
+    if n == 0 {
+        return 0;
+    }
     if same(line, n, "help") {
-        puts(b, "commands: help, about, echo <text>, uptime, ticks, mem, crash [null|write]\r\n");
+        puts(b, k, "commands: help, about, echo <text>, uptime, ticks, mem, crash [null|write]\r\n");
     } else if same(line, n, "about") {
-        puts(b, "cancho-os 0.0.3: a kernel written in cancho, no Linux underneath\r\n");
+        puts(b, k, "cancho-os 0.0.4: a kernel written in cancho, no Linux underneath (Raspberry Pi ");
+        put_dec(b, k, k[1]);
+        puts(b, k, ")\r\n");
     } else if n > 5 && same(line, 5, "echo ") {
         var i = 5;
-        while i < n { board_putc(b, int_of(line[i])); i = i + 1; }
-        puts(b, "\r\n");
+        while i < n {
+            putc(b, k, int_of(line[i]));
+            i = i + 1;
+        }
+        puts(b, k, "\r\n");
     } else if same(line, n, "uptime") {
-        let ms = board_uptime_ms(b);
-        put_dec(b, ms / 1000);
-        puts(b, ".");
-        put_dec(b, ms % 1000 / 100); put_dec(b, ms % 100 / 10); put_dec(b, ms % 10);
-        puts(b, " s\r\n");
+        let ms = uptime_ms(b);
+        put_dec(b, k, ms / 1000);
+        puts(b, k, ".");
+        put_dec(b, k, ms % 1000 / 100);
+        put_dec(b, k, ms % 100 / 10);
+        put_dec(b, k, ms % 10);
+        puts(b, k, " s\r\n");
     } else if same(line, n, "ticks") {
-        put_dec(b, board_ticks(b));
-        puts(b, " timer interrupts\r\n");
+        put_dec(b, k, k[5]);
+        puts(b, k, " timer interrupts\r\n");
     } else if same(line, n, "mem") {
-        memory_map(b, false);
+        memory_map(b, k, false);
     } else if same(line, n, "crash null") {
         // page 0 is not mapped
-        board_peek(b, 0);
+        board_r8(b, 0);
     } else if same(line, n, "crash write") {
         // the kernel's own code is mapped read+execute
-        board_poke(b, board_layout(b, 0), 0);
+        board_w8(b, board_info(b, 0), 0);
     } else if same(line, n, "crash") {
         // Read past the end of the line buffer: cancho's bounds check traps, and
         // the exception vector reports it instead of the machine hanging silently.
-        board_putc(b, int_of(line[n + 4096]));
+        putc(b, k, int_of(line[n + 4096]));
     } else {
-        puts(b, "unknown command\r\n");
+        puts(b, k, "unknown command\r\n");
     }
     return 0;
 }
 
-fn shell[&f](b: &f Ffi("board")) -> [ffi("board")] int {
-    puts(b, "\r\ncancho-os booted. type `help`.\r\n");
+fn shell[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
+    puts(b, k, "\r\ncancho-os booted. type `help`.\r\n");
     region r {
         let line = alloc_slice[r](128, byte_of(0));
         var n = 0;
-        puts(b, "> ");
+        puts(b, k, "> ");
         while true {
-            let c = board_getc(b);
+            let c = getc(b, k);
             if c == 13 || c == 10 {
-                puts(b, "\r\n");
-                run(b, line, n);
+                puts(b, k, "\r\n");
+                run(b, k, line, n);
                 n = 0;
-                puts(b, "> ");
+                puts(b, k, "> ");
             } else if (c == 127 || c == 8) && n > 0 {
                 n = n - 1;
-                board_putc(b, 8); board_putc(b, 32); board_putc(b, 8);
+                putc(b, k, 8);
+                putc(b, k, 32);
+                putc(b, k, 8);
             } else if c >= 32 && c < 127 && n < 128 {
                 line[n] = byte_of(c);
                 n = n + 1;
-                board_putc(b, c);
+                putc(b, k, c);
             }
         }
     }
     return 0;
 }
 
+fn kernel[&f](b: &f Ffi("board")) -> [ffi("board")] int {
+    region r {
+        let k = alloc_slice[r](16, 0);
+        if detect(b, k) == 0 {
+            // a board this kernel has no addresses for: nothing can even be printed
+            return 1;
+        }
+        if board_info(b, 5) >= 0 {
+            // entered again by the exception vector: say what happened, and stop
+            return report_fault(b, k);
+        }
+        uart_init(b, k);
+        // table 0 of the pool is the top-level table
+        k[6] = 1;
+        if memory_map(b, k, true) != 0 {
+            puts(b, k, "\r\nmemory map refused; running without the MMU\r\n");
+        } else {
+            mmu_on(b);
+        }
+        tick_start(b, k, 100);
+        shell(b, k);
+    }
+    return 0;
+}
+
 fn main(world: World) -> [] int {
     let Split { io, ffi, fs, heap, args, net, clock } = split(world);
-    release(io); release(fs); release(heap); release(args); release(net); release(clock);
+    release(io);
+    release(fs);
+    release(heap);
+    release(args);
+    release(net);
+    release(clock);
     let board = narrow(ffi, "board");
+    var status = 0;
     borrow board as &b in {
-        if memory_map(b, true) != 0 {
-            puts(b, "\r\nmemory map refused; running without the MMU\r\n");
-        } else {
-            board_mmu_on(b);
-        }
-        board_tick_start(b, 100);
-        shell(b);
+        status = kernel(b);
     }
     release(board);
-    return 0;
+    return status;
 }

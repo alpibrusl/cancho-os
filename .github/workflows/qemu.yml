@@ -12,13 +12,12 @@ jobs:
           git clone --depth 1 https://github.com/alpibrusl/cancho /tmp/cancho
           sh /tmp/cancho/scripts/seed-build.sh --out /tmp/cseed
       - name: build
-        run: CANCHO=/tmp/cseed/cancho0 ./build.sh && BOARD=pi4 CANCHO=/tmp/cseed/cancho0 ./build.sh
+        run: CANCHO=/tmp/cseed/cancho0 ./build.sh
       - name: boot and drive the shell
         run: |
-          CANCHO=/tmp/cseed/cancho0 ./build.sh
           ./test.sh about 'echo ci' ticks crash about > out.txt
           cat out.txt
-          grep -q "no Linux underneath" out.txt
+          grep -q "no Linux underneath (Raspberry Pi 3)" out.txt
           grep -q "^ci" out.txt
           # milestone 2: the timer interrupt fires, and a cancho trap is reported, then the core halts
           grep -Eq "^[1-9][0-9]* timer interrupts" out.txt

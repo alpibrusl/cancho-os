@@ -1,5 +1,10 @@
 # Entering cancho from an exception: exported entry points and state that outlives a call
 
+> **Not needed yet (2026-11-24).** cancho-os now polls interrupts after `wfi` with IRQs masked, and a
+> fault re-enters `main`, so no handler is C and nothing below is blocking. It becomes necessary with
+> preemption (milestone 4: a timer interrupt that takes the CPU from a running task). Kept as the
+> record of what that will need; "Today" below describes the state before the change.
+
 **Today:** nothing outside a cancho program can call into it (function symbols are internal names such
 as `lexs_161`; `docs/function-values.md` §5 allows callbacks only with row `[]` and scalar parameters),
 and there is no mutable state that outlives a call. So in cancho-os the IRQ handler, the tick counter

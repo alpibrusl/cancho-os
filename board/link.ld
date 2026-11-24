@@ -12,7 +12,9 @@ SECTIONS {
     . = ALIGN(16);
     __bss_start = .;
     .bss (NOLOAD) : { *(.bss .bss.* COMMON) }
-    . = ALIGN(16);
+    . = ALIGN(4096);
+    __tables = .;                 /* eight 4 KB translation tables, zeroed with .bss */
+    . += 8 * 4096;
     __bss_end = .;
     __heap_start = ALIGN(4096);
     /DISCARD/ : { *(.comment) *(.note*) *(.eh_frame*) }
