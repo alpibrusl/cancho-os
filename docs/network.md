@@ -84,6 +84,8 @@ misreading of SLIP common to both would pass the third row. The fourth row is th
 
 ## 6. Next
 
+The order, the boards and what each driver is written from are in [`drivers.md`](drivers.md).
+
 1. A link the console does not share pins with (another UART), so the line works on a real Pi 4.
 2. The Pi 4's Ethernet controller as a second link, with ARP; only testable on the board.
 3. The kernel sending first (a datagram, an echo request), then TCP.

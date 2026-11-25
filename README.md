@@ -219,3 +219,9 @@ Context and decisions: [`docs/ROADMAP.md`](docs/ROADMAP.md). Compiler issues to 
 4. tasks, scheduler, capability IPC
 5. framebuffer via the firmware mailbox
 6. SD card + FAT
+
+## Licence
+
+[EUPL-1.2](LICENSE). Which hardware is supported, and what each driver is written from, is in
+[docs/drivers.md](docs/drivers.md): a driver follows a permissively licensed reference so that
+the whole stays under this licence.
