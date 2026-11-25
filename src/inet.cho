@@ -1,0 +1,294 @@
+edition 5;
+
+module inet;
+
+// `inet` -- the first slice of a network stack (docs/network.md): IPv4 packets framed with SLIP, and the two
+// answers a machine gives before it does anything else: an ICMP echo reply (`ping`) and a UDP echo (port 7).
+//
+// Sans-io, as `feetech` is: every function is pure (`[]`), allocates nothing, holds no hardware and never traps,
+// whatever the bytes. A driver feeds received bytes to `slip_feed`, gives each whole frame to `answer`, and sends
+// what `slip_encode` makes of the reply. So the same file is tested on the machine that builds it
+// (tests/inet_test.cho) and runs in the kernel.
+//
+// What is here:   SLIP (RFC 1055); the IPv4 header (RFC 791), validated; ICMP echo (RFC 792); UDP (RFC 768)
+//                 with its checksum, for port 7 only (RFC 862).
+// What is not:    ARP and Ethernet (a serial line has two ends and no addresses), fragments, IP options in a
+//                 reply, ICMP errors, TCP, IPv6. A packet that needs one of them is dropped, and the verdict
+//                 says which.
+
+// The largest packet taken or sent: SLIP's customary 1006 bytes (RFC 1055).
+pub fn mtu() -> [] int {
+    return 1006;
+}
+
+// ── what `answer` says when it sends nothing ─────────────────────────────────────────────────────────────
+
+pub fn drop_short() -> [] int {
+    return -1;
+}
+
+pub fn drop_not_ipv4() -> [] int {
+    return -2;
+}
+
+pub fn drop_bad_header_checksum() -> [] int {
+    return -3;
+}
+
+pub fn drop_not_ours() -> [] int {
+    return -4;
+}
+
+pub fn drop_fragment() -> [] int {
+    return -5;
+}
+
+pub fn drop_bad_checksum() -> [] int {
+    return -6;
+}
+
+pub fn drop_unsupported() -> [] int {
+    return -7;
+}
+
+pub fn drop_too_long() -> [] int {
+    return -8;
+}
+
+// ── bytes ───────────────────────────────────────────────────────────────────────────────────────────────
+
+pub fn get16[&b](buf: &b [byte], at: int) -> [] int {
+    return int_of(buf[at]) * 256 + int_of(buf[at + 1]);
+}
+
+pub fn get32[&b](buf: &b [byte], at: int) -> [] int {
+    return get16(buf, at) * 65536 + get16(buf, at + 2);
+}
+
+fn put16[&b](buf: &!b [byte], at: int, v: int) -> [] int {
+    buf[at] = byte_of(v / 256 % 256);
+    buf[at + 1] = byte_of(v % 256);
+    return 0;
+}
+
+fn put32[&b](buf: &!b [byte], at: int, v: int) -> [] int {
+    put16(buf, at, v / 65536 % 65536);
+    return put16(buf, at + 2, v % 65536);
+}
+
+// The Internet checksum's sum (RFC 1071): `buf[from..to]` as big-endian 16-bit words, an odd last byte padded
+// with zero, added to `seed` with the carries folded back in. Between 0 and 65535.
+pub fn sum16[&b](buf: &b [byte], from: int, to: int, seed: int) -> [] int {
+    var s = seed;
+    var i = from;
+    while i + 1 < to {
+        s = s + int_of(buf[i]) * 256 + int_of(buf[i + 1]);
+        i = i + 2;
+    }
+    if i < to {
+        s = s + int_of(buf[i]) * 256;
+    }
+    while s > 65535 {
+        s = s % 65536 + s / 65536;
+    }
+    return s;
+}
+
+// The checksum field for data whose sum is `sum`: its complement.
+pub fn complement(sum: int) -> [] int {
+    return 65535 - sum;
+}
+
+// ── SLIP ────────────────────────────────────────────────────────────────────────────────────────────────
+// A frame ends with END (192). Inside it END is sent as ESC, 220 and ESC (219) as ESC, 221.
+
+// The decoder's state, three ints the caller owns and starts at zero: how many bytes of the frame so far,
+// whether the last byte was ESC, and whether the frame has outgrown `frame` (it is then dropped whole).
+pub fn slip_state() -> [] int {
+    return 3;
+}
+
+// One received byte. Answers the length of a whole frame, now in `frame[0..length]`, or 0 while there is none.
+// An empty frame (two ENDs in a row, which a sender may put before a packet) is not a frame.
+pub fn slip_feed[&s, &f](state: &!s [int], frame: &!f [byte], c: int) -> [] int {
+    if c == 192 {
+        let n = state[0];
+        let lost = state[2] != 0 || state[1] != 0;
+        state[0] = 0;
+        state[1] = 0;
+        state[2] = 0;
+        if lost {
+            return 0;
+        }
+        return n;
+    }
+    var value = c;
+    if state[1] != 0 {
+        state[1] = 0;
+        if c == 220 {
+            value = 192;
+        } else if c == 221 {
+            value = 219;
+        } else {
+            // not a sequence SLIP has: the frame cannot be trusted
+            state[2] = 1;
+        }
+    } else if c == 219 {
+        state[1] = 1;
+        return 0;
+    }
+    if state[0] >= len(frame) || value < 0 || value > 255 {
+        state[2] = 1;
+        return 0;
+    }
+    frame[state[0]] = byte_of(value);
+    state[0] = state[0] + 1;
+    return 0;
+}
+
+// `pkt[0..n]` as a SLIP frame in `out`, an END before it and one after. Answers its length, or -1 if `out` is
+// too small (twice `n` and two more always fits).
+pub fn slip_encode[&p, &o](pkt: &p [byte], n: int, out: &!o [byte]) -> [] int {
+    if n < 0 || n > len(pkt) || len(out) < 2 {
+        return -1;
+    }
+    out[0] = byte_of(192);
+    var at = 1;
+    var i = 0;
+    while i < n {
+        let c = int_of(pkt[i]);
+        if at + 3 > len(out) {
+            return -1;
+        }
+        if c == 192 {
+            out[at] = byte_of(219);
+            out[at + 1] = byte_of(220);
+            at = at + 2;
+        } else if c == 219 {
+            out[at] = byte_of(219);
+            out[at + 1] = byte_of(221);
+            at = at + 2;
+        } else {
+            out[at] = pkt[i];
+            at = at + 1;
+        }
+        i = i + 1;
+    }
+    out[at] = byte_of(192);
+    return at + 1;
+}
+
+// ── IPv4 ────────────────────────────────────────────────────────────────────────────────────────────────
+
+// The header of a reply: 20 bytes, no options, identification 0, not fragmented, 64 hops.
+fn header[&o](out: &!o [byte], total: int, protocol: int, from: int, to: int) -> [] int {
+    out[0] = byte_of(69);
+    out[1] = byte_of(0);
+    put16(out, 2, total);
+    put16(out, 4, 0);
+    put16(out, 6, 0);
+    out[8] = byte_of(64);
+    out[9] = byte_of(protocol);
+    put16(out, 10, 0);
+    put32(out, 12, from);
+    put32(out, 16, to);
+    return put16(out, 10, complement(sum16(out, 0, 20, 0)));
+}
+
+// The sum of UDP's pseudo-header: the two addresses, the protocol and the length.
+fn pseudo(from: int, to: int, length: int) -> [] int {
+    var s = from / 65536 + from % 65536 + to / 65536 + to % 65536 + 17 + length;
+    while s > 65535 {
+        s = s % 65536 + s / 65536;
+    }
+    return s;
+}
+
+// The received packet `pkt[0..n]`, on a machine whose address is `ours` (a 32-bit number, `10.0.0.2` is
+// 0x0a000002). Answers the length of the reply, written to `out`, or one of the `drop_*` above.
+//
+// A packet is taken only if it is whole: version 4, a header of at least 20 bytes whose checksum holds, a total
+// length that fits what arrived, no fragment, addressed to `ours`. Then an echo request gets an echo reply with
+// the same identifier, sequence number and data, and a datagram to UDP port 7 gets its data back.
+pub fn answer[&p, &o](pkt: &p [byte], n: int, ours: int, out: &!o [byte]) -> [] int {
+    if n < 20 || n > len(pkt) {
+        return drop_short();
+    }
+    let first = int_of(pkt[0]);
+    if first / 16 != 4 {
+        return drop_not_ipv4();
+    }
+    let ihl = first % 16 * 4;
+    let total = get16(pkt, 2);
+    if ihl < 20 || total < ihl || total > n {
+        return drop_short();
+    }
+    if sum16(pkt, 0, ihl, 0) != 65535 {
+        return drop_bad_header_checksum();
+    }
+    if get32(pkt, 16) != ours {
+        return drop_not_ours();
+    }
+    // more fragments, or an offset: bits 13 and 0..12 of the word at 6
+    if get16(pkt, 6) % 16384 != 0 {
+        return drop_fragment();
+    }
+    let peer = get32(pkt, 12);
+    let protocol = int_of(pkt[9]);
+    let body = total - ihl;
+    if 20 + body > len(out) || 20 + body > mtu() {
+        return drop_too_long();
+    }
+    if protocol == 1 {
+        // ICMP: type, code, checksum, then for an echo the identifier, the sequence number and the data
+        if body < 8 {
+            return drop_short();
+        }
+        if sum16(pkt, ihl, total, 0) != 65535 {
+            return drop_bad_checksum();
+        }
+        if int_of(pkt[ihl]) != 8 || int_of(pkt[ihl + 1]) != 0 {
+            return drop_unsupported();
+        }
+        header(out, 20 + body, 1, ours, peer);
+        var i = 0;
+        while i < body {
+            out[20 + i] = pkt[ihl + i];
+            i = i + 1;
+        }
+        out[20] = byte_of(0);
+        put16(out, 22, 0);
+        put16(out, 22, complement(sum16(out, 20, 20 + body, 0)));
+        return 20 + body;
+    }
+    if protocol == 17 {
+        // UDP: source port, destination port, length, checksum (0: the sender computed none)
+        if body < 8 || get16(pkt, ihl + 4) != body {
+            return drop_short();
+        }
+        if get16(pkt, ihl + 6) != 0 && sum16(pkt, ihl, total, pseudo(peer, ours, body)) != 65535 {
+            return drop_bad_checksum();
+        }
+        if get16(pkt, ihl + 2) != 7 {
+            return drop_unsupported();
+        }
+        header(out, 20 + body, 17, ours, peer);
+        put16(out, 20, 7);
+        put16(out, 22, get16(pkt, ihl));
+        put16(out, 24, body);
+        put16(out, 26, 0);
+        var j = 8;
+        while j < body {
+            out[20 + j] = pkt[ihl + j];
+            j = j + 1;
+        }
+        var sum = complement(sum16(out, 20, 20 + body, pseudo(ours, peer, body)));
+        if sum == 0 {
+            // zero means "no checksum": the same value is sent as all ones
+            sum = 65535;
+        }
+        put16(out, 26, sum);
+        return 20 + body;
+    }
+    return drop_unsupported();
+}

@@ -1,0 +1,136 @@
+edition 5;
+
+// netpeer.cho -- the other end of the kernel's network link, for testing in QEMU. Not part of the kernel: an
+// ordinary cancho program for the machine the emulator runs on. Its standard output and input are the serial
+// line (test.sh connects them to the emulated board's second serial port, as it does for sim/servos.cho), and
+// it says what happened on its standard error.
+//
+// It sends four packets, one at a time, and waits for the reply to each before the next:
+//     an echo request (`ping`)                         -> the echo reply
+//     the same request with one bit of its data wrong  -> nothing: the kernel must drop it
+//     an echo request of odd length, with SLIP's two special bytes in its data -> the echo reply
+//     a datagram to UDP port 7                         -> the same data back
+//
+// The packets and the replies it insists on were not built by `inet`: a second implementation in another
+// language (Python's `struct`, with its own checksum) wrote them, and they are pasted here as hex, the same
+// vectors as tests/inet_test.cho. What this program shares with the kernel is the SLIP framing, which
+// tests/inet_test.cho holds to RFC 1055's own bytes.
+import inet;
+
+fn digit(c: int) -> [] int {
+    if c >= '0' && c <= '9' {
+        return c - '0';
+    }
+    return c - 'a' + 10;
+}
+
+fn set[&b, &s](buf: &!b [byte], hex: &s [byte]) -> [] int {
+    var i = 0;
+    while i * 2 + 1 < len(hex) {
+        buf[i] = byte_of(digit(int_of(hex[i * 2])) * 16 + digit(int_of(hex[i * 2 + 1])));
+        i = i + 1;
+    }
+    return i;
+}
+
+// Put `hex` on the line as one SLIP frame.
+fn send[&i, &s](io: &!i Io, hex: &s [byte]) -> [io_write] int {
+    region a {
+        let pkt = alloc_slice[a](128, byte_of(0));
+        let wire = alloc_slice[a](260, byte_of(0));
+        let n = set(pkt, hex);
+        let w = inet.slip_encode(pkt, n, wire);
+        var k = 0;
+        while k < w {
+            putchar(io, int_of(wire[k]));
+            k = k + 1;
+        }
+    }
+    match flush_out(io) {
+        Done::Ok(n) => {
+            return 0;
+        }
+        Done::Failed(e) => {
+            return e;
+        }
+    }
+}
+
+// Wait for one frame and say whether it is `hex`, byte for byte. 1 if it is, 0 if it is another, -1 if the
+// line closed first.
+fn expect[&i, &s](io: &!i Io, hex: &s [byte]) -> [io_read] int {
+    var verdict = -1;
+    region a {
+        let want = alloc_slice[a](128, byte_of(0));
+        let frame = alloc_slice[a](128, byte_of(0));
+        let state = alloc_slice[a](inet.slip_state(), 0);
+        let m = set(want, hex);
+        var c = getchar(io);
+        while c >= 0 && verdict < 0 {
+            let n = inet.slip_feed(state, frame, c);
+            if n > 0 {
+                verdict = 1;
+                if n != m {
+                    verdict = 0;
+                }
+                var k = 0;
+                while k < m && verdict == 1 {
+                    if int_of(frame[k]) != int_of(want[k]) {
+                        verdict = 0;
+                    }
+                    k = k + 1;
+                }
+            } else {
+                c = getchar(io);
+            }
+        }
+    }
+    return verdict;
+}
+
+fn say[&i, &s](io: &!i Io, what: &s [byte], verdict: int) -> [err_write] int {
+    write_err(io, "peer: ");
+    write_err(io, what);
+    if verdict == 1 {
+        return write_err(io, ": the reply is the expected one, byte for byte\n");
+    }
+    if verdict == 0 {
+        return write_err(io, ": ANOTHER REPLY than the expected one\n");
+    }
+    return write_err(io, ": NO REPLY before the line closed\n");
+}
+
+fn run[&i](io: &!i Io) -> [err_write, io_read, io_write] int {
+    send(io, "4500002cbeef00004001a7df0a0000010a00000208002c0912340001303132333435363738393a3b3c3d3e3f");
+    let a = expect(io, "4500002c00000000400166cf0a0000020a0000010000340912340001303132333435363738393a3b3c3d3e3f");
+    say(io, "ping", a);
+    // one bit wrong: no reply may come, so the next reply read must be the next request's
+    send(io, "4500002cbeef00004001a7df0a0000010a00000208002c0912350001303132333435363738393a3b3c3d3e3f");
+    send(io, "45000022000100000301a3d80a0000010a0000020800b14701020007c0db206f6464");
+    let b = expect(io, "4500002200000000400166d90a0000020a0000010000b94701020007c0db206f6464");
+    say(io, "a corrupted ping, then a ping with SLIP's special bytes", b);
+    send(io, "4500002c004200004011667d0a0000010a0000029c4000070018479b68656c6c6f2c2063616e63686f2d6f73");
+    let c = expect(io, "4500002c00000000401166bf0a0000020a00000100079c400018479b68656c6c6f2c2063616e63686f2d6f73");
+    say(io, "udp echo", c);
+    if a == 1 && b == 1 && c == 1 {
+        write_err(io, "peer: 3 replies to 4 packets, as it should be\n");
+        return 0;
+    }
+    return 1;
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock } = split(world);
+    release(ffi);
+    release(fs);
+    release(heap);
+    release(args);
+    release(net);
+    release(clock);
+    var status = 0;
+    borrow mut io as &!i in {
+        status = run(i);
+    }
+    release(io);
+    return status;
+}

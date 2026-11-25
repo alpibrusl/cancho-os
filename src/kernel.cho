@@ -4,6 +4,7 @@ import feetech;
 import calibration;
 import kinematics;
 import safety;
+import inet;
 
 // cancho-os: the kernel. Every driver here is cancho. A register is reached through
 // an `Mmio`, a capability whose type names the addresses it holds: `main` is given
@@ -16,7 +17,7 @@ import safety;
 //   con    the console: the PL011 of a Pi 3 or a Pi 4
 //   pins   the one register that routes GPIO14/15 to it
 //   irq    the interrupt controller: the Pi 3's per-core block, the Pi 4's GIC-400
-//   bus    the servo bus: the mini UART
+//   bus    the second serial port, the mini UART: the servo bus, or the network link (`net up`)
 //   tab    the eight translation tables (board/link.ld puts them at 2 MB)
 //   code   the kernel's own image, to read the instruction a fault stopped at
 //   probe  one byte of page 0 and one of the code, for `crash null` and `crash write`
@@ -30,6 +31,7 @@ import safety;
 //   k[4] counter units per tick   k[5] ticks so far
 //   k[6] translation tables used  k[7] peripheral window start   k[8] its end
 //   k[9] servo bus UART base
+//   k[10] the network link is up   k[11] packets answered   k[12] packets dropped   k[13] why the last one was
 // The system registers, by the numbers board_sys_read/board_sys_write take:
 //   0 cntfrq_el0  1 cntvct_el0  2 cntv_ctl_el0  3 cntv_cval_el0  4 cntv_tval_el0
 //   5 mair_el1    6 tcr_el1     7 ttbr0_el1     8 sctlr_el1      9 midr_el1
@@ -180,11 +182,15 @@ fn uptime_ms[&f](cpu: &!f Cpu) -> [cpu("cntfrq_el0"), cpu("cntvct_el0")] int {
     return c / f * 1000 + c % f * 1000 / f;
 }
 
-// Sleep until a key arrives, handling whatever else wakes the core meanwhile.
-fn getc[&f, &mc, &mi, &s](cpu: &!f Cpu, con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), irq: &!mi Mmio("0x40000040..0x40000064,0xff841000..0xff842014"), k: &!s [int]) -> [cpu("cntv_cval_el0"), cpu("wfi"), mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x40000040..0x40000064,0xff841000..0xff842014")] int {
+// Sleep until a key arrives, handling whatever else wakes the core meanwhile. While the
+// network link is up the core does not sleep: nothing wakes it when a byte arrives on the
+// link (interrupts are polled, and the tick is every 10 ms), so it keeps looking.
+fn getc[&f, &mc, &mi, &mu, &s, &n, &a, &b, &w](cpu: &!f Cpu, con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), irq: &!mi Mmio("0x40000040..0x40000064,0xff841000..0xff842014"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte]) -> [cpu("cntv_cval_el0"), cpu("wfi"), mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x40000040..0x40000064,0xff841000..0xff842014")] int {
     let uart = k[0];
     while mmio_read32(con, uart + 0x18) & 16 != 0 {
-        if k[4] != 0 {
+        if k[10] != 0 {
+            net_poll(bus, k, ns, frame, reply, wire);
+        } else if k[4] != 0 {
             cpu_do(cpu, "wfi");
         }
         poll(cpu, irq, k);
@@ -274,6 +280,81 @@ fn transact[&f, &mu, &s, &p, &r, &t](cpu: &!f Cpu, bus: &!mu Mmio("0x3f215004..0
         }
     }
     return result;
+}
+
+// ---- the network link ---------------------------------------------------------------
+// IPv4 over the second serial port, framed with SLIP (docs/network.md). The port is the
+// servo bus's: `net up` gives it to the network, `net down` gives it back, and the servo
+// commands refuse while it is up. Everything about packets is src/inet.cho, which holds
+// no hardware; this is the part that moves bytes.
+
+// 10.0.0.2. The other end of the line is whoever is there; SLIP has no addresses.
+fn net_address() -> [] int {
+    return 10 * 16777216 + 2;
+}
+
+// Take what has arrived, up to 256 bytes, and answer each whole packet.
+fn net_poll[&mu, &s, &n, &a, &b, &w](bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte]) -> [mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c")] int {
+    var budget = 256;
+    while budget > 0 {
+        let c = bus_get(bus, k);
+        if c < 0 {
+            return 0;
+        }
+        budget = budget - 1;
+        let got = inet.slip_feed(ns, frame, c);
+        if got > 0 {
+            let m = inet.answer(frame, got, net_address(), reply);
+            if m > 0 {
+                let w = inet.slip_encode(reply, m, wire);
+                var i = 0;
+                while i < w {
+                    bus_put(bus, k, int_of(wire[i]));
+                    i = i + 1;
+                }
+                k[11] = k[11] + 1;
+            } else {
+                k[12] = k[12] + 1;
+                k[13] = m;
+            }
+        }
+    }
+    return 0;
+}
+
+fn put_net[&mc, &s](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int]) -> [mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
+    if k[10] == 0 {
+        puts(con, k, "link down");
+    } else {
+        puts(con, k, "link up: SLIP on the second serial port, address 10.0.0.2");
+    }
+    puts(con, k, "\r\n");
+    put_dec(con, k, k[11]);
+    puts(con, k, " packets answered, ");
+    put_dec(con, k, k[12]);
+    puts(con, k, " dropped");
+    if k[12] != 0 {
+        puts(con, k, " (the last: ");
+        if k[13] == inet.drop_short() {
+            puts(con, k, "cut short");
+        } else if k[13] == inet.drop_not_ipv4() {
+            puts(con, k, "not IPv4");
+        } else if k[13] == inet.drop_bad_header_checksum() {
+            puts(con, k, "header checksum");
+        } else if k[13] == inet.drop_not_ours() {
+            puts(con, k, "for another address");
+        } else if k[13] == inet.drop_fragment() {
+            puts(con, k, "a fragment");
+        } else if k[13] == inet.drop_bad_checksum() {
+            puts(con, k, "checksum");
+        } else if k[13] == inet.drop_too_long() {
+            puts(con, k, "too long");
+        } else {
+            puts(con, k, "nothing here answers it");
+        }
+        puts(con, k, ")");
+    }
+    return puts(con, k, "\r\n");
 }
 
 fn put_bus_error[&mc, &s](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], code: int) -> [mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
@@ -797,9 +878,9 @@ fn run[&f, &mc, &mu, &mt, &mx, &mz, &s, &r](cpu: &!f Cpu, con: &!mc Mmio("0x3f20
         return 0;
     }
     if same(line, n, "help") {
-        puts(con, k, "commands: help, about, echo <text>, uptime, ticks, mem, servo scan, servo pos, arm zero, arm pose, arm check <5 angles>, crash [null|write]\r\n");
+        puts(con, k, "commands: help, about, echo <text>, uptime, ticks, mem, net [up|down], servo scan, servo pos, arm zero, arm pose, arm check <5 angles>, crash [null|write]\r\n");
     } else if same(line, n, "about") {
-        puts(con, k, "cancho-os 0.0.9: a kernel written in cancho, no Linux underneath (Raspberry Pi ");
+        puts(con, k, "cancho-os 0.0.10: a kernel written in cancho, no Linux underneath (Raspberry Pi ");
         put_dec(con, k, k[1]);
         puts(con, k, ")\r\n");
     } else if n > 5 && same(line, 5, "echo ") {
@@ -822,6 +903,16 @@ fn run[&f, &mc, &mu, &mt, &mx, &mz, &s, &r](cpu: &!f Cpu, con: &!mc Mmio("0x3f20
         puts(con, k, " timer interrupts\r\n");
     } else if same(line, n, "mem") {
         memory_map(con, tab, code, k, false);
+    } else if same(line, n, "net up") {
+        k[10] = 1;
+        put_net(con, k);
+    } else if same(line, n, "net down") {
+        k[10] = 0;
+        put_net(con, k);
+    } else if same(line, n, "net") {
+        put_net(con, k);
+    } else if k[10] != 0 && (same(line, n, "servo scan") || same(line, n, "servo pos") || same(line, n, "arm pose") || n > 10 && same(line, 10, "arm check ")) {
+        puts(con, k, "the second serial port is the network link: `net down` first\r\n");
     } else if same(line, n, "servo scan") {
         servo_scan(cpu, con, bus, k);
     } else if same(line, n, "servo pos") {
@@ -852,10 +943,15 @@ fn shell[&f, &mc, &mi, &mu, &mt, &mx, &mz, &s](cpu: &!f Cpu, con: &!mc Mmio("0x3
     puts(con, k, "\r\ncancho-os booted. type `help`.\r\n");
     region r {
         let line = alloc_slice[r](128, byte_of(0));
+        // the network link's: the SLIP decoder's state, a received packet, the reply, the reply framed
+        let ns = alloc_slice[r](inet.slip_state(), 0);
+        let frame = alloc_slice[r](inet.mtu(), byte_of(0));
+        let reply = alloc_slice[r](inet.mtu(), byte_of(0));
+        let wire = alloc_slice[r](2 * inet.mtu() + 2, byte_of(0));
         var n = 0;
         puts(con, k, "> ");
         while true {
-            let c = getc(cpu, con, irq, k);
+            let c = getc(cpu, con, irq, bus, k, ns, frame, reply, wire);
             if c == 13 || c == 10 {
                 puts(con, k, "\r\n");
                 run(cpu, con, bus, tab, code, probe, k, line, n);
