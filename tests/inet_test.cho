@@ -211,6 +211,102 @@ fn test_a_frame_too_long_for_the_buffer_is_dropped_whole() -> [] int {
     return 0;
 }
 
+// ── Ethernet and ARP ──
+
+fn mac() -> [] int {
+    return 90520731923542;
+}
+
+fn eth_answers[&q, &r](request: &q [byte], reply: &r [byte]) -> [] int {
+    region a {
+        let frame = alloc_slice[a](1600, byte_of(0));
+        let want = alloc_slice[a](1600, byte_of(0));
+        let out = alloc_slice[a](1600, byte_of(255));
+        let n = set(frame, request);
+        let m = set(want, reply);
+        test.assert_eq(inet.eth_answer(frame, n, mac(), ours(), out), m);
+        test.assert(same(out, want, m));
+    }
+    return 0;
+}
+
+fn eth_drops[&q](request: &q [byte], verdict: int) -> [] int {
+    region a {
+        let frame = alloc_slice[a](1600, byte_of(0));
+        let out = alloc_slice[a](1600, byte_of(0));
+        let n = set(frame, request);
+        test.assert_eq(inet.eth_answer(frame, n, mac(), ours(), out), verdict);
+    }
+    return 0;
+}
+
+fn test_the_card_address_is_the_one_the_vectors_use() -> [] int {
+    region a {
+        let b = alloc_slice[a](6, byte_of(0));
+        set(b, "525400123456");
+        test.assert_eq(inet.get48(b, 0), mac());
+    }
+    return 0;
+}
+
+fn test_who_has_our_address_is_answered_with_the_cards() -> [] int {
+    return eth_answers("ffffffffffff5255c0a80001080600010800060400015255c0a800010a0000010000000000000a000002000000000000000000000000000000000000", "5255c0a80001525400123456080600010800060400025254001234560a0000025255c0a800010a000001000000000000000000000000000000000000");
+}
+
+fn test_who_has_another_address_is_not_answered() -> [] int {
+    return eth_drops("ffffffffffff5255c0a80001080600010800060400015255c0a800010a0000010000000000000a000009000000000000000000000000000000000000", inet.drop_not_ours());
+}
+
+fn test_a_ping_in_a_frame_gets_its_reply_in_a_frame() -> [] int {
+    return eth_answers("5254001234565255c0a8000108004500002cbeef00004001a7df0a0000010a00000208002c0912340001303132333435363738393a3b3c3d3e3f0000", "5255c0a8000152540012345608004500002c00000000400166cf0a0000020a0000010000340912340001303132333435363738393a3b3c3d3e3f0000");
+}
+
+fn test_a_short_reply_is_padded_to_sixty_bytes() -> [] int {
+    return eth_answers("5254001234565255c0a8000108004500001e00030000400166da0a0000010a0000020800969b00010001616200000000000000000000000000000000", "5255c0a8000152540012345608004500001e00000000400166dd0a0000020a00000100009e9b00010001616200000000000000000000000000000000");
+}
+
+fn test_a_datagram_in_a_frame_comes_back() -> [] int {
+    return eth_answers("5254001234565255c0a8000108004500002c004200004011667d0a0000010a0000029c4000070018479b68656c6c6f2c2063616e63686f2d6f730000", "5255c0a8000152540012345608004500002c00000000401166bf0a0000020a00000100079c400018479b68656c6c6f2c2063616e63686f2d6f730000");
+}
+
+fn test_a_frame_for_another_card_is_dropped() -> [] int {
+    return eth_drops("525400aaaaaa5255c0a8000108004500002cbeef00004001a7df0a0000010a00000208002c0912340001303132333435363738393a3b3c3d3e3f0000", inet.drop_not_our_frame());
+}
+
+fn test_ipv6_is_not_answered() -> [] int {
+    return eth_drops("5254001234565255c0a8000186dd60000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000", inet.drop_unsupported());
+}
+
+// Every one-byte change of a good frame, at lengths from nothing to all of it, is answered or dropped.
+fn test_no_damage_to_a_frame_makes_eth_answer_trap() -> [] int {
+    region a {
+        let frame = alloc_slice[a](64, byte_of(0));
+        let out = alloc_slice[a](64, byte_of(0));
+        let n = set(frame, "ffffffffffff5255c0a80001080600010800060400015255c0a800010a0000010000000000000a000002000000000000000000000000000000000000");
+        var at = 0;
+        var tried = 0;
+        while at < n {
+            let kept = frame[at];
+            var v = 0;
+            while v < 256 {
+                frame[at] = byte_of(v);
+                var cut = 0;
+                while cut <= n {
+                    let r = inet.eth_answer(frame, cut, mac(), ours(), out);
+                    test.assert(r <= 64 && r >= inet.drop_not_our_frame());
+                    tried = tried + 1;
+                    cut = cut + 12;
+                }
+                v = v + 1;
+            }
+            frame[at] = kept;
+            at = at + 1;
+        }
+        test.assert_eq(tried, 60 * 256 * 6);
+    }
+    return 0;
+}
+
 // ── nothing traps ──
 
 // Every one-byte change of a good request, at every length it can be cut to, is answered or dropped.
