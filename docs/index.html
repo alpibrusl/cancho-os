@@ -174,7 +174,7 @@ halted.</pre></div>
 <div class="stats">
   <div><b>0</b><span>lines of C, and no foreign function the kernel calls</span></div>
   <div><b>64 KB</b><span>the whole image, <code>kernel8.img</code>, for Pi 3 and Pi 4</span></div>
-  <div><b>15 + 8</b><span>processor registers and address ranges it can touch, each listed</span></div>
+  <div><b>15 + 10</b><span>processor registers and address ranges it can touch, each listed</span></div>
   <div><b>0</b><span>real boards it has run on so far</span></div>
 </div>
 
@@ -191,7 +191,7 @@ halted.</pre></div>
 
 <section id="today">
   <h2>What it does today</h2>
-  <p class="sub">All of it in QEMU, as a Pi 3 and as a Pi 4, from the same image.</p>
+  <p class="sub">All of it in QEMU: as a Pi 3 and a Pi 4 from one image, and on QEMU's own <code>virt</code> board for the network card.</p>
   <div class="cols">
     <div><h3>Built</h3><ul>
       <li>A serial console and a small shell</li>
@@ -200,14 +200,14 @@ halted.</pre></div>
       <li>A fault report that names the fault and the three registers</li>
       <li>The Feetech servo bus, read only: <code>servo scan</code>, <code>servo pos</code></li>
       <li>The SO-101 arm's pose from its servos, and a safety check that judges a motion and sends nothing</li>
-      <li>A first network: <code>ping</code> and a UDP echo answered, over IPv4 on a serial line</li>
+      <li>A first network: <code>ping</code> and a UDP echo answered, over a serial line and over Ethernet (a virtual card in QEMU)</li>
     </ul></div>
     <div class="no"><h3>Not built</h3><ul>
       <li>Moving a servo (waits for the safety core's actuation side)</li>
       <li>Separate programs, an SD card driver, files</li>
       <li>Preemption, and more than one core</li>
       <li>The Pi 5, which is the robot's board</li>
-      <li>Ethernet, TCP, USB, display</li>
+      <li>A real network card, TCP, USB, display</li>
     </ul></div>
   </div>
 </section>
@@ -235,19 +235,19 @@ halted.</pre></div>
     cpu("wfi")</pre>
     <figcaption>Fifteen registers and instructions. The annotations on the right are added here; the names are the report's.</figcaption></figure>
     <figure class="figure"><h3>Memory, and what it never touches</h3>
-<pre class="code">    mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048")  <span class="c">console</span>
-    mmio("0x3f200004..0x3f200008,0xfe200004..0xfe200008")  <span class="c">pins</span>
-    mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c")  <span class="c">servo bus</span>
-    mmio("0x40000040..0x40000064,0xff841000..0xff842014")  <span class="c">interrupts</span>
-    mmio("0x200000..0x208000")                             <span class="c">page tables</span>
-    <span class="c">... three more, in docs/authority.txt</span>
+<pre class="code">    mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048")  <span class="c">console</span>
+    mmio("0x3f200004..0x3f200008,0xfe200004..0xfe200008")                       <span class="c">pins</span>
+    mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c")                       <span class="c">servo bus</span>
+    mmio("0xa000000..0xa004000")                                                <span class="c">network card</span>
+    mmio("0x210000..0x220000,0x40210000..0x40220000")                           <span class="c">its packets</span>
+    <span class="c">... five more, in docs/authority.txt</span>
 never touches
     the filesystem
     the network
     the heap
     other programs
     foreign code</pre>
-    <figcaption>Each range is one capability, cut once in <code>main</code>. The two addresses in a range are the Pi 3's and the Pi 4's.</figcaption></figure>
+    <figcaption>Each line is one capability, cut in <code>main</code>. The addresses in a line are the same device on each board: QEMU's virt, the Pi 3, the Pi 4. &ldquo;The network&rdquo; here means the host system's sockets, which a kernel does not have; its own card is the fourth line.</figcaption></figure>
   </div>
   <p class="note">The full report is <a href="https://github.com/alpibrusl/cancho-os/blob/main/docs/authority.txt"><code>docs/authority.txt</code></a>. The language features behind it are in cancho: <a href="https://alpibrusl.github.io/cancho/mmio.html"><code>Mmio</code></a> and <a href="https://alpibrusl.github.io/cancho/cpu.html"><code>Cpu</code></a>.</p>
 </section>

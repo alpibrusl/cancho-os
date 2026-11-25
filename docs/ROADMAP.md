@@ -86,7 +86,8 @@
 ## Network (2026-11-26)
 First slice built: IPv4 over SLIP on the second serial port, `ping` and a UDP echo answered, in QEMU
 (docs/network.md). It starts on a serial line because QEMU's Pi 4 has no Ethernet controller, and
-every milestone here boots in QEMU. Next: a link on pins the console does not use; the Pi 4's
+every milestone here boots in QEMU. Second slice (same day): QEMU's `virt` machine as a third board, a virtio-net driver, Ethernet
+frames and ARP; `ping` from Linux over a tap interface in CI. Next: a link on pins the console does not use; the Pi 4's
 Ethernet (GENET, memory-mapped) with ARP, testable only on the board; the kernel sending first; TCP.
 
 ## Prior art

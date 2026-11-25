@@ -1,7 +1,8 @@
 # The network: IPv4 over a serial line first
 
-> **Status: built, first slice.** The kernel answers `ping` and a UDP echo over SLIP on its second serial
-> port, in QEMU as a Pi 3 and a Pi 4. No Ethernet, no TCP. Every number below was produced by the command
+> **Status: built, two slices.** The kernel answers `ping` and a UDP echo over two links: SLIP on the
+> second serial port of a Pi 3 or Pi 4, and Ethernet through a virtio network card on QEMU's `virt`
+> machine (section 7). All of it in QEMU. No TCP. Every number below was produced by the command
 > next to it, at the commit that adds this file. Nothing here has run on a real board.
 
 ## 1. What was wanted, and what is in the way
@@ -26,7 +27,7 @@ Pi 4 boots.
 ## 2. What is built
 
 ```
-src/inet.cho     SLIP, the IPv4 header, ICMP echo, UDP echo. Pure: no capability, no allocation, no trap
+src/inet.cho     SLIP, Ethernet and ARP, the IPv4 header, ICMP echo, UDP echo. Pure: no capability, no trap
 src/kernel.cho   net_poll: bytes from the port to inet, the reply back. `net up`, `net down`, `net`
 sim/netpeer.cho  the other end of the line in QEMU: a program for the host
 tests/inet_test.cho  inet on the machine that builds it
@@ -82,10 +83,54 @@ misreading of SLIP common to both would pass the third row. The fourth row is th
   QEMU's flow control never loses here: the mini UART holds eight.
 - **Nothing is timed.** No throughput or latency was measured; in QEMU it would say little.
 
-## 6. Next
+## 6. Ethernet: a virtio card on QEMU's `virt` machine
+
+*(Added with the second slice. Sections 2 to 5 describe the first and are still true of the Pi boards;
+"no Ethernet, so no ARP" in section 5 is no longer true of the kernel as a whole.)*
+
+The one Ethernet device a CI run can exercise is not on a Pi: it is virtio-net, on QEMU's own board. So
+the kernel gained a third board and its first network card.
+
+- **The board.** `virt` has a PL011 and a GIC like a Pi 4's, at other addresses, no second serial port,
+  and RAM that starts at 1 GB instead of 0. The same two objects are linked twice (`build/kernel8.img`
+  for a Pi, `build/kernel-virt.elf` for `virt`); the kernel knows the board from the processor QEMU is
+  told to be (a Cortex-A57, which no Pi has) and keeps where RAM starts in its state. Each capability's
+  bound gained the `virt` addresses beside the Pi's.
+- **The driver** (`vnet_*` in `src/kernel.cho`, about 170 lines) follows the VIRTIO specification: find
+  the card among 32 slots, accept two features (its address, and the current interface), set up two
+  queues of eight entries, offer eight receive buffers, poll the ring of finished ones.
+- **Two new capabilities, and nothing else new.** `vio` is the virtio slots' registers. `dma` is 64 KB of
+  memory the card reads and writes on its own: the queues and the packet buffers, at a place the link
+  script reserves, and every address the driver hands the card is inside it (the limits below say what
+  that does and does not bound).
+- **In `inet`:** `eth_answer` takes a frame. An ARP request for the kernel's address gets the card's
+  (RFC 826); an IPv4 packet sent to the card gets what `answer` gives it, back to the card it came from.
+  The kernel only replies, so it keeps no table of who is where.
+
+Checked, at the commit that adds this section:
+
+| | what | against |
+|---|---|---|
+| `cancho test tests/inet_test.cho src/inet.cho --std` | 29 tests (20 before) | frames built by the second implementation: an ARP request and reply, a ping and a datagram inside frames, padding to 60 bytes; 92,160 damaged frames, none traps |
+| `MACHINE=virt ./test.sh about ticks mem 'crash null'` | the kernel on `virt` | the shell, the timer, the memory map at 1 GB, a fault reported |
+| `MACHINE=virt UDP=... ./test.sh 'net up' net` | a datagram from the host through QEMU's user network | the same bytes back; the kernel counts two packets, the ARP answer and the echo |
+| the same traffic captured (`-object filter-dump`) and read with `tcpdump` | by hand, once | "Reply 10.0.0.2 is-at 52:54:00:12:34:56", and `[udp sum ok]` on the kernel's datagram |
+| `sudo MACHINE=virt ./ping.sh` (Linux, CI) | the card on a tap interface | Linux's ARP, the system's `ping` and `nc` |
+
+Limits of this slice:
+
+- **A virtual card.** No real machine here has it; it exists so that Ethernet and ARP can be tested, and
+  it is what the kernel would use as a guest of a hypervisor.
+- **The card is trusted with memory.** `dma` bounds what the *driver* can write, and the driver only
+  writes addresses inside it into the queues. The card itself is hardware: nothing stops a faulty one
+  from writing elsewhere (an IOMMU would, and there is none).
+- **One frame at a time, copied byte by byte, and sending waits for the card.** Nothing was timed.
+- **The address is still fixed, and the kernel still only answers.**
+
+## 7. Next
 
 The order, the boards and what each driver is written from are in [`drivers.md`](drivers.md).
 
-1. A link the console does not share pins with (another UART), so the line works on a real Pi 4.
-2. The Pi 4's Ethernet controller as a second link, with ARP; only testable on the board.
-3. The kernel sending first (a datagram, an echo request), then TCP.
+1. The kernel sending first (a datagram, an echo request), then TCP: both testable on `virt`.
+2. A link the console does not share pins with (another UART), so the serial line works on a real Pi 4.
+3. The Pi 4's Ethernet controller as a third link; only testable on the board.

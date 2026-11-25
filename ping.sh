@@ -46,6 +46,11 @@ if [ -n "$ready" ]; then
         ip addr add 10.0.0.1 peer 10.0.0.2 dev sl0 && ip link set sl0 up mtu 1006
     fi
     sleep 1
+    if [ -n "${TRACE:-}" ] && [ "$MACHINE" = virt ]; then
+        # what is on the wire, both ways, for when the answer is not what was expected
+        tcpdump -i tap0 -n -e -XX -c 12 > build/trace.txt 2>&1 &
+        sleep 1
+    fi
     ping -c 5 -i 0.3 -W 2 10.0.0.2 && status=0
     # a datagram to the echo port, and what comes back
     back=$(printf 'cancho-os over udp' | timeout 3 nc -u -w 1 10.0.0.2 7)
@@ -65,4 +70,5 @@ wait $QEMU 2>/dev/null
 [ "$MACHINE" = virt ] && ip link del tap0 2>/dev/null
 rm -f build/uart.in
 tr -d '\r' < build/ping-uart.out
+if [ -f build/trace.txt ]; then cat build/trace.txt; fi
 exit $status

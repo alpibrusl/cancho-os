@@ -28,3 +28,7 @@ Rules of the road
 - The network (docs/network.md): `src/inet.cho` is pure and must stay so (no capability, no trap on any
   bytes); its packets are checked against vectors a second implementation built, never against itself.
   `NET=1 ./test.sh 'net up' net` attaches `sim/netpeer.cho`; `sudo ./ping.sh` is Linux-only (CI).
+- Three boards, two links. `MACHINE=virt` is QEMU's own board (RAM at 1 GB: every RAM address in the kernel
+  is `k[14] +` an offset, and each capability's bound lists the Pi's addresses and virt's). build.sh links
+  `build/kernel-virt.elf` for it. The virtio card's memory is the `dma` capability, 64 KB the link script
+  reserves; `narrow` cuts at most eight pieces, so `main` cuts the last one again.
