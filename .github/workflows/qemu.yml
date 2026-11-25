@@ -2,7 +2,7 @@ name: boot in qemu
 on: [push, pull_request]
 env:
   # cancho's bare-metal target (`--target aarch64-none-elf`, alpibrusl/cancho#826) is on its main branch
-  CANCHO_REF: cpu-cap
+  CANCHO_REF: main
 jobs:
   boot:
     runs-on: ubuntu-24.04
