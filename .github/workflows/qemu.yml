@@ -87,6 +87,8 @@ jobs:
       - name: ping over Ethernet, from Linux's own stack
         # the card on a tap interface: Linux's ARP, the system's ping and nc, none of it ours
         run: |
+          sudo MACHINE=virt ./ping.sh > e0.txt 2>&1 || true; cat e0.txt
+          sudo MACHINE=virt ./ping.sh > e1.txt 2>&1 || true; cat e1.txt
           sudo MACHINE=virt TRACE=1 ./ping.sh > eping.txt 2>&1 || { cat eping.txt; exit 1; }
           cat eping.txt
           grep -q " 0% packet loss" eping.txt

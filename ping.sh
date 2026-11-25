@@ -59,6 +59,7 @@ if [ -n "$ready" ]; then
     if [ "$MACHINE" = virt ]; then
         # what this machine's own ARP table learned from the kernel's answer
         ip neigh show dev tap0
+        ip -s link show tap0
     fi
     printf 'net\r' >&3
     sleep 1
