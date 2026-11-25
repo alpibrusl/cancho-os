@@ -117,6 +117,15 @@ Checked, at the commit that adds this section:
 | the same traffic captured (`-object filter-dump`) and read with `tcpdump` | by hand, once | "Reply 10.0.0.2 is-at 52:54:00:12:34:56", and `[udp sum ok]` on the kernel's datagram |
 | `sudo MACHINE=virt ./ping.sh` (Linux, CI) | the card on a tap interface | Linux's ARP, the system's `ping` and `nc` |
 
+The last row on GitHub's `ubuntu-24.04` runner: `5 packets transmitted, 5 received, 0% packet loss`, the
+datagram back unchanged, Linux's own table saying `10.0.0.2 lladdr 52:54:00:12:34:56 REACHABLE`, and the
+kernel's count `7 packets answered, 5 dropped`: one ARP answer, five echoes, one datagram, and five IPv6
+frames Linux sends on any new interface, which nothing here answers.
+
+That row failed three runs out of four before it passed, and the kernel was not why: the runner's own
+network is sometimes `10.0.0.x`, the test gave the tap a `/24`, and the ping left by the other interface
+(the tap's counters said seven packets out, none of them ARP). The test now routes the one address.
+
 Limits of this slice:
 
 - **A virtual card.** No real machine here has it; it exists so that Ethernet and ARP can be tested, and
