@@ -200,13 +200,14 @@ halted.</pre></div>
       <li>A fault report that names the fault and the three registers</li>
       <li>The Feetech servo bus, read only: <code>servo scan</code>, <code>servo pos</code></li>
       <li>The SO-101 arm's pose from its servos, and a safety check that judges a motion and sends nothing</li>
+      <li>A first network: <code>ping</code> and a UDP echo answered, over IPv4 on a serial line</li>
     </ul></div>
     <div class="no"><h3>Not built</h3><ul>
       <li>Moving a servo (waits for the safety core's actuation side)</li>
       <li>Separate programs, an SD card driver, files</li>
       <li>Preemption, and more than one core</li>
       <li>The Pi 5, which is the robot's board</li>
-      <li>USB, network, display</li>
+      <li>Ethernet, TCP, USB, display</li>
     </ul></div>
   </div>
 </section>

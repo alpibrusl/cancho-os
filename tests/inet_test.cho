@@ -1,0 +1,255 @@
+import std.test;
+import inet;
+
+// What `inet` answers, with no machine under it. The packets are not this file's own arithmetic: the two checksum
+// vectors are published (RFC 1071 section 3; the IPv4 header of Wikipedia's "Internet checksum" worked example),
+// and each request and reply was built by a second implementation in another language (Python's `struct`, with
+// its own checksum) and pasted here as hex. Then the property the decoder is for: no bytes make it trap.
+
+fn digit(c: int) -> [] int {
+    if c >= '0' && c <= '9' {
+        return c - '0';
+    }
+    return c - 'a' + 10;
+}
+
+// `hex` is two digits per byte, no separators.
+fn set[&b, &s](buf: &!b [byte], hex: &s [byte]) -> [] int {
+    var i = 0;
+    while i * 2 + 1 < len(hex) {
+        buf[i] = byte_of(digit(int_of(hex[i * 2])) * 16 + digit(int_of(hex[i * 2 + 1])));
+        i = i + 1;
+    }
+    return i;
+}
+
+fn same[&a, &b](x: &a [byte], y: &b [byte], n: int) -> [] bool {
+    var i = 0;
+    while i < n {
+        if int_of(x[i]) != int_of(y[i]) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn ours() -> [] int {
+    return 10 * 16777216 + 2;
+}
+
+// `request` answered is `reply`, byte for byte.
+fn answers[&q, &r](request: &q [byte], reply: &r [byte]) -> [] int {
+    region a {
+        let pkt = alloc_slice[a](1100, byte_of(0));
+        let want = alloc_slice[a](1100, byte_of(0));
+        let out = alloc_slice[a](1100, byte_of(0));
+        let n = set(pkt, request);
+        let m = set(want, reply);
+        test.assert_eq(inet.answer(pkt, n, ours(), out), m);
+        test.assert(same(out, want, m));
+    }
+    return 0;
+}
+
+// `request` is dropped, for the reason `verdict`.
+fn drops[&q](request: &q [byte], verdict: int) -> [] int {
+    region a {
+        let pkt = alloc_slice[a](1100, byte_of(0));
+        let out = alloc_slice[a](1100, byte_of(0));
+        let n = set(pkt, request);
+        test.assert_eq(inet.answer(pkt, n, ours(), out), verdict);
+    }
+    return 0;
+}
+
+// ── the checksum ──
+
+fn test_the_sum_of_rfc_1071s_example() -> [] int {
+    region a {
+        let b = alloc_slice[a](8, byte_of(0));
+        set(b, "0001f203f4f5f6f7");
+        test.assert_eq(inet.sum16(b, 0, 8, 0), 56818);
+        test.assert_eq(inet.complement(inet.sum16(b, 0, 8, 0)), 8717);
+    }
+    return 0;
+}
+
+fn test_a_published_ipv4_header_sums_to_all_ones() -> [] int {
+    region a {
+        let b = alloc_slice[a](20, byte_of(0));
+        set(b, "450000730000400040110000c0a80001c0a800c7");
+        // without its checksum the complement of the sum is the checksum the example gives, b861
+        test.assert_eq(inet.complement(inet.sum16(b, 0, 20, 0)), 47201);
+        set(b, "45000073000040004011b861c0a80001c0a800c7");
+        test.assert_eq(inet.sum16(b, 0, 20, 0), 65535);
+    }
+    return 0;
+}
+
+fn test_an_odd_last_byte_is_padded_with_zero() -> [] int {
+    region a {
+        let b = alloc_slice[a](3, byte_of(0));
+        set(b, "010203");
+        test.assert_eq(inet.sum16(b, 0, 3, 0), 1026);
+    }
+    return 0;
+}
+
+// ── ping ──
+
+fn test_an_echo_request_gets_its_reply() -> [] int {
+    return answers("4500002cbeef00004001a7df0a0000010a00000208002c0912340001303132333435363738393a3b3c3d3e3f", "4500002c00000000400166cf0a0000020a0000010000340912340001303132333435363738393a3b3c3d3e3f");
+}
+
+fn test_an_echo_of_odd_length_with_slips_special_bytes_in_it() -> [] int {
+    return answers("45000022000100000301a3d80a0000010a0000020800b14701020007c0db206f6464", "4500002200000000400166d90a0000020a0000010000b94701020007c0db206f6464");
+}
+
+fn test_a_corrupted_echo_is_dropped() -> [] int {
+    return drops("4500002cbeef00004001a7df0a0000010a00000208002c0912350001303132333435363738393a3b3c3d3e3f", inet.drop_bad_checksum());
+}
+
+fn test_an_echo_for_another_machine_is_dropped() -> [] int {
+    return drops("4500002c00050000400166c30a0000010a00000908003e3c00010001303132333435363738393a3b3c3d3e3f", inet.drop_not_ours());
+}
+
+fn test_a_fragment_is_dropped() -> [] int {
+    return drops("4500002c00052000400146ca0a0000010a00000208003e3c00010001303132333435363738393a3b3c3d3e3f", inet.drop_fragment());
+}
+
+fn test_a_damaged_header_is_dropped() -> [] int {
+    // the first request with one bit of its time-to-live changed
+    return drops("4500002cbeef00004101a7df0a0000010a00000208002c0912340001303132333435363738393a3b3c3d3e3f", inet.drop_bad_header_checksum());
+}
+
+fn test_a_packet_cut_short_is_dropped() -> [] int {
+    return drops("4500002cbeef00004001a7df0a0000010a00000208002c09123400013031", inet.drop_short());
+}
+
+fn test_an_echo_reply_is_not_answered() -> [] int {
+    return drops("4500002c00090000400166c60a0000010a0000020000340912340001303132333435363738393a3b3c3d3e3f", inet.drop_unsupported());
+}
+
+fn test_tcp_is_not_answered() -> [] int {
+    return drops("4500002800090000400666c50a0000010a0000020000000000000000000000000000000000000000", inet.drop_unsupported());
+}
+
+// ── UDP ──
+
+fn test_a_datagram_to_port_7_comes_back() -> [] int {
+    return answers("4500002c004200004011667d0a0000010a0000029c4000070018479b68656c6c6f2c2063616e63686f2d6f73", "4500002c00000000401166bf0a0000020a00000100079c400018479b68656c6c6f2c2063616e63686f2d6f73");
+}
+
+fn test_a_corrupted_datagram_is_dropped() -> [] int {
+    return drops("4500002c004200004011667d0a0000010a0000029c4000070018479b68656c6c6f2c2063616e63686f2d6f74", inet.drop_bad_checksum());
+}
+
+fn test_a_datagram_to_another_port_is_not_answered() -> [] int {
+    return drops("4500001d00090000401166c50a0000010a0000029c4000090009d78f78", inet.drop_unsupported());
+}
+
+// ── SLIP ──
+
+fn test_a_frame_survives_encoding_and_decoding() -> [] int {
+    region a {
+        let pkt = alloc_slice[a](64, byte_of(0));
+        let wire = alloc_slice[a](140, byte_of(0));
+        let frame = alloc_slice[a](64, byte_of(0));
+        let state = alloc_slice[a](inet.slip_state(), 0);
+        let n = set(pkt, "45000022000100000301a3d80a0000010a0000020800b14701020007c0db206f6464");
+        let w = inet.slip_encode(pkt, n, wire);
+        // two ENDs, and one more byte for each of the two special bytes inside
+        test.assert_eq(w, n + 4);
+        test.assert_eq(int_of(wire[0]), 192);
+        test.assert_eq(int_of(wire[w - 1]), 192);
+        var got = 0;
+        var i = 0;
+        while i < w {
+            let r = inet.slip_feed(state, frame, int_of(wire[i]));
+            if r > 0 {
+                got = r;
+            }
+            // nothing between the two ENDs is one
+            test.assert(i == 0 || i == w - 1 || int_of(wire[i]) != 192);
+            i = i + 1;
+        }
+        test.assert_eq(got, n);
+        test.assert(same(frame, pkt, n));
+    }
+    return 0;
+}
+
+fn test_the_escapes_are_rfc_1055s() -> [] int {
+    region a {
+        let pkt = alloc_slice[a](2, byte_of(0));
+        let wire = alloc_slice[a](8, byte_of(0));
+        let want = alloc_slice[a](8, byte_of(0));
+        set(pkt, "c0db");
+        set(want, "c0dbdcdbddc0");
+        test.assert_eq(inet.slip_encode(pkt, 2, wire), 6);
+        test.assert(same(wire, want, 6));
+    }
+    return 0;
+}
+
+fn test_a_frame_too_long_for_the_buffer_is_dropped_whole() -> [] int {
+    region a {
+        let frame = alloc_slice[a](4, byte_of(0));
+        let state = alloc_slice[a](inet.slip_state(), 0);
+        var i = 0;
+        while i < 9 {
+            test.assert_eq(inet.slip_feed(state, frame, 65), 0);
+            i = i + 1;
+        }
+        test.assert_eq(inet.slip_feed(state, frame, 192), 0);
+        // and the next one is taken
+        inet.slip_feed(state, frame, 66);
+        test.assert_eq(inet.slip_feed(state, frame, 192), 1);
+        test.assert_eq(int_of(frame[0]), 66);
+    }
+    return 0;
+}
+
+// ── nothing traps ──
+
+// Every one-byte change of a good request, at every length it can be cut to, is answered or dropped.
+fn test_no_damage_to_a_packet_makes_answer_trap() -> [] int {
+    region a {
+        let pkt = alloc_slice[a](64, byte_of(0));
+        let out = alloc_slice[a](64, byte_of(0));
+        let n = set(pkt, "4500002c004200004011667d0a0000010a0000029c4000070018479b68656c6c6f2c2063616e63686f2d6f73");
+        var at = 0;
+        var tried = 0;
+        while at < n {
+            let kept = pkt[at];
+            var v = 0;
+            while v < 256 {
+                pkt[at] = byte_of(v);
+                var cut = 0;
+                while cut <= n {
+                    let r = inet.answer(pkt, cut, ours(), out);
+                    test.assert(r <= 64 && r >= inet.drop_too_long());
+                    tried = tried + 1;
+                    cut = cut + 11;
+                }
+                v = v + 1;
+            }
+            pkt[at] = kept;
+            at = at + 1;
+        }
+        test.assert_eq(tried, 44 * 256 * 5);
+    }
+    return 0;
+}
+
+// A reply never outgrows a small buffer: it is refused instead.
+fn test_a_reply_that_does_not_fit_is_not_written() -> [] int {
+    region a {
+        let pkt = alloc_slice[a](64, byte_of(0));
+        let out = alloc_slice[a](30, byte_of(0));
+        let n = set(pkt, "4500002cbeef00004001a7df0a0000010a00000208002c0912340001303132333435363738393a3b3c3d3e3f");
+        test.assert_eq(inet.answer(pkt, n, ours(), out), inet.drop_too_long());
+    }
+    return 0;
+}
