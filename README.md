@@ -18,8 +18,10 @@ src/feetech.cho  the Feetech servo protocol, read side only        } vendored fr
 src/calibration.cho, kinematics.cho, so101.cho  ticks to degrees,  } cancho-robot,
                  and the SO-101's forward kinematics               } unchanged
 src/safety.cho   the safety core: one `approve` every motion must pass }
+src/inet.cho     the network: SLIP, IPv4, ping and UDP echo; holds no hardware
 sim/servos.cho   six simulated servos for QEMU: a program for the host, not in the image
 sim/expect.cho   what `arm pose` must print for them, computed on the host
+sim/netpeer.cho  the other end of the network link for QEMU, also a program for the host
 board/boot.S     boot (park cores 1-3, EL2 -> EL1, stack, zero .bss) and the exception stub.
                  Nothing in it is called by cancho
 board/link.ld    load at 0x80000; code, constants and data on page boundaries; the
@@ -122,6 +124,33 @@ The target board is a Pi 5, which QEMU does not model. What changes there is the
 table and the four `bus_` functions (a PL011 behind the RP1 chip instead of the mini
 UART); the protocol, and everything built on it, does not. Not verified in QEMU: timing at
 1 Mbaud, half-duplex behaviour, RP1.
+
+## The network
+
+The kernel answers `ping` and a UDP echo, over IPv4 on a serial line (SLIP) on its second serial
+port. No Ethernet and no TCP yet; [docs/network.md](docs/network.md) says why it starts there
+(QEMU's Pi 4 has no Ethernet controller) and what is checked.
+
+```
+NET=1 ./test.sh 'net up' 'echo wait' 'echo wait' net   # sim/netpeer.cho is the other end of the line
+sudo ./ping.sh                                          # Linux: the system's own ping, over a pty
+```
+
+```
+> net up
+link up: SLIP on the second serial port, address 10.0.0.2
+0 packets answered, 0 dropped
+> net
+link up: SLIP on the second serial port, address 10.0.0.2
+3 packets answered, 1 dropped (the last: checksum)
+peer: 3 replies to 4 packets, as it should be
+```
+
+In CI the system's `ping` on Linux gets 5 replies to 5 requests from the kernel in QEMU.
+
+The code that reads packets from outside, `src/inet.cho`, holds no capability: its functions have
+the empty row, so it cannot reach a register or a servo. The kernel's authority report did not
+change when the network was added.
 
 ## On a real Pi 4
 

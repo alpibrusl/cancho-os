@@ -25,3 +25,6 @@ Rules of the road
   `kinematics.cho`, `so101.cho` and `safety.cho` are vendored from cancho-robot: change them there. The kernel must stay unable to move a servo until the safety core
   exists: do not vendor `feetech_write.cho` before then.
 - `SERVOS=1 ./test.sh 'servo scan'` attaches `sim/servos.cho` (built for the host by build.sh).
+- The network (docs/network.md): `src/inet.cho` is pure and must stay so (no capability, no trap on any
+  bytes); its packets are checked against vectors a second implementation built, never against itself.
+  `NET=1 ./test.sh 'net up' net` attaches `sim/netpeer.cho`; `sudo ./ping.sh` is Linux-only (CI).

@@ -83,6 +83,12 @@
 7. Userland ABI + small libc (or a Linux-syscall compatibility layer à la Asterinas) — needed
    before any clang-compiled C program can run. Until then, C only links *into* the kernel.
 
+## Network (2026-11-26)
+First slice built: IPv4 over SLIP on the second serial port, `ping` and a UDP echo answered, in QEMU
+(docs/network.md). It starts on a serial line because QEMU's Pi 4 has no Ethernet controller, and
+every milestone here boots in QEMU. Next: a link on pins the console does not use; the Pi 4's
+Ethernet (GENET, memory-mapped) with ARP, testable only on the board; the kernel sending first; TCP.
+
 ## Prior art
 seL4 (capabilities), Redox, Theseus, Hubris, Asterinas (Linux ABI in a Rust kernel),
 rust-raspberrypi-OS-tutorials, bztsrc/raspi3-tutorial, Circle.

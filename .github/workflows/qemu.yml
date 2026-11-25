@@ -67,7 +67,6 @@ jobs:
       - name: ping, from Linux's own stack
         # not our packets this time: the kernel's SLIP driver on the other end of the line, and the system's ping
         run: |
-          sudo apt-get install -y "linux-modules-extra-$(uname -r)" || true
           sudo ./ping.sh > ping.txt 2>&1 || { cat ping.txt; exit 1; }
           cat ping.txt
           grep -q " 0% packet loss" ping.txt
