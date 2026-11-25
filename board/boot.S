@@ -3,8 +3,8 @@
 //   2. exceptions: note which vector was taken and enter main again, which reports it (see kernel.cho)
 // Nothing here is called by cancho: the kernel has no foreign function. What it needs from the link
 // it reads as memory, at two addresses fixed here and named in its capabilities:
-//   0x80010  two words, the end of the code and the end of the constants (inside `code`)
-//   0x208000 one word, the vector of the fault being reported, -1 for none (`fault`)
+//   image + 0x10   two words, the end of the code and the end of the constants (inside `code`)
+//   __fault_note   one word (2 MB + 32 KB above where RAM starts), the vector of the fault being reported, -1 for none (`fault`)
 .section .text.boot, "ax"
 .global _start
 _start:
@@ -47,7 +47,7 @@ at_el1:
     b.hs    2f
     str     xzr, [x0], #8
     b       1b
-2:  ldr     x0, =0x208000         // no fault is being reported
+2:  ldr     x0, =__fault_note         // no fault is being reported
     mov     x1, #-1
     str     x1, [x0]
     mov     x0, #0
@@ -91,7 +91,7 @@ vectors:
     .balign 0x80
 
 fault_entry:
-    ldr     x4, =0x208000
+    ldr     x4, =__fault_note
     ldr     x5, [x4]
     cmn     x5, #1
     b.ne    park                  // already reporting one

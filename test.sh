@@ -3,6 +3,7 @@
 # and print what the UART said. Portable: no `timeout` (macOS has none).
 #   ./test.sh about 'echo ci'            QEMU raspi3b
 #   MACHINE=raspi4b ./test.sh about      the same image as a Pi 4 (QEMU >= 9)
+#   MACHINE=virt ./test.sh about         QEMU's virt machine (build/kernel-virt.elf)
 #   SERVOS=1 ./test.sh 'servo scan'      with six simulated servos on the board's second serial
 #                                        port (build/servos, from sim/servos.cho: see build.sh)
 #   NET=1 ./test.sh 'net up' net         with the network peer on that port instead (build/netpeer, from
@@ -28,7 +29,14 @@ elif [ -n "${NET:-}" ]; then
     SIM=$!
     BUS="-serial pipe:build/bus"
 fi
-qemu-system-aarch64 -M "$MACHINE" -kernel build/kernel8.img -serial stdio $BUS -display none -monitor none \
+KERNEL=build/kernel8.img
+if [ "$MACHINE" = virt ]; then
+    # QEMU's own board: one serial port (no servo bus), RAM at 1 GB. A Cortex-A57 is how the kernel knows it.
+    MACHINE="virt -cpu cortex-a57 -m 1G"
+    KERNEL=build/kernel-virt.elf
+    BUS=
+fi
+qemu-system-aarch64 -M $MACHINE -kernel $KERNEL -serial stdio $BUS -display none -monitor none \
     < build/uart.in > build/uart.out 2>&1 &
 QEMU=$!
 exec 3> build/uart.in
