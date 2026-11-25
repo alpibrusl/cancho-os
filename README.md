@@ -18,9 +18,8 @@ src/calibration.cho, kinematics.cho, so101.cho  ticks to degrees,  } cancho-robo
 src/safety.cho   the safety core: one `approve` every motion must pass }
 sim/servos.cho   six simulated servos for QEMU: a program for the host, not in the image
 sim/expect.cho   what `arm pose` must print for them, computed on the host
-board/boot.S     boot (park cores 1-3, EL2 -> EL1, stack, zero .bss), the exception stub,
-                 and the five primitives cancho cannot spell yet, one or two instructions
-                 each: read/write a system register, wfi, flush the TLB, the link's addresses
+board/boot.S     boot (park cores 1-3, EL2 -> EL1, stack, zero .bss) and the exception stub.
+                 Nothing in it is called by cancho
 board/link.ld    load at 0x80000; code, constants and data on page boundaries; the
                  translation tables at 2 MB
 build.sh         cancho build --target aarch64-none-elf, assemble boot.S, link, objcopy
@@ -32,9 +31,9 @@ test.sh          boot it in QEMU, type the given lines, print the UART (what CI 
 
 Hardware is a capability. A register is reached through an `Mmio`, whose type names the
 addresses it holds (cancho `docs/mmio.md`): `main` is given every address and cuts it into
-seven pieces that share none (the console, its pin register, the interrupt controller, the
-servo bus, the translation tables, the kernel's code to read, and two bytes for the
-`crash` commands), and each function is lent the pieces it needs. So the function that
+eight pieces that share none (the console, its pin register, the interrupt controller, the
+servo bus, the translation tables, the kernel's code to read, two bytes for the
+`crash` commands, and the word where a fault is noted), and each function is lent the pieces it needs. So the function that
 prints a character has this type, and the compiler holds it to it:
 
 ```
@@ -44,12 +43,19 @@ fn putc[&mc, &s](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048")
 
 It cannot reach the servo bus: `./authority.sh` builds a copy of the kernel in which a
 function lent only the console writes to the bus, and requires the compiler to refuse it.
-The same script holds `cancho authority` on the kernel to [`docs/authority.txt`](docs/authority.txt):
-every address the kernel touches, the five `board:` primitives, and nothing else. The
-vendored robot modules (protocol, kinematics, safety) take no capability at all.
+The processor's own registers work the same way, through the `Cpu` capability (cancho
+`docs/cpu.md`): `cpu_read(cpu, "cntvct_el0")` is one instruction, and the row of a function
+names each register it reaches, so the one that advances the timer is
+`fn tick(cpu: &!Cpu, ...) -> [cpu("cntv_cval_el0")]` and cannot turn the MMU off.
+
+The kernel calls no foreign code at all. The same script holds `cancho authority` on it to
+[`docs/authority.txt`](docs/authority.txt): every address and every system register the
+kernel touches, and the line "never touches ... foreign code". The vendored robot modules
+(protocol, kinematics, safety) take no capability at all.
 
 What this does not show: that an address is the device the comment says it is (that is the
-datasheet's word), or anything about the five primitives, which are still assembly.
+datasheet's word), that a value written to a register is a sane one, or anything about the
+page of assembly that runs before `main`.
 
 Two choices keep everything in cancho without the compiler's help:
 
@@ -135,11 +141,12 @@ RX→pin 8 (GPIO14, TXD), TX→pin 10 (GPIO15, RXD). Then `picocom -b 115200 /de
 - `cancho build --target aarch64-none-elf --emit obj` writes an ELF object with no libc in
   it: regions take their 64 KB chunks from the memory `board/link.ld` names
   (`__cancho_heap_start` to `__cancho_heap_end`), and `memset`/`memcpy` are the module's
-  own. `nm -u` on the kernel object lists the five `board_` primitives, those two
-  symbols, and nothing else.
-- What is left outside cancho is `board/boot.S`: boot, the exception stub, and the five
-  primitives. The six that loaded and stored at any address are gone: cancho has them as
-  builtins behind the `Mmio` capability (edition 13, docs/issues/02).
+  own. `nm -u` on the kernel object lists those two symbols and nothing else.
+- What is left outside cancho is `board/boot.S`: boot and the exception stub, which run
+  before `main` or instead of it. The eleven primitives it used to export are gone:
+  cancho has loads and stores behind the `Mmio` capability (edition 13) and system
+  registers behind `Cpu` (edition 14). What the kernel needs from the link is two words
+  at a fixed place in the image, and the fault stub leaves one word saying which vector.
 
 Context and decisions: [`docs/ROADMAP.md`](docs/ROADMAP.md). Compiler issues to file in cancho: [`docs/issues/`](docs/issues/).
 
