@@ -1,11 +1,17 @@
-// The only assembly in cancho-os. Three jobs:
+// The only assembly in cancho-os. Two jobs:
 //   1. boot: park secondary cores, leave EL2, enable FP/SIMD, set a stack, zero .bss, call main
-//   2. exceptions: record what happened and enter main again, which reports it (see kernel.cho)
-//   3. the hardware primitives cancho cannot spell yet, each one or two instructions,
-//      exposed to cancho as the foreign library "board" (docs/issues/02 turns them into builtins)
+//   2. exceptions: note which vector was taken and enter main again, which reports it (see kernel.cho)
+// Nothing here is called by cancho: the kernel has no foreign function. What it needs from the link
+// it reads as memory, at two addresses fixed here and named in its capabilities:
+//   0x80010  two words, the end of the code and the end of the constants (inside `code`)
+//   0x208000 one word, the vector of the fault being reported, -1 for none (`fault`)
 .section .text.boot, "ax"
 .global _start
 _start:
+    b       boot
+    .balign 16
+    .quad   __text_end, __rodata_end
+boot:
     mrs     x0, mpidr_el1
     and     x0, x0, #3
     cbnz    x0, park
@@ -41,7 +47,10 @@ at_el1:
     b.hs    2f
     str     xzr, [x0], #8
     b       1b
-2:  mov     x0, #0
+2:  ldr     x0, =0x208000         // no fault is being reported
+    mov     x1, #-1
+    str     x1, [x0]
+    mov     x0, #0
     mov     x1, #0
     bl      main
 park:
@@ -50,8 +59,9 @@ park:
 
 // ---- exceptions ------------------------------------------------------------
 // Nothing is ever taken on purpose: interrupts are masked and polled. So every
-// vector is a fault. The stub records it in `info`, throws the stack away and
-// calls main a second time; main sees the record, reports it and returns here.
+// vector is a fault. The stub notes which vector, throws the stack away and calls
+// main a second time; main sees the note, reads ESR, ELR and FAR itself, reports
+// and returns here.
 // A fault while reporting a fault parks the core.
 .macro fault kind
     .balign 0x80
@@ -81,86 +91,14 @@ vectors:
     .balign 0x80
 
 fault_entry:
-    adr     x4, info
-    ldr     x5, [x4, #40]
+    ldr     x4, =0x208000
+    ldr     x5, [x4]
     cmn     x5, #1
     b.ne    park                  // already reporting one
-    str     x0, [x4, #40]
-    mrs     x1, esr_el1
-    str     x1, [x4, #48]
-    mrs     x1, elr_el1
-    str     x1, [x4, #56]
-    mrs     x1, far_el1
-    str     x1, [x4, #64]
+    str     x0, [x4]
     ldr     x0, =_start
     mov     sp, x0
     mov     x0, #0
     mov     x1, #0
     bl      main
     b       park
-
-// ---- the "board" library: what cancho calls --------------------------------
-.section .text.board, "ax"
-.global board_info, board_sys_read, board_sys_write, board_wfi, board_tlb_flush
-
-// board_info(i): 0 image start, 1 end of code, 2 end of constants, 3 page-table pool,
-// 4 tables in the pool, 5 fault vector (-1: none), 6 ESR, 7 ELR, 8 FAR
-board_info:
-    adr     x1, info
-    ldr     x0, [x1, x0, lsl #3]
-    ret
-
-board_wfi:  wfi                   // sleeps until an interrupt is pending, masked or not
-            mov  x0, #0
-            ret
-board_tlb_flush:
-    isb
-    tlbi    vmalle1
-    dsb     nsh
-    isb
-    mov     x0, #0
-    ret
-
-// System registers by number (the list kernel.cho names): `mrs`/`msr` take the
-// register in the instruction, so each is its own two lines.
-.macro sysr n, reg
-    cmp     x0, #\n
-    b.ne    1f
-    mrs     x0, \reg
-    ret
-1:
-.endm
-.macro sysw n, reg
-    cmp     x0, #\n
-    b.ne    1f
-    msr     \reg, x1
-    isb
-    mov     x0, #0
-    ret
-1:
-.endm
-board_sys_read:
-    isb
-    sysr 0, cntfrq_el0
-    sysr 1, cntvct_el0
-    sysr 2, cntv_ctl_el0
-    sysr 3, cntv_cval_el0
-    sysr 9, midr_el1
-    mov     x0, #-1
-    ret
-board_sys_write:
-    sysw 2, cntv_ctl_el0
-    sysw 3, cntv_cval_el0
-    sysw 4, cntv_tval_el0
-    sysw 5, mair_el1
-    sysw 6, tcr_el1
-    sysw 7, ttbr0_el1
-    sysw 8, sctlr_el1
-    mov     x0, #-1
-    ret
-
-.section .data.info, "aw"
-.balign 8
-info:
-    .quad   __text_start, __text_end, __rodata_end, __tables, 8
-    .quad   -1, 0, 0, 0

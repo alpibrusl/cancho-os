@@ -1,11 +1,22 @@
-UNBOUNDED: this program calls foreign code. The labels below bound it
-everywhere except through the symbols under "unbounded by", and what
-a symbol does is the linked library's, not the language's.
-See docs/foreign-authority.md.
 performs
-    ffi("board")    <- unbounded
+    cpu("cntfrq_el0")
+    cpu("cntv_ctl_el0")
+    cpu("cntv_cval_el0")
+    cpu("cntv_tval_el0")
+    cpu("cntvct_el0")
+    cpu("elr_el1")
+    cpu("esr_el1")
+    cpu("far_el1")
+    cpu("mair_el1")
+    cpu("midr_el1")
+    cpu("sctlr_el1")
+    cpu("tcr_el1")
+    cpu("tlbi_vmalle1")
+    cpu("ttbr0_el1")
+    cpu("wfi")
     mmio("0x0..0x1,0x80000..0x80001")
     mmio("0x200000..0x208000")
+    mmio("0x208000..0x208008")
     mmio("0x3f200004..0x3f200008,0xfe200004..0xfe200008")
     mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048")
     mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c")
@@ -19,9 +30,4 @@ never touches
     the command line
     signals
     other programs
-unbounded by
-    board:board_info
-    board:board_sys_read
-    board:board_sys_write
-    board:board_tlb_flush
-    board:board_wfi
+    foreign code

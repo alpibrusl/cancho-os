@@ -1,8 +1,8 @@
 #!/bin/sh
 # What the kernel can touch, checked two ways (what CI runs after build.sh):
 #   1. `cancho authority` on the kernel is docs/authority.txt, line for line: the addresses each
-#      capability holds, the five board primitives, and nothing else. A driver that reaches for a
-#      new register changes this file, and the change is read in review.
+#      capability holds, the system registers, and "never touches ... foreign code". A driver
+#      that reaches for a new register changes this file, and the change is read in review.
 #   2. A function lent one device cannot use another: a copy of the kernel in which `arm_zero`
 #      (lent the console) writes to the servo bus with it must be refused, as a type mismatch.
 # CANCHO names the compiler, as for build.sh.

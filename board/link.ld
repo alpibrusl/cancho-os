@@ -20,6 +20,8 @@ SECTIONS {
     __tables = .;
     . += 8 * 4096;
     /* what cancho's runtime takes its region chunks from: the rest of the RAM the kernel maps */
+    /* one page after the tables: its first word is the fault note (board/boot.S, `fault` in src/kernel.cho) */
+    . += 4096;
     __cancho_heap_start = ALIGN(4096);
     __cancho_heap_end = 0x3c000000;
     /DISCARD/ : { *(.comment) *(.note*) *(.eh_frame*) }

@@ -48,16 +48,18 @@
 
 ## No C (2026-11-24)
 - There is no C in the repository. Every driver is cancho; `board/boot.S` keeps boot, the exception
-  stub and five primitives of one or two instructions (eleven until 2026-11-25: the six loads and stores
-  became cancho's `Mmio` builtins).
+  stub and nothing else (eleven primitives until 2026-11-25: they became cancho's `Mmio` and `Cpu` builtins).
 - The compiler has a bare-metal target (`--target aarch64-none-elf`, cancho `docs/freestanding.md`):
   no libc in the object, regions from the memory the link script names. That closed issues 01 and 03.
 - One `kernel8.img` for Pi 3 and Pi 4: the kernel reads MIDR_EL1 to tell them apart.
 - 2026-11-25: the compiler has `Mmio` (cancho `docs/mmio.md`, edition 13), which closed issue 02: the
   hardware is seven capabilities that share no address, and `cancho authority` lists every address
   (docs/authority.txt). The translation tables moved to a fixed address (2 MB) so that a bound can name them.
+- 2026-11-25, later: the compiler has `Cpu` (cancho `docs/cpu.md`, edition 14): system registers, `wfi`
+  and the TLB flush are builtins, the row of a function names each register, and the kernel calls no
+  foreign code. `cancho authority` says it is bounded. `board/boot.S` exports nothing.
 - Next in the compiler: a rule that refuses a hosted builtin on the bare target instead of leaving it to
-  clang; system registers (the five primitives left). Found on the way: in cancho a narrowed `Fs` passes
+  clang; interrupt entry (issue 04) when preemption needs it. Found on the way: in cancho a narrowed `Fs` passes
   for a wider one (cancho `docs/mmio.md` 3), not fixed yet.
 - Pi 5: the SoC debug UART, GIC and timer would work the same way; needs its addresses from the
   BCM2712 documentation and a board to test on (QEMU has no model). Not started.
