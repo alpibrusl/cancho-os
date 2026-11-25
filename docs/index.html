@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cancho-os: an operating system written in cancho</title>
+<meta name="description" content="A bare-metal kernel for the Raspberry Pi written in cancho, with no Linux and no C. The compiler lists every address and register it can touch. Boots in QEMU; not yet run on a real board.">
+<meta property="og:title" content="cancho-os: an operating system written in cancho">
+<meta property="og:description" content="No Linux, no C. Hardware is a capability, and the compiler lists what the kernel can touch. Research: boots in QEMU.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://alpibrusl.github.io/cancho-os/">
+<meta name="color-scheme" content="light dark">
+<style>
+:root {
+  --bg: #fbfcfd; --fg: #14181a; --muted: #55606a; --line: #dfe5e7; --surface: #ffffff; --soft: #eff4f4;
+  --accent: #1f5fa6; --accent-fg: #ffffff; --good: #0f7b5f; --warn: #92400e; --warn-bg: #fdf6e7; --warn-line: #e0b765; --bad: #b42d27;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0b0f14; --fg: #e7ebec; --muted: #9aa8ae; --line: #212a2d; --surface: #131a1c; --soft: #172022;
+    --accent: #7fb2ff; --accent-fg: #07162c; --good: #4fd1a5; --warn: #f3c77a; --warn-bg: #1d1a12; --warn-line: #8a6a2a; --bad: #ff7b73; }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; scroll-padding-top: 4rem; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 1rem/1.6 var(--font); }
+a { color: var(--accent); text-underline-offset: .15em; }
+.wrap { width: 100%; max-width: 68rem; margin: 0 auto; padding: 0 16px; }
+.skip { position: absolute; left: 16px; top: -4rem; background: var(--accent); color: var(--accent-fg); padding: .5rem .8rem; border-radius: 6px; z-index: 9; }
+.skip:focus { top: 8px; }
+a:focus-visible, .btn:focus-visible, pre:focus-visible, summary:focus-visible, .fitwrap:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+header.top { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+header.top .wrap { display: flex; align-items: center; gap: 1.5rem; height: 3.4rem; }
+.brand { display: inline-flex; align-items: center; gap: .5rem; font: 700 1rem var(--mono); color: var(--fg); text-decoration: none; letter-spacing: -.01em; white-space: nowrap; }
+nav { display: flex; gap: 1.2rem; margin-left: auto; }
+nav a { color: var(--muted); text-decoration: none; font-size: .93rem; white-space: nowrap; }
+nav a:hover { color: var(--fg); }
+@media (max-width: 40rem) { nav a.opt { display: none; } nav { gap: .9rem; } }
+
+h1 { font-size: clamp(2.1rem, 6vw, 3.8rem); line-height: 1.06; letter-spacing: -.035em; margin: 0 0 1rem; font-weight: 750; overflow-wrap: break-word; }
+h2 { font-size: clamp(1.5rem, 3.4vw, 2.1rem); line-height: 1.15; letter-spacing: -.025em; margin: 0 0 .5rem; font-weight: 700; }
+h3 { font-size: 1.05rem; margin: 0 0 .25rem; }
+p { margin: 0 0 1rem; }
+section { padding: 4.5rem 0 0; }
+.lead { font-size: 1.2rem; color: var(--muted); max-width: 34rem; }
+.sub { color: var(--muted); max-width: 40rem; }
+code { font-family: var(--mono); font-size: .9em; background: var(--soft); padding: .1em .35em; border-radius: 5px; overflow-wrap: anywhere; }
+
+.hero { padding: 3.5rem 0 0; display: grid; gap: 2.2rem; align-items: center; }
+.hero > *, .two > *, .cols > * { min-width: 0; }
+@media (min-width: 58rem) { .hero { grid-template-columns: 1fr 1.1fr; } }
+.badge { display: inline-flex; gap: .5rem; align-items: center; font-size: .82rem; color: var(--warn); background: var(--warn-bg); border: 1px solid var(--warn-line); padding: .22rem .7rem; border-radius: 999px; margin-bottom: 1.2rem; text-decoration: none; }
+.badge i { width: .5rem; height: .5rem; border-radius: 50%; background: var(--warn-line); display: inline-block; flex: none; }
+.cta { display: flex; flex-wrap: wrap; gap: .7rem; margin-top: 1.6rem; }
+.btn { display: inline-block; padding: .65rem 1.15rem; border-radius: 8px; font-weight: 600; text-decoration: none; border: 1px solid var(--accent); }
+.btn.primary { background: var(--accent); color: var(--accent-fg); }
+.btn.ghost { color: var(--accent); }
+.btn.ghost:hover { background: var(--soft); }
+
+.term { background: #0d1117; color: #d6dde8; border: 1px solid #262c36; border-radius: 12px; font: .82rem/1.6 var(--mono); padding: 1rem 1.1rem 1.1rem; box-shadow: 0 18px 50px -24px rgba(10, 40, 40, .55); overflow-x: auto; }
+.term .bar { display: flex; gap: .35rem; margin-bottom: .8rem; }
+.term .bar i { width: .65rem; height: .65rem; border-radius: 50%; background: #2d3440; display: block; }
+.term .c { color: #8b95a5; } .term .r { color: #ff9a92; }
+.term pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.three { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); margin-top: 3rem; }
+.three div { border-top: 3px solid var(--accent); padding-top: .8rem; }
+.three p { color: var(--muted); margin: 0; font-size: .96rem; }
+
+.figure { margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 1.2rem; min-width: 0; }
+.figure.wide { margin-top: 2rem; }
+.figure svg { display: block; width: 100%; height: auto; }
+.figure h3 { margin-bottom: .6rem; }
+.figure figcaption { color: var(--muted); font-size: .88rem; margin-top: .8rem; }
+.two { display: grid; gap: 1rem; grid-template-columns: 1fr; margin-top: 2rem; }
+@media (min-width: 52rem) { .two { grid-template-columns: 1fr 1fr; } }
+svg .t { fill: var(--fg); font: 600 13px var(--font); } svg .s { fill: var(--muted); font: 12px var(--font); }
+svg .box { fill: var(--surface); stroke: var(--line); stroke-width: 1.4; } svg .hot { fill: var(--soft); stroke: var(--accent); stroke-width: 2; }
+svg .ar { stroke: var(--muted); stroke-width: 1.5; fill: none; }
+
+.grid { display: grid; gap: 1px; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); background: var(--line); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; margin-top: 2rem; }
+.grid div { background: var(--surface); padding: 1.1rem 1.2rem; }
+.grid p { color: var(--muted); font-size: .93rem; margin: 0; }
+
+.stats { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); margin: 2rem 0 0; }
+.stats div { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 1rem 1.1rem; }
+.stats b { display: block; font: 700 1.9rem/1.1 var(--font); letter-spacing: -.03em; }
+.stats span { color: var(--muted); font-size: .88rem; }
+.note { color: var(--muted); font-size: .88rem; margin-top: .9rem; }
+
+pre.code { background: var(--soft); border: 1px solid var(--line); border-radius: 12px; padding: 1rem 1.1rem; font: .84rem/1.6 var(--mono); overflow-x: auto; margin: 1.4rem 0 0; }
+.figure pre.code { margin-top: .4rem; }
+pre.code .c { color: var(--muted); } pre.code .r { color: var(--bad); }
+.status { margin-top: 4.5rem; background: var(--warn-bg); border: 1px solid var(--warn-line); border-radius: 14px; padding: 1.3rem 1.5rem; }
+.status h2 { font-size: 1.2rem; letter-spacing: -.01em; }
+.status ul { margin: .4rem 0 0; padding-left: 1.2rem; color: var(--muted); }
+footer { margin-top: 4rem; border-top: 1px solid var(--line); padding: 1.6rem 0 2.6rem; color: var(--muted); font-size: .9rem; }
+footer .wrap { display: flex; flex-wrap: wrap; gap: .5rem 1.6rem; }
+.fitwrap { overflow-x: auto; margin-top: 1.4rem; }
+table.fit { width: 100%; border-collapse: collapse; font-size: .93rem; }
+table.fit th, table.fit td { text-align: left; padding: .7rem .8rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.fit thead th { color: var(--muted); font-weight: 600; font-size: .85rem; }
+table.fit tbody th { font-weight: 650; }
+table.fit td { color: var(--muted); }
+table.fit.auth tbody th { white-space: nowrap; }
+table.fit .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.fit.wide { min-width: 38rem; } table.fit.bench { min-width: 44rem; }
+table.fit tr.us { background: var(--soft); } table.fit tr.us td, table.fit tr.us th { color: var(--fg); }
+table.fit td.lose { color: var(--bad); font-weight: 600; } table.fit td.win { color: var(--good); font-weight: 600; }
+.cols { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); margin-top: 1.4rem; }
+.cols > div { border: 1px solid var(--line); border-radius: 14px; padding: 1.1rem 1.3rem; background: var(--surface); }
+.cols ul { margin: .4rem 0 0; padding-left: 1.1rem; color: var(--muted); } .cols li { margin: .25rem 0; }
+.cols .no h3 { color: var(--muted); }
+details.rules { margin-top: 1.4rem; } details.rules summary { cursor: pointer; font-weight: 600; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+h3.task { margin: 0 0 .15rem; font-size: 1.1rem; }
+.task + p { color: var(--muted); margin: 0 0 .2rem; max-width: 42rem; }
+.tasks { display: grid; gap: 1.6rem; margin-top: 2rem; grid-template-columns: minmax(0, 1fr); }
+.tasks > * { min-width: 0; }
+.tasks pre.code { margin-top: .6rem; }
+ul.plain { color: var(--muted); padding-left: 1.2rem; } ul.plain li { margin: .35rem 0; }
+.fn { color: var(--muted); font-size: .85rem; margin-top: .8rem; }
+svg .tt { fill: var(--fg); font: 600 13px var(--font); } svg .ss { fill: var(--muted); font: 11.5px var(--font); }
+svg .bad { fill: var(--surface); stroke: var(--bad); stroke-width: 1.6; } svg .arb { stroke: var(--bad); stroke-width: 1.5; fill: none; }
+.diagram { max-width: 26rem; margin: 1.6rem auto 0; }
+ul.why { list-style: none; padding: 0; margin: 1.4rem 0 0; display: grid; gap: .8rem; }
+ul.why li { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: .8rem 1.1rem; }
+ul.why b { display: block; }
+ul.why span { color: var(--muted); font-size: .95rem; }
+.big { font-size: 1.25rem; font-weight: 650; letter-spacing: -.01em; margin: 1.2rem 0 0; }
+.brand { display: inline-flex; align-items: center; gap: .5rem; }
+.brand .mark { border-radius: 6px; background: #fff; }
+.brand .mark { border-radius: 6px; background: #fff; }
+.hero .logo { width: 100%; max-width: 15rem; height: auto; justify-self: center; border-radius: 16px; background: #fff; }
+</style>
+</head>
+<body id="top">
+<a class="skip" href="#main">Skip to content</a>
+<header class="top"><div class="wrap">
+  <a class="brand" href="#top">cancho-os</a>
+  <nav aria-label="Sections"><a href="#why">Why</a><a href="#today">Today</a><a class="opt" href="#authority">Authority</a><a href="#pi4">On a Pi 4</a><a class="opt" href="#status">Status</a><a href="https://github.com/alpibrusl/cancho-os">GitHub</a></nav>
+</div></header>
+<main id="main"><div class="wrap">
+
+<section class="hero" style="padding-top:3.5rem">
+  <div>
+    <p class="badge"><i></i>Research &middot; boots in QEMU &middot; not yet run on a real board</p>
+    <h1>An operating system written in cancho, with no Linux and no C.</h1>
+    <p class="lead">A kernel for the Raspberry Pi: the firmware loads one image, a page of assembly calls <code>main</code>, and everything after that is cancho, drivers included.</p>
+    <p class="sub">The question it exists to answer: can the compiler say, before the kernel runs, every address and every processor register it is able to touch, and which function holds which device?</p>
+    <div class="cta"><a class="btn primary" href="#pi4">Put it on a Pi 4</a><a class="btn ghost" href="https://github.com/alpibrusl/cancho-os">Source</a></div>
+  </div>
+  <div class="term" role="img" aria-label="A session on the kernel's serial console in QEMU"><div class="bar"><i></i><i></i><i></i></div>
+<pre><span class="c"># ./test.sh about uptime 'servo scan' 'crash null'   (QEMU, six simulated servos)</span>
+cancho-os booted. type `help`.
+&gt; about
+cancho-os 0.0.9: a kernel written in cancho, no Linux underneath (Raspberry Pi 3)
+&gt; uptime
+2.943 s
+&gt; servo scan
+servo 1: present
+<span class="c">...</span>
+6 servos found
+&gt; crash null
+
+<span class="r">*** data abort: address not mapped (vector 4)</span>
+    esr 0x0000000096000007
+    elr 0x0000000000089aa8
+    far 0x0000000000000000
+halted.</pre></div>
+</section>
+
+<div class="stats">
+  <div><b>0</b><span>lines of C, and no foreign function the kernel calls</span></div>
+  <div><b>64 KB</b><span>the whole image, <code>kernel8.img</code>, for Pi 3 and Pi 4</span></div>
+  <div><b>15 + 8</b><span>processor registers and address ranges it can touch, each listed</span></div>
+  <div><b>0</b><span>real boards it has run on so far</span></div>
+</div>
+
+<section id="why">
+  <h2>Why an operating system, and why cancho</h2>
+  <p class="sub">The first job is small and concrete: the safety controller of a robot arm (<a href="https://alpibrusl.github.io/cancho-robot/">cancho-robot</a>). A controller like that is only worth trusting if nothing under it can go around it.</p>
+  <div class="grid">
+    <div><h3>Hardware is a capability</h3><p>A device register is reached through an <code>Mmio</code> value whose type names the addresses it covers. A function that was lent the console cannot write to the servo bus: it is a type error.</p></div>
+    <div><h3>Nothing underneath</h3><p>No Linux, no libc, no C. What is not cancho is one page of assembly that boots and catches faults, and it exports nothing the kernel can call.</p></div>
+    <div><h3>No code behind its back</h3><p>Interrupts stay masked and are polled after <code>wfi</code>; a fault re-enters <code>main</code>, which reports it. So there is no handler running between two statements.</p></div>
+    <div><h3>Checked in CI</h3><p>Every change boots in QEMU with a scripted shell session, and the list of what the kernel can touch is a file in the repository that CI compares.</p></div>
+  </div>
+</section>
+
+<section id="today">
+  <h2>What it does today</h2>
+  <p class="sub">All of it in QEMU, as a Pi 3 and as a Pi 4, from the same image.</p>
+  <div class="cols">
+    <div><h3>Built</h3><ul>
+      <li>A serial console and a small shell</li>
+      <li>The timer and the interrupt controller, polled</li>
+      <li>The MMU: code read-only, data not executable, address 0 unmapped</li>
+      <li>A fault report that names the fault and the three registers</li>
+      <li>The Feetech servo bus, read only: <code>servo scan</code>, <code>servo pos</code></li>
+      <li>The SO-101 arm's pose from its servos, and a safety check that judges a motion and sends nothing</li>
+    </ul></div>
+    <div class="no"><h3>Not built</h3><ul>
+      <li>Moving a servo (waits for the safety core's actuation side)</li>
+      <li>Separate programs, an SD card driver, files</li>
+      <li>Preemption, and more than one core</li>
+      <li>The Pi 5, which is the robot's board</li>
+      <li>USB, network, display</li>
+    </ul></div>
+  </div>
+</section>
+
+<section id="authority">
+  <h2>What the kernel can touch, from the compiler</h2>
+  <p class="sub"><code>cancho authority</code> reads the program and prints this. It is not a comment someone keeps up to date: a register that is not on the list cannot be reached, and the build fails if the list changes without the file changing.</p>
+  <div class="tasks">
+    <figure class="figure"><h3>The processor</h3>
+<pre class="code">performs
+    cpu("cntfrq_el0")     <span class="c">the timer</span>
+    cpu("cntv_ctl_el0")
+    cpu("cntv_cval_el0")
+    cpu("cntv_tval_el0")
+    cpu("cntvct_el0")
+    cpu("elr_el1")        <span class="c">the fault report</span>
+    cpu("esr_el1")
+    cpu("far_el1")
+    cpu("mair_el1")       <span class="c">the MMU</span>
+    cpu("midr_el1")       <span class="c">which board</span>
+    cpu("sctlr_el1")
+    cpu("tcr_el1")
+    cpu("tlbi_vmalle1")
+    cpu("ttbr0_el1")
+    cpu("wfi")</pre>
+    <figcaption>Fifteen registers and instructions. The annotations on the right are added here; the names are the report's.</figcaption></figure>
+    <figure class="figure"><h3>Memory, and what it never touches</h3>
+<pre class="code">    mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048")  <span class="c">console</span>
+    mmio("0x3f200004..0x3f200008,0xfe200004..0xfe200008")  <span class="c">pins</span>
+    mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c")  <span class="c">servo bus</span>
+    mmio("0x40000040..0x40000064,0xff841000..0xff842014")  <span class="c">interrupts</span>
+    mmio("0x200000..0x208000")                             <span class="c">page tables</span>
+    <span class="c">... three more, in docs/authority.txt</span>
+never touches
+    the filesystem
+    the network
+    the heap
+    other programs
+    foreign code</pre>
+    <figcaption>Each range is one capability, cut once in <code>main</code>. The two addresses in a range are the Pi 3's and the Pi 4's.</figcaption></figure>
+  </div>
+  <p class="note">The full report is <a href="https://github.com/alpibrusl/cancho-os/blob/main/docs/authority.txt"><code>docs/authority.txt</code></a>. The language features behind it are in cancho: <a href="https://alpibrusl.github.io/cancho/mmio.html"><code>Mmio</code></a> and <a href="https://alpibrusl.github.io/cancho/cpu.html"><code>Cpu</code></a>.</p>
+</section>
+
+<section id="pi4">
+  <h2>Put it on a Pi 4</h2>
+  <p class="sub"><strong>Nobody has done this yet.</strong> Everything above was measured in QEMU. These are the steps that should boot it on a board; if you run them, what the console prints is worth an <a href="https://github.com/alpibrusl/cancho-os/issues">issue</a>.</p>
+  <p class="sub">You need a Raspberry Pi 4, a microSD card and a USB-serial cable with <strong>3.3 V</strong> levels. A 5 V cable damages the pins.</p>
+  <div class="tasks">
+    <div><h3 class="task">1. Build the image</h3><p>The compiler is built from cancho's <code>main</code> with <code>clang</code> alone; then the kernel. LLVM's <code>ld.lld</code> and <code>llvm-objcopy</code> must be on the path.</p>
+<pre class="code" tabindex="0">git clone https://github.com/alpibrusl/cancho &amp;&amp; cd cancho
+sh scripts/build-standalone.sh --out /tmp/cancho-out --rev $(git rev-parse HEAD)
+cd .. &amp;&amp; git clone https://github.com/alpibrusl/cancho-os &amp;&amp; cd cancho-os
+CANCHO=/tmp/cancho-out/cancho ./build.sh        <span class="c"># writes build/kernel8.img</span></pre></div>
+    <div><h3 class="task">2. Put the firmware on the card</h3><p>The Pi's own firmware loads the kernel and is not part of this repository. Flash Raspberry Pi OS Lite with Raspberry Pi Imager, which leaves the firmware on the card's FAT partition (<code>bootfs</code>); or format the card FAT32 and copy <code>start4.elf</code> and <code>fixup4.dat</code> from <a href="https://github.com/raspberrypi/firmware/tree/master/boot">raspberrypi/firmware</a>.</p></div>
+    <div><h3 class="task">3. Copy two files</h3><p>The kernel and a four-line <code>config.txt</code>: 64-bit, this kernel, the UART on, and the PL011 on the header pins instead of the Bluetooth chip.</p>
+<pre class="code" tabindex="0">cp build/kernel8.img board/config.txt /Volumes/bootfs/     <span class="c"># macOS, card mounted as bootfs</span>
+diskutil eject /Volumes/bootfs</pre></div>
+    <div><h3 class="task">4. Wire the cable</h3><p>On the 40-pin header: GND to pin 6, the cable's RX to pin 8 (GPIO14), the cable's TX to pin 10 (GPIO15). Leave the cable's power wire unconnected.</p></div>
+    <div><h3 class="task">5. Open the console, then power the Pi</h3><p>115200 baud, 8N1. It should print the banner, and <code>about</code> should say <code>(Raspberry Pi 4)</code>.</p>
+<pre class="code" tabindex="0">screen /dev/cu.usbserial-XXXX 115200      <span class="c"># macOS; the name depends on the cable</span>
+picocom -b 115200 /dev/ttyUSB0            <span class="c"># Linux</span></pre></div>
+  </div>
+  <h3 style="margin-top:2.2rem">Where a real board may differ from QEMU</h3>
+  <ul class="why">
+    <li><b>The data cache</b><span>The kernel turns it on with the MMU and does not invalidate it first. QEMU has no cache. A hang right after boot points here.</span></li>
+    <li><b>The UART clock</b><span>The divisor is for 48 MHz, the Pi 4's default. Garbage on the console points here.</span></li>
+    <li><b>The servo bus</b><span>It does not work on a Pi 4 header yet: it is the mini UART, whose only header pins are the two the console uses. It has to move to another UART before a real arm can be read.</span></li>
+  </ul>
+  <p class="note">To try it without a board: <code>./run.sh</code> boots the same image in QEMU (<code>qemu-system-aarch64</code>, version 9 or later for the Pi 4 model).</p>
+</section>
+
+<section class="status" id="status" style="padding:1.3rem 1.5rem">
+  <h2>Status</h2>
+  <ul>
+    <li><strong>Research.</strong> One kernel image that boots, reads and reports. It does not load programs yet, so it is not an operating system in the sense most people mean.</li>
+    <li>Measured in QEMU only, as a Pi 3 and a Pi 4. No real board has run it.</li>
+    <li>It cannot move a servo, by design, until the safety core's actuation side exists in cancho-robot.</li>
+    <li>What is next and why is in the <a href="https://github.com/alpibrusl/cancho-os/blob/main/docs/ROADMAP.md">roadmap</a>.</li>
+  </ul>
+</section>
+
+</div></main>
+<footer><div class="wrap"><p class="note">Part of the <a href="https://github.com/alpibrusl/cancho">cancho</a> family. First user: <a href="https://alpibrusl.github.io/cancho-robot/">cancho-robot</a>.</p></div></footer>
+</body>
+</html>
