@@ -101,8 +101,7 @@ fault_entry:
 
 // ---- the "board" library: what cancho calls --------------------------------
 .section .text.board, "ax"
-.global board_info, board_r8, board_w8, board_r32, board_w32, board_r64, board_w64
-.global board_sys_read, board_sys_write, board_wfi, board_tlb_flush
+.global board_info, board_sys_read, board_sys_write, board_wfi, board_tlb_flush
 
 // board_info(i): 0 image start, 1 end of code, 2 end of constants, 3 page-table pool,
 // 4 tables in the pool, 5 fault vector (-1: none), 6 ESR, 7 ELR, 8 FAR
@@ -111,21 +110,6 @@ board_info:
     ldr     x0, [x1, x0, lsl #3]
     ret
 
-board_r8:   ldrb w0, [x0]
-            ret
-board_w8:   strb w1, [x0]
-            mov  x0, #0
-            ret
-board_r32:  ldr  w0, [x0]
-            ret
-board_w32:  str  w1, [x0]
-            mov  x0, #0
-            ret
-board_r64:  ldr  x0, [x0]
-            ret
-board_w64:  str  x1, [x0]
-            mov  x0, #0
-            ret
 board_wfi:  wfi                   // sleeps until an interrupt is pending, masked or not
             mov  x0, #0
             ret

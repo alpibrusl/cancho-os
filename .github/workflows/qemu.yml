@@ -18,6 +18,8 @@ jobs:
           sh /tmp/cancho/scripts/build-standalone.sh --out /tmp/cancho-out --rev "$(git -C /tmp/cancho rev-parse HEAD)"
       - name: build
         run: CANCHO=/tmp/cancho-out/cancho ./build.sh
+      - name: what the kernel can touch
+        run: CANCHO=/tmp/cancho-out/cancho ./authority.sh
       - name: boot and drive the shell
         run: |
           ./test.sh about 'echo ci' ticks crash about > out.txt

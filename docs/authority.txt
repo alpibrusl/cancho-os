@@ -1,0 +1,27 @@
+UNBOUNDED: this program calls foreign code. The labels below bound it
+everywhere except through the symbols under "unbounded by", and what
+a symbol does is the linked library's, not the language's.
+See docs/foreign-authority.md.
+performs
+    ffi("board")    <- unbounded
+    mmio("0x0..0x1,0x80000..0x80001")
+    mmio("0x200000..0x208000")
+    mmio("0x3f200004..0x3f200008,0xfe200004..0xfe200008")
+    mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048")
+    mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c")
+    mmio("0x40000040..0x40000064,0xff841000..0xff842014")
+    mmio("0x80001..0x200000")
+never touches
+    the console
+    the filesystem
+    the network
+    the heap
+    the command line
+    signals
+    other programs
+unbounded by
+    board:board_info
+    board:board_sys_read
+    board:board_sys_write
+    board:board_tlb_flush
+    board:board_wfi

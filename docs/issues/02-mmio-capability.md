@@ -1,5 +1,10 @@
 # Volatile MMIO as a capability: `Mmio(base, len)`
 
+> **Done (2026-11-25):** cancho `docs/mmio.md`, edition 13. What was built differs from the draft below: the capability is
+> `Mmio("lo..hi,lo..hi")`, its bound a literal of the type (as `Fs("/tmp")` is), not `Mmio(base, len)`; addresses are absolute; the
+> builtins are `mmio_read8/32/64` and `mmio_write8/32/64`; the label is `mmio("<bound>")`. Not done: barriers, and system registers
+> (see 04). The kernel's `board_r*`/`board_w*` are deleted. What follows is the issue as drafted.
+
 **Today:** cancho has no volatile load/store, so every driver needs C (`board/board.c` in cancho-os).
 
 **Proposal:**
