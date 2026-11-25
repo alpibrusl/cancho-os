@@ -14,7 +14,9 @@ rm -f build/uart.in build/ping-uart.out build/qemu.err
 mkfifo build/uart.in
 if [ "$MACHINE" = virt ]; then
     # the network card, on a tap interface of this machine: Ethernet frames, so ARP comes first
-    ip tuntap add dev tap0 mode tap && ip addr add 10.0.0.1/24 dev tap0 && ip link set tap0 up
+    # (a route to that one address, not to a /24: the machine's own network may be 10.0.0.x too, and the
+    # ping would leave by it)
+    ip tuntap add dev tap0 mode tap && ip addr add 10.0.0.1 peer 10.0.0.2 dev tap0 && ip link set tap0 up
     qemu-system-aarch64 -M virt -cpu cortex-a57 -m 1G -global virtio-mmio.force-legacy=false \
         -netdev tap,id=n0,ifname=tap0,script=no,downscript=no -device virtio-net-device,netdev=n0 \
         -kernel build/kernel-virt.elf -serial stdio -display none -monitor none \
@@ -59,7 +61,6 @@ if [ -n "$ready" ]; then
     if [ "$MACHINE" = virt ]; then
         # what this machine's own ARP table learned from the kernel's answer
         ip neigh show dev tap0
-        ip -s link show tap0
     fi
     printf 'net\r' >&3
     sleep 1
