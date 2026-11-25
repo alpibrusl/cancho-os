@@ -2,7 +2,7 @@ name: boot in qemu
 on: [push, pull_request]
 env:
   # cancho's bare-metal target (`--target aarch64-none-elf`, alpibrusl/cancho#826) is on its main branch
-  CANCHO_REF: main
+  CANCHO_REF: hardware-cap
 jobs:
   boot:
     runs-on: ubuntu-24.04
@@ -18,6 +18,8 @@ jobs:
           sh /tmp/cancho/scripts/build-standalone.sh --out /tmp/cancho-out --rev "$(git -C /tmp/cancho rev-parse HEAD)"
       - name: build
         run: CANCHO=/tmp/cancho-out/cancho ./build.sh
+      - name: what the kernel can touch
+        run: CANCHO=/tmp/cancho-out/cancho ./authority.sh
       - name: boot and drive the shell
         run: |
           ./test.sh about 'echo ci' ticks crash about > out.txt

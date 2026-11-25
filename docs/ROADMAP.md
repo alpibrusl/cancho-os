@@ -39,19 +39,26 @@
      bus, and sends nothing. Four verdicts held to the host in CI.
    - Sending: waits for cancho-robot's actuation core (its PR 27), so that the write path here is the one
      reviewed there, and for a simulator that moves.
-   - "The only holder" as something the compiler shows needs the MMIO capability (issue 02): today
-     every kernel function that holds the board can reach every register.
+   - ✅ "The only holder" is something the compiler shows (2026-11-25, issue 02): the bus is an `Mmio`
+     capability over the mini UART's registers, and only a function lent it can reach them. `authority.sh`
+     requires a function lent the console to be refused when it writes to the bus. When goals are sent,
+     the unique reference to the bus goes to the safety gate and to nothing else.
 4. Pi 5: console on the debug UART, addresses from the board's own device tree, then the bus behind RP1.
 5. The real arm, read-only first, checked against LeRobot reading the same bus.
 
 ## No C (2026-11-24)
 - There is no C in the repository. Every driver is cancho; `board/boot.S` keeps boot, the exception
-  stub and eleven primitives of one or two instructions.
+  stub and five primitives of one or two instructions (eleven until 2026-11-25: the six loads and stores
+  became cancho's `Mmio` builtins).
 - The compiler has a bare-metal target (`--target aarch64-none-elf`, cancho `docs/freestanding.md`):
   no libc in the object, regions from the memory the link script names. That closed issues 01 and 03.
 - One `kernel8.img` for Pi 3 and Pi 4: the kernel reads MIDR_EL1 to tell them apart.
-- Next in the compiler: MMIO builtins behind a capability (issue 02) delete the primitives; a rule
-  that refuses a hosted builtin on the bare target instead of leaving it to clang.
+- 2026-11-25: the compiler has `Mmio` (cancho `docs/mmio.md`, edition 13), which closed issue 02: the
+  hardware is seven capabilities that share no address, and `cancho authority` lists every address
+  (docs/authority.txt). The translation tables moved to a fixed address (2 MB) so that a bound can name them.
+- Next in the compiler: a rule that refuses a hosted builtin on the bare target instead of leaving it to
+  clang; system registers (the five primitives left). Found on the way: in cancho a narrowed `Fs` passes
+  for a wider one (cancho `docs/mmio.md` 3), not fixed yet.
 - Pi 5: the SoC debug UART, GIC and timer would work the same way; needs its addresses from the
   BCM2712 documentation and a board to test on (QEMU has no model). Not started.
 

@@ -19,18 +19,37 @@ src/safety.cho   the safety core: one `approve` every motion must pass }
 sim/servos.cho   six simulated servos for QEMU: a program for the host, not in the image
 sim/expect.cho   what `arm pose` must print for them, computed on the host
 board/boot.S     boot (park cores 1-3, EL2 -> EL1, stack, zero .bss), the exception stub,
-                 and the primitives cancho cannot spell yet, one or two instructions each:
-                 load/store a byte, word or doubleword, read/write a system register, wfi
-board/link.ld    load at 0x80000; code, constants and data on page boundaries
+                 and the five primitives cancho cannot spell yet, one or two instructions
+                 each: read/write a system register, wfi, flush the TLB, the link's addresses
+board/link.ld    load at 0x80000; code, constants and data on page boundaries; the
+                 translation tables at 2 MB
 build.sh         cancho build --target aarch64-none-elf, assemble boot.S, link, objcopy
+authority.sh     what the kernel can touch is docs/authority.txt, and a function lent one
+                 device cannot use another (what CI runs)
 run.sh           boot it in QEMU
 test.sh          boot it in QEMU, type the given lines, print the UART (what CI runs)
 ```
 
-Hardware is a capability: the primitives are the foreign library `"board"`, so
-`cancho authority src/kernel.cho` lists exactly the eleven `board:` symbols the kernel
-is built on and says it never touches anything else. They are coarse (`board_w32`
-reaches any address); docs/issues/02 replaces them with builtins bounded by address range.
+Hardware is a capability. A register is reached through an `Mmio`, whose type names the
+addresses it holds (cancho `docs/mmio.md`): `main` is given every address and cuts it into
+seven pieces that share none (the console, its pin register, the interrupt controller, the
+servo bus, the translation tables, the kernel's code to read, and two bytes for the
+`crash` commands), and each function is lent the pieces it needs. So the function that
+prints a character has this type, and the compiler holds it to it:
+
+```
+fn putc[&mc, &s](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], c: int)
+    -> [mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int
+```
+
+It cannot reach the servo bus: `./authority.sh` builds a copy of the kernel in which a
+function lent only the console writes to the bus, and requires the compiler to refuse it.
+The same script holds `cancho authority` on the kernel to [`docs/authority.txt`](docs/authority.txt):
+every address the kernel touches, the five `board:` primitives, and nothing else. The
+vendored robot modules (protocol, kinematics, safety) take no capability at all.
+
+What this does not show: that an address is the device the comment says it is (that is the
+datasheet's word), or anything about the five primitives, which are still assembly.
 
 Two choices keep everything in cancho without the compiler's help:
 
@@ -116,11 +135,11 @@ RX→pin 8 (GPIO14, TXD), TX→pin 10 (GPIO15, RXD). Then `picocom -b 115200 /de
 - `cancho build --target aarch64-none-elf --emit obj` writes an ELF object with no libc in
   it: regions take their 64 KB chunks from the memory `board/link.ld` names
   (`__cancho_heap_start` to `__cancho_heap_end`), and `memset`/`memcpy` are the module's
-  own. `nm -u` on the kernel object lists the eleven `board_` primitives, those two
+  own. `nm -u` on the kernel object lists the five `board_` primitives, those two
   symbols, and nothing else.
-- What is left outside cancho is `board/boot.S`: boot, the exception stub, and the
-  primitives. The primitives become builtins behind a capability (docs/issues/02), which
-  also lets the authority report name the address ranges a driver touches.
+- What is left outside cancho is `board/boot.S`: boot, the exception stub, and the five
+  primitives. The six that loaded and stored at any address are gone: cancho has them as
+  builtins behind the `Mmio` capability (edition 13, docs/issues/02).
 
 Context and decisions: [`docs/ROADMAP.md`](docs/ROADMAP.md). Compiler issues to file in cancho: [`docs/issues/`](docs/issues/).
 

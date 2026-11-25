@@ -1,27 +1,25 @@
-edition 5;
+edition 13;
 
 import feetech;
 import calibration;
 import kinematics;
 import safety;
 
-// cancho-os: the kernel. Every driver here is cancho; what it cannot spell yet
-// (a volatile load or store, a system register, `wfi`) is a one-instruction
-// symbol of the foreign library "board" (board/boot.S), so `cancho authority`
-// lists exactly the primitives the kernel is built on.
+// cancho-os: the kernel. Every driver here is cancho. A register is reached through
+// an `Mmio`, a capability whose type names the addresses it holds: `main` is given
+// every address, cuts it into the pieces below, and each function is lent the pieces
+// it needs, so its signature says which hardware it can touch and the compiler holds
+// it to that (cancho docs/mmio.md). What cancho cannot spell yet (a system register,
+// `wfi`, the TLB) is a symbol of the foreign library "board" (board/boot.S), so
+// `cancho authority` lists the addresses and those primitives, and nothing else.
+//   con    the console: the PL011 of a Pi 3 or a Pi 4
+//   pins   the one register that routes GPIO14/15 to it
+//   irq    the interrupt controller: the Pi 3's per-core block, the Pi 4's GIC-400
+//   bus    the servo bus: the mini UART
+//   tab    the eight translation tables (board/link.ld puts them at 2 MB)
+//   code   the kernel's own image, to read the instruction a fault stopped at
+//   probe  one byte of page 0 and one of the code, for `crash null` and `crash write`
 extern fn board_info[&f](ffi: &f Ffi("board"), which: int) -> [ffi("board")] int;
-
-extern fn board_r8[&f](ffi: &f Ffi("board"), addr: int) -> [ffi("board")] int;
-
-extern fn board_w8[&f](ffi: &f Ffi("board"), addr: int, v: int) -> [ffi("board")] int;
-
-extern fn board_r32[&f](ffi: &f Ffi("board"), addr: int) -> [ffi("board")] int;
-
-extern fn board_w32[&f](ffi: &f Ffi("board"), addr: int, v: int) -> [ffi("board")] int;
-
-extern fn board_r64[&f](ffi: &f Ffi("board"), addr: int) -> [ffi("board")] int;
-
-extern fn board_w64[&f](ffi: &f Ffi("board"), addr: int, v: int) -> [ffi("board")] int;
 
 extern fn board_sys_read[&f](ffi: &f Ffi("board"), reg: int) -> [ffi("board")] int;
 
@@ -67,64 +65,64 @@ fn detect[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
 }
 
 // ---- UART (PL011) -----------------------------------------------------------
-fn uart_init[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
+fn uart_init[&mc, &mp, &s](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), pins: &!mp Mmio("0x3f200004..0x3f200008,0xfe200004..0xfe200008"), k: &!s [int]) -> [mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f200004..0x3f200008,0xfe200004..0xfe200008")] int {
     let uart = k[0];
     let gpio = uart - 0x1000;
-    board_w32(b, uart + 0x30, 0);
+    mmio_write32(con, uart + 0x30, 0);
     // GPFSEL1: GPIO14/15 to ALT0 (TXD0/RXD0)
-    let sel = board_r32(b, gpio + 4) & ~(7 << 12 | 7 << 15);
-    board_w32(b, gpio + 4, sel | 4 << 12 | 4 << 15);
-    board_w32(b, uart + 0x44, 0x7ff);
+    let sel = mmio_read32(pins, gpio + 4) & ~(7 << 12 | 7 << 15);
+    mmio_write32(pins, gpio + 4, sel | 4 << 12 | 4 << 15);
+    mmio_write32(con, uart + 0x44, 0x7ff);
     // 115200 baud from a 48 MHz UART clock; 8N1, FIFOs on; enable, TX, RX
-    board_w32(b, uart + 0x24, 26);
-    board_w32(b, uart + 0x28, 3);
-    board_w32(b, uart + 0x2c, 3 << 5 | 1 << 4);
-    return board_w32(b, uart + 0x30, 1 | 1 << 8 | 1 << 9);
+    mmio_write32(con, uart + 0x24, 26);
+    mmio_write32(con, uart + 0x28, 3);
+    mmio_write32(con, uart + 0x2c, 3 << 5 | 1 << 4);
+    return mmio_write32(con, uart + 0x30, 1 | 1 << 8 | 1 << 9);
 }
 
-fn putc[&f, &s](b: &f Ffi("board"), k: &!s [int], c: int) -> [ffi("board")] int {
+fn putc[&mc, &s](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], c: int) -> [mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
     let uart = k[0];
-    while board_r32(b, uart + 0x18) & 32 != 0 {
+    while mmio_read32(con, uart + 0x18) & 32 != 0 {
     }
-    return board_w32(b, uart, c);
+    return mmio_write32(con, uart, c);
 }
 
-fn puts[&f, &s, &r](b: &f Ffi("board"), k: &!s [int], s: &r [byte]) -> [ffi("board")] int {
+fn puts[&mc, &s, &r](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], s: &r [byte]) -> [mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
     var i = 0;
     while i < len(s) {
-        putc(b, k, int_of(s[i]));
+        putc(con, k, int_of(s[i]));
         i = i + 1;
     }
     return 0;
 }
 
-fn put_dec[&f, &s](b: &f Ffi("board"), k: &!s [int], v: int) -> [ffi("board")] int {
+fn put_dec[&mc, &s](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], v: int) -> [mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
     if v >= 10 {
-        put_dec(b, k, v / 10);
+        put_dec(con, k, v / 10);
     }
-    return putc(b, k, 48 + v % 10);
+    return putc(con, k, 48 + v % 10);
 }
 
-fn put_digit[&f, &s](b: &f Ffi("board"), k: &!s [int], d: int) -> [ffi("board")] int {
+fn put_digit[&mc, &s](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], d: int) -> [mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
     if d < 10 {
-        return putc(b, k, 48 + d);
+        return putc(con, k, 48 + d);
     }
-    return putc(b, k, 87 + d);
+    return putc(con, k, 87 + d);
 }
 
-fn put_hex[&f, &s](b: &f Ffi("board"), k: &!s [int], v: int) -> [ffi("board")] int {
+fn put_hex[&mc, &s](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], v: int) -> [mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
     if v >= 16 {
-        put_hex(b, k, v >> 4);
+        put_hex(con, k, v >> 4);
     }
-    return put_digit(b, k, v & 15);
+    return put_digit(con, k, v & 15);
 }
 
 // All sixteen digits, for a register.
-fn put_reg[&f, &s](b: &f Ffi("board"), k: &!s [int], v: int) -> [ffi("board")] int {
-    puts(b, k, "0x");
+fn put_reg[&mc, &s](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], v: int) -> [mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
+    puts(con, k, "0x");
     var shift = 60;
     while shift >= 0 {
-        put_digit(b, k, v >> shift & 15);
+        put_digit(con, k, v >> shift & 15);
         shift = shift - 4;
     }
     return 0;
@@ -135,21 +133,21 @@ fn put_reg[&f, &s](b: &f Ffi("board"), k: &!s [int], v: int) -> [ffi("board")] i
 // board's interrupt controller, which is what wakes `wfi`; the kernel then asks
 // the controller what happened. No handler runs behind cancho's back, so there
 // is no state shared with one.
-fn tick_start[&f, &s](b: &f Ffi("board"), k: &!s [int], hz: int) -> [ffi("board")] int {
+fn tick_start[&f, &mi, &s](b: &f Ffi("board"), irq: &!mi Mmio("0x40000040..0x40000064,0xff841000..0xff842014"), k: &!s [int], hz: int) -> [ffi("board"), mmio("0x40000040..0x40000064,0xff841000..0xff842014")] int {
     k[4] = board_sys_read(b, 0) / hz;
     if k[1] == 4 {
         // GIC-400: virtual timer is private interrupt 27
         let gicd = k[3];
-        board_w32(b, gicd, 0);
-        let prio = board_r32(b, gicd + 0x400 + 24) & 0xffffff;
-        board_w32(b, gicd + 0x400 + 24, prio | 0xa0 << 24);
-        board_w32(b, gicd + 0x100, 1 << 27);
-        board_w32(b, gicd, 1);
-        board_w32(b, k[2] + 4, 0xff);
-        board_w32(b, k[2], 1);
+        mmio_write32(irq, gicd, 0);
+        let prio = mmio_read32(irq, gicd + 0x400 + 24) & 0xffffff;
+        mmio_write32(irq, gicd + 0x400 + 24, prio | 0xa0 << 24);
+        mmio_write32(irq, gicd + 0x100, 1 << 27);
+        mmio_write32(irq, gicd, 1);
+        mmio_write32(irq, k[2] + 4, 0xff);
+        mmio_write32(irq, k[2], 1);
     } else {
         // BCM2836 per-core block: route the virtual timer to core 0
-        board_w32(b, 0x40000040, 8);
+        mmio_write32(irq, 0x40000040, 8);
     }
     board_sys_write(b, 4, k[4]);
     return board_sys_write(b, 2, 1);
@@ -163,20 +161,20 @@ fn tick[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
 }
 
 // What the interrupt controller has pending, handled here and now.
-fn poll[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
+fn poll[&f, &mi, &s](b: &f Ffi("board"), irq: &!mi Mmio("0x40000040..0x40000064,0xff841000..0xff842014"), k: &!s [int]) -> [ffi("board"), mmio("0x40000040..0x40000064,0xff841000..0xff842014")] int {
     if k[4] == 0 {
         return 0;
     }
     if k[1] == 4 {
-        let iar = board_r32(b, k[2] + 0xc);
+        let iar = mmio_read32(irq, k[2] + 0xc);
         let id = iar & 0x3ff;
         if id == 27 {
             tick(b, k);
         }
         if id < 1020 {
-            board_w32(b, k[2] + 0x10, iar);
+            mmio_write32(irq, k[2] + 0x10, iar);
         }
-    } else if board_r32(b, 0x40000060) & 8 != 0 {
+    } else if mmio_read32(irq, 0x40000060) & 8 != 0 {
         tick(b, k);
     }
     return 0;
@@ -189,15 +187,15 @@ fn uptime_ms[&f](b: &f Ffi("board")) -> [ffi("board")] int {
 }
 
 // Sleep until a key arrives, handling whatever else wakes the core meanwhile.
-fn getc[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
+fn getc[&f, &mc, &mi, &s](b: &f Ffi("board"), con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), irq: &!mi Mmio("0x40000040..0x40000064,0xff841000..0xff842014"), k: &!s [int]) -> [ffi("board"), mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x40000040..0x40000064,0xff841000..0xff842014")] int {
     let uart = k[0];
-    while board_r32(b, uart + 0x18) & 16 != 0 {
+    while mmio_read32(con, uart + 0x18) & 16 != 0 {
         if k[4] != 0 {
             board_wfi(b);
         }
-        poll(b, k);
+        poll(b, irq, k);
     }
-    return board_r32(b, uart) & 255;
+    return mmio_read32(con, uart) & 255;
 }
 
 fn now_us[&f](b: &f Ffi("board")) -> [ffi("board")] int {
@@ -213,33 +211,33 @@ fn now_us[&f](b: &f Ffi("board")) -> [ffi("board")] int {
 // Register offsets: 0x04 enables, 0x40 data, 0x44 interrupt enable, 0x48 FIFO control,
 // 0x4c line control, 0x54 line status (bit 0 a byte is waiting, bit 5 room to send),
 // 0x60 control, 0x68 baud.
-fn bus_init[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
+fn bus_init[&mu, &s](bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), k: &!s [int]) -> [mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c")] int {
     let u = k[9];
-    board_w32(b, u + 4, 1);
-    board_w32(b, u + 0x60, 0);
-    board_w32(b, u + 0x44, 0);
-    board_w32(b, u + 0x4c, 3);
-    board_w32(b, u + 0x48, 0xc6);
+    mmio_write32(bus, u + 4, 1);
+    mmio_write32(bus, u + 0x60, 0);
+    mmio_write32(bus, u + 0x44, 0);
+    mmio_write32(bus, u + 0x4c, 3);
+    mmio_write32(bus, u + 0x48, 0xc6);
     // 1 Mbaud from a 500 MHz core clock would be 61.5: not exact, and the emulator ignores
     // it. The real bus is the Pi 5 driver's problem.
-    board_w32(b, u + 0x68, 61);
-    return board_w32(b, u + 0x60, 3);
+    mmio_write32(bus, u + 0x68, 61);
+    return mmio_write32(bus, u + 0x60, 3);
 }
 
-fn bus_put[&f, &s](b: &f Ffi("board"), k: &!s [int], c: int) -> [ffi("board")] int {
+fn bus_put[&mu, &s](bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), k: &!s [int], c: int) -> [mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c")] int {
     let u = k[9];
-    while board_r32(b, u + 0x54) & 32 == 0 {
+    while mmio_read32(bus, u + 0x54) & 32 == 0 {
     }
-    return board_w32(b, u + 0x40, c);
+    return mmio_write32(bus, u + 0x40, c);
 }
 
 // The next byte, or -1 when none is waiting.
-fn bus_get[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
+fn bus_get[&mu, &s](bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), k: &!s [int]) -> [mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c")] int {
     let u = k[9];
-    if board_r32(b, u + 0x54) & 1 == 0 {
+    if mmio_read32(bus, u + 0x54) & 1 == 0 {
         return -1;
     }
-    return board_r32(b, u + 0x40) & 255;
+    return mmio_read32(bus, u + 0x40) & 255;
 }
 
 // What `transact` answers besides what `feetech.decode` does.
@@ -256,19 +254,19 @@ fn bus_overflow() -> [] int {
 // request must not be read as this one's. Answers what `feetech.decode` answers (the end
 // of the packet, with `table` filled, or one of its errors), or `bus_timeout`/`bus_overflow`.
 // The same shape as cancho-robot's `serial.transact`, on our own driver.
-fn transact[&f, &s, &p, &r, &t](b: &f Ffi("board"), k: &!s [int], pkt: &p [byte], n: int, reply: &!r [byte], id: int, table: &!t [int], timeout_us: int) -> [ffi("board")] int {
-    while bus_get(b, k) >= 0 {
+fn transact[&f, &mu, &s, &p, &r, &t](b: &f Ffi("board"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), k: &!s [int], pkt: &p [byte], n: int, reply: &!r [byte], id: int, table: &!t [int], timeout_us: int) -> [ffi("board"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c")] int {
+    while bus_get(bus, k) >= 0 {
     }
     var i = 0;
     while i < n {
-        bus_put(b, k, int_of(pkt[i]));
+        bus_put(bus, k, int_of(pkt[i]));
         i = i + 1;
     }
     let start = now_us(b);
     var got = 0;
     var result = feetech.need_more();
     while result == feetech.need_more() {
-        let c = bus_get(b, k);
+        let c = bus_get(bus, k);
         if c >= 0 {
             if got >= len(reply) {
                 result = bus_overflow();
@@ -284,19 +282,19 @@ fn transact[&f, &s, &p, &r, &t](b: &f Ffi("board"), k: &!s [int], pkt: &p [byte]
     return result;
 }
 
-fn put_bus_error[&f, &s](b: &f Ffi("board"), k: &!s [int], code: int) -> [ffi("board")] int {
+fn put_bus_error[&mc, &s](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], code: int) -> [mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
     if code == bus_timeout() {
-        return puts(b, k, "no answer");
+        return puts(con, k, "no answer");
     }
     if code == bus_overflow() {
-        return puts(b, k, "answer too long");
+        return puts(con, k, "answer too long");
     }
-    return puts(b, k, feetech.error_tag(code));
+    return puts(con, k, feetech.error_tag(code));
 }
 
 // `servo scan`: ping ids 1 to 8 and say who answered. Read-only: this kernel builds no
 // packet that can move a servo (src/feetech.cho has none).
-fn servo_scan[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
+fn servo_scan[&f, &mc, &mu, &s](b: &f Ffi("board"), con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), k: &!s [int]) -> [ffi("board"), mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c")] int {
     var found = 0;
     region r {
         let pkt = alloc_slice[r](16, byte_of(0));
@@ -305,26 +303,26 @@ fn servo_scan[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
         var id = 1;
         while id <= 8 {
             let n = feetech.ping(pkt, id);
-            let got = transact(b, k, pkt, n, reply, id, table, 20000);
-            puts(b, k, "servo ");
-            put_dec(b, k, id);
+            let got = transact(b, bus, k, pkt, n, reply, id, table, 20000);
+            puts(con, k, "servo ");
+            put_dec(con, k, id);
             if got > 0 {
-                puts(b, k, ": present\r\n");
+                puts(con, k, ": present\r\n");
                 found = found + 1;
             } else {
-                puts(b, k, ": ");
-                put_bus_error(b, k, got);
-                puts(b, k, "\r\n");
+                puts(con, k, ": ");
+                put_bus_error(con, k, got);
+                puts(con, k, "\r\n");
             }
             id = id + 1;
         }
     }
-    put_dec(b, k, found);
-    return puts(b, k, " servos found\r\n");
+    put_dec(con, k, found);
+    return puts(con, k, " servos found\r\n");
 }
 
 // `servo pos`: the present position (register 56, two bytes) of servos 1 to 6, in raw ticks.
-fn servo_pos[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
+fn servo_pos[&f, &mc, &mu, &s](b: &f Ffi("board"), con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), k: &!s [int]) -> [ffi("board"), mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c")] int {
     region r {
         let pkt = alloc_slice[r](16, byte_of(0));
         let reply = alloc_slice[r](64, byte_of(0));
@@ -332,17 +330,17 @@ fn servo_pos[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
         var id = 1;
         while id <= 6 {
             let n = feetech.read(pkt, id, 56, 2);
-            let got = transact(b, k, pkt, n, reply, id, table, 20000);
-            puts(b, k, "servo ");
-            put_dec(b, k, id);
+            let got = transact(b, bus, k, pkt, n, reply, id, table, 20000);
+            puts(con, k, "servo ");
+            put_dec(con, k, id);
             if got > 0 && table[3] == 2 {
-                puts(b, k, ": position ");
-                put_dec(b, k, feetech.u16(reply, table[2]));
-                puts(b, k, "\r\n");
+                puts(con, k, ": position ");
+                put_dec(con, k, feetech.u16(reply, table[2]));
+                puts(con, k, "\r\n");
             } else {
-                puts(b, k, ": ");
-                put_bus_error(b, k, got);
-                puts(b, k, "\r\n");
+                puts(con, k, ": ");
+                put_bus_error(con, k, got);
+                puts(con, k, "\r\n");
             }
             id = id + 1;
         }
@@ -390,44 +388,44 @@ fn span_max(joint: int) -> [] int {
     return 4095;
 }
 
-fn put_int[&f, &s](b: &f Ffi("board"), k: &!s [int], v: int) -> [ffi("board")] int {
+fn put_int[&mc, &s](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], v: int) -> [mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
     if v < 0 {
-        putc(b, k, 45);
-        return put_dec(b, k, 0 - v);
+        putc(con, k, 45);
+        return put_dec(con, k, 0 - v);
     }
-    return put_dec(b, k, v);
+    return put_dec(con, k, v);
 }
 
 // Where the gripper frame is for five joint angles, in micrometres, in the base's frame.
-fn put_gripper[&f, &s, &d](b: &f Ffi("board"), k: &!s [int], degrees: &d [float]) -> [ffi("board")] int {
+fn put_gripper[&mc, &s, &d](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], degrees: &d [float]) -> [mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
     region r {
         let pose = alloc_slice[r](16, 0.0);
         if kinematics.forward(degrees, pose) != 0 {
-            return puts(b, k, "kinematics refused the angles\r\n");
+            return puts(con, k, "kinematics refused the angles\r\n");
         }
-        puts(b, k, "gripper at x ");
-        put_int(b, k, truncate(pose[3] * 1000000.0));
-        puts(b, k, " y ");
-        put_int(b, k, truncate(pose[7] * 1000000.0));
-        puts(b, k, " z ");
-        put_int(b, k, truncate(pose[11] * 1000000.0));
+        puts(con, k, "gripper at x ");
+        put_int(con, k, truncate(pose[3] * 1000000.0));
+        puts(con, k, " y ");
+        put_int(con, k, truncate(pose[7] * 1000000.0));
+        puts(con, k, " z ");
+        put_int(con, k, truncate(pose[11] * 1000000.0));
     }
-    return puts(b, k, " um\r\n");
+    return puts(con, k, " um\r\n");
 }
 
 // `arm zero`: the pose with every joint at zero. No bus involved: placo puts it at
 // x 0.3913614702201581, y -9.212063114501261e-06, z 0.2264697102403328 metres.
-fn arm_zero[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
+fn arm_zero[&mc, &s](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int]) -> [mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
     region r {
         let degrees = alloc_slice[r](5, 0.0);
-        put_gripper(b, k, degrees);
+        put_gripper(con, k, degrees);
     }
     return 0;
 }
 
 // `arm pose`: read joints 1 to 5 from the bus, turn ticks into degrees, and say where
 // that puts the gripper. Read-only.
-fn arm_pose[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
+fn arm_pose[&f, &mc, &mu, &s](b: &f Ffi("board"), con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), k: &!s [int]) -> [ffi("board"), mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c")] int {
     region r {
         let pkt = alloc_slice[r](16, byte_of(0));
         let reply = alloc_slice[r](64, byte_of(0));
@@ -437,26 +435,26 @@ fn arm_pose[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
         var bad = 0;
         while joint < 5 && bad == 0 {
             let n = feetech.read(pkt, joint + 1, 56, 2);
-            let got = transact(b, k, pkt, n, reply, joint + 1, table, 20000);
+            let got = transact(b, bus, k, pkt, n, reply, joint + 1, table, 20000);
             if got > 0 && table[3] == 2 {
                 degrees[joint] = calibration.degrees(feetech.u16(reply, table[2]), span_min(joint), span_max(joint));
-                puts(b, k, "joint ");
-                put_dec(b, k, joint + 1);
-                puts(b, k, ": ");
-                put_int(b, k, truncate(degrees[joint] * 1000.0));
-                puts(b, k, " mdeg\r\n");
+                puts(con, k, "joint ");
+                put_dec(con, k, joint + 1);
+                puts(con, k, ": ");
+                put_int(con, k, truncate(degrees[joint] * 1000.0));
+                puts(con, k, " mdeg\r\n");
             } else {
-                puts(b, k, "joint ");
-                put_dec(b, k, joint + 1);
-                puts(b, k, ": ");
-                put_bus_error(b, k, got);
-                puts(b, k, "\r\n");
+                puts(con, k, "joint ");
+                put_dec(con, k, joint + 1);
+                puts(con, k, ": ");
+                put_bus_error(con, k, got);
+                puts(con, k, "\r\n");
                 bad = 1;
             }
             joint = joint + 1;
         }
         if bad == 0 {
-            put_gripper(b, k, degrees);
+            put_gripper(con, k, degrees);
         }
     }
     return 0;
@@ -510,7 +508,7 @@ fn numbers[&r, &o](line: &r [byte], from: int, n: int, out: &!o [int]) -> [] int
 }
 
 // Joints 1 to 5 from the bus, in degrees. 0, or the bus error (and which joint in `at`).
-fn read_joints[&f, &s, &d, &a](b: &f Ffi("board"), k: &!s [int], degrees: &!d [float], at: &!a [int]) -> [ffi("board")] int {
+fn read_joints[&f, &mu, &s, &d, &a](b: &f Ffi("board"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), k: &!s [int], degrees: &!d [float], at: &!a [int]) -> [ffi("board"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c")] int {
     var result = 0;
     region r {
         let pkt = alloc_slice[r](16, byte_of(0));
@@ -519,7 +517,7 @@ fn read_joints[&f, &s, &d, &a](b: &f Ffi("board"), k: &!s [int], degrees: &!d [f
         var joint = 0;
         while joint < 5 && result == 0 {
             let n = feetech.read(pkt, joint + 1, 56, 2);
-            let got = transact(b, k, pkt, n, reply, joint + 1, table, 20000);
+            let got = transact(b, bus, k, pkt, n, reply, joint + 1, table, 20000);
             if got > 0 && table[3] == 2 {
                 degrees[joint] = calibration.degrees(feetech.u16(reply, table[2]), span_min(joint), span_max(joint));
             } else {
@@ -535,21 +533,21 @@ fn read_joints[&f, &s, &d, &a](b: &f Ffi("board"), k: &!s [int], degrees: &!d [f
     return result;
 }
 
-fn arm_check[&f, &s, &l](b: &f Ffi("board"), k: &!s [int], line: &l [byte], from: int, n: int) -> [ffi("board")] int {
+fn arm_check[&f, &mc, &mu, &s, &l](b: &f Ffi("board"), con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), k: &!s [int], line: &l [byte], from: int, n: int) -> [ffi("board"), mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c")] int {
     region r {
         let wanted = alloc_slice[r](5, 0);
         if numbers(line, from, n, wanted) != 5 {
-            return puts(b, k, "usage: arm check a1 a2 a3 a4 a5 (whole degrees)\r\n");
+            return puts(con, k, "usage: arm check a1 a2 a3 a4 a5 (whole degrees)\r\n");
         }
         let current = alloc_slice[r](5, 0.0);
         let at = alloc_slice[r](1, 0);
-        let read = read_joints(b, k, current, at);
+        let read = read_joints(b, bus, k, current, at);
         if read != 0 {
-            puts(b, k, "joint ");
-            put_dec(b, k, at[0] + 1);
-            puts(b, k, ": ");
-            put_bus_error(b, k, read);
-            return puts(b, k, "\r\n");
+            puts(con, k, "joint ");
+            put_dec(con, k, at[0] + 1);
+            puts(con, k, ": ");
+            put_bus_error(con, k, read);
+            return puts(con, k, "\r\n");
         }
         let request = alloc_slice[r](5, 0.0);
         let limits = alloc_slice[r](10, 0.0);
@@ -571,32 +569,32 @@ fn arm_check[&f, &s, &l](b: &f Ffi("board"), k: &!s [int], line: &l [byte], from
             rule = safety.approve(request, current, limits, m, other, 0, 10, goals, scale, joint);
         }
         if rule == safety.rule_ok() {
-            puts(b, k, "approved");
+            puts(con, k, "approved");
             if scale[0] < 1.0 {
-                puts(b, k, ", slowed to ");
-                put_int(b, k, truncate(scale[0] * 1000.0));
-                puts(b, k, " per mille of the step");
+                puts(con, k, ", slowed to ");
+                put_int(con, k, truncate(scale[0] * 1000.0));
+                puts(con, k, " per mille of the step");
             }
-            puts(b, k, "\r\ngoals:");
+            puts(con, k, "\r\ngoals:");
             j = 0;
             while j < 5 {
-                puts(b, k, " ");
-                put_int(b, k, truncate(goals[j] * 1000.0));
+                puts(con, k, " ");
+                put_int(con, k, truncate(goals[j] * 1000.0));
                 j = j + 1;
             }
-            puts(b, k, " mdeg\r\n");
+            puts(con, k, " mdeg\r\n");
         } else {
-            puts(b, k, "refused: ");
-            puts(b, k, safety.rule_name(rule));
+            puts(con, k, "refused: ");
+            puts(con, k, safety.rule_name(rule));
             if joint[0] >= 0 {
-                puts(b, k, " (joint ");
-                put_dec(b, k, joint[0] + 1);
-                puts(b, k, ")");
+                puts(con, k, " (joint ");
+                put_dec(con, k, joint[0] + 1);
+                puts(con, k, ")");
             }
-            puts(b, k, "\r\n");
+            puts(con, k, "\r\n");
         }
     }
-    return puts(b, k, "nothing was sent\r\n");
+    return puts(con, k, "nothing was sent\r\n");
 }
 
 // ---- memory: identity-mapped translation tables ---------------------------------
@@ -625,8 +623,8 @@ fn attrs(perm: int) -> [] int {
 
 // The table a descriptor slot points to, made if the slot is empty. 0: none left,
 // or the slot already maps a block.
-fn next_table[&f, &s](b: &f Ffi("board"), k: &!s [int], slot: int) -> [ffi("board")] int {
-    let d = board_r64(b, slot);
+fn next_table[&f, &mt, &s](b: &f Ffi("board"), tab: &!mt Mmio("0x200000..0x208000"), k: &!s [int], slot: int) -> [ffi("board"), mmio("0x200000..0x208000")] int {
+    let d = mmio_read64(tab, slot);
     if d & 1 != 0 {
         if d & 2 == 0 {
             return 0;
@@ -638,13 +636,13 @@ fn next_table[&f, &s](b: &f Ffi("board"), k: &!s [int], slot: int) -> [ffi("boar
     }
     let table = board_info(b, 3) + k[6] * 4096;
     k[6] = k[6] + 1;
-    board_w64(b, slot, table | 3);
+    mmio_write64(tab, slot, table | 3);
     return table;
 }
 
 // Identity-map [start, end) with one permission: 1 GB and 2 MB blocks where the
 // range allows, 4 KB pages elsewhere. 0, or 1 when it cannot be done.
-fn map[&f, &s](b: &f Ffi("board"), k: &!s [int], start: int, end: int, perm: int) -> [ffi("board")] int {
+fn map[&f, &mt, &s](b: &f Ffi("board"), tab: &!mt Mmio("0x200000..0x208000"), k: &!s [int], start: int, end: int, perm: int) -> [ffi("board"), mmio("0x200000..0x208000")] int {
     if (start | end) & 0xfff != 0 || start > end || end > 1 << 39 {
         return 1;
     }
@@ -654,24 +652,24 @@ fn map[&f, &s](b: &f Ffi("board"), k: &!s [int], start: int, end: int, perm: int
     var bad = 0;
     while va < end && bad == 0 {
         let l1 = top + (va >> 30) * 8;
-        if va & 0x3fffffff == 0 && end - va >= 1 << 30 && board_r64(b, l1) & 1 == 0 {
-            board_w64(b, l1, va | a | 1);
+        if va & 0x3fffffff == 0 && end - va >= 1 << 30 && mmio_read64(tab, l1) & 1 == 0 {
+            mmio_write64(tab, l1, va | a | 1);
             va = va + (1 << 30);
         } else {
-            let l2t = next_table(b, k, l1);
+            let l2t = next_table(b, tab, k, l1);
             if l2t == 0 {
                 bad = 1;
             } else {
                 let l2 = l2t + (va >> 21 & 511) * 8;
-                if va & 0x1fffff == 0 && end - va >= 1 << 21 && board_r64(b, l2) & 1 == 0 {
-                    board_w64(b, l2, va | a | 1);
+                if va & 0x1fffff == 0 && end - va >= 1 << 21 && mmio_read64(tab, l2) & 1 == 0 {
+                    mmio_write64(tab, l2, va | a | 1);
                     va = va + (1 << 21);
                 } else {
-                    let l3t = next_table(b, k, l2);
+                    let l3t = next_table(b, tab, k, l2);
                     if l3t == 0 {
                         bad = 1;
                     } else {
-                        board_w64(b, l3t + (va >> 12 & 511) * 8, va | a | 3);
+                        mmio_write64(tab, l3t + (va >> 12 & 511) * 8, va | a | 3);
                         va = va + 4096;
                     }
                 }
@@ -682,40 +680,40 @@ fn map[&f, &s](b: &f Ffi("board"), k: &!s [int], start: int, end: int, perm: int
 }
 
 // One line of the memory map: map the range (when `apply`) or print it.
-fn range[&f, &s, &r](b: &f Ffi("board"), k: &!s [int], apply: bool, name: &r [byte], start: int, end: int, perm: int) -> [ffi("board")] int {
+fn range[&f, &mc, &mt, &s, &r](b: &f Ffi("board"), con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), tab: &!mt Mmio("0x200000..0x208000"), k: &!s [int], apply: bool, name: &r [byte], start: int, end: int, perm: int) -> [ffi("board"), mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x200000..0x208000")] int {
     if apply {
-        return map(b, k, start, end, perm);
+        return map(b, tab, k, start, end, perm);
     }
-    puts(b, k, "  0x");
-    put_hex(b, k, start);
-    puts(b, k, " - 0x");
-    put_hex(b, k, end);
+    puts(con, k, "  0x");
+    put_hex(con, k, start);
+    puts(con, k, " - 0x");
+    put_hex(con, k, end);
     if perm == 0 {
-        puts(b, k, "  r-x  ");
+        puts(con, k, "  r-x  ");
     } else if perm == 1 {
-        puts(b, k, "  r--  ");
+        puts(con, k, "  r--  ");
     } else if perm == 2 {
-        puts(b, k, "  rw-  ");
+        puts(con, k, "  rw-  ");
     } else {
-        puts(b, k, "  rw- device  ");
+        puts(con, k, "  rw- device  ");
     }
-    puts(b, k, name);
-    puts(b, k, "\r\n");
+    puts(con, k, name);
+    puts(con, k, "\r\n");
     return 0;
 }
 
 // The whole address space the kernel may touch. Everything else, page 0 included,
 // is unmapped: a null dereference is a fault, not a read of whatever is there.
-fn memory_map[&f, &s](b: &f Ffi("board"), k: &!s [int], apply: bool) -> [ffi("board")] int {
+fn memory_map[&f, &mc, &mt, &s](b: &f Ffi("board"), con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), tab: &!mt Mmio("0x200000..0x208000"), k: &!s [int], apply: bool) -> [ffi("board"), mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x200000..0x208000")] int {
     let image = board_info(b, 0);
     let code_end = board_info(b, 1);
     let const_end = board_info(b, 2);
-    var bad = range(b, k, apply, "stack", 4096, image, 2);
-    bad = bad + range(b, k, apply, "kernel code", image, code_end, 0);
-    bad = bad + range(b, k, apply, "kernel constants", code_end, const_end, 1);
+    var bad = range(b, con, tab, k, apply, "stack", 4096, image, 2);
+    bad = bad + range(b, con, tab, k, apply, "kernel code", image, code_end, 0);
+    bad = bad + range(b, con, tab, k, apply, "kernel constants", code_end, const_end, 1);
     // the first 960 MB: present on every board, below the GPU's share
-    bad = bad + range(b, k, apply, "kernel data and heap", const_end, 0x3c000000, 2);
-    bad = bad + range(b, k, apply, "peripherals", k[7], k[8], 3);
+    bad = bad + range(b, con, tab, k, apply, "kernel data and heap", const_end, 0x3c000000, 2);
+    bad = bad + range(b, con, tab, k, apply, "peripherals", k[7], k[8], 3);
     return bad;
 }
 
@@ -734,50 +732,55 @@ fn mmu_on[&f](b: &f Ffi("board")) -> [ffi("board")] int {
 
 // ---- faults -------------------------------------------------------------------
 // board/boot.S records an exception and calls main again; this is what main does then.
-fn report_fault[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
+fn report_fault[&f, &mc, &mx, &s](b: &f Ffi("board"), con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), code: &mx Mmio("0x80001..0x200000"), k: &!s [int]) -> [ffi("board"), mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x80001..0x200000")] int {
     let kind = board_info(b, 5);
     let esr = board_info(b, 6);
     let elr = board_info(b, 7);
     let class = esr >> 26 & 63;
     let sync = kind & 3 == 0;
-    puts(b, k, "\r\n*** ");
-    if sync && class == 0 && board_r32(b, elr) == 0xc11f {
+    puts(con, k, "\r\n*** ");
+    // (only an address inside the image is read: a jump into nowhere must not fault again here)
+    var stopped_at = 0;
+    if elr >= 0x80004 && elr < 0x200000 - 3 && elr & 3 == 0 {
+        stopped_at = mmio_read32(code, elr);
+    }
+    if sync && class == 0 && stopped_at == 0xc11f {
         // cancho's own checks (bounds, overflow, ...) end in `udf #0xc11f`
-        puts(b, k, "cancho trap");
+        puts(con, k, "cancho trap");
     } else if sync && (class == 0x25 || class == 0x21) {
         if class == 0x25 {
-            puts(b, k, "data abort: ");
+            puts(con, k, "data abort: ");
         } else {
-            puts(b, k, "instruction abort: ");
+            puts(con, k, "instruction abort: ");
         }
         let why = esr >> 2 & 15;
         if why == 1 {
-            puts(b, k, "address not mapped");
+            puts(con, k, "address not mapped");
         } else if why == 3 && class == 0x25 && esr & 64 != 0 {
-            puts(b, k, "write to read-only memory");
+            puts(con, k, "write to read-only memory");
         } else if why == 3 {
-            puts(b, k, "permission denied");
+            puts(con, k, "permission denied");
         } else {
-            puts(b, k, "other");
+            puts(con, k, "other");
         }
     } else if sync {
-        puts(b, k, "synchronous exception");
+        puts(con, k, "synchronous exception");
     } else if kind & 3 == 1 {
-        puts(b, k, "unexpected irq");
+        puts(con, k, "unexpected irq");
     } else if kind & 3 == 2 {
-        puts(b, k, "unexpected fiq");
+        puts(con, k, "unexpected fiq");
     } else {
-        puts(b, k, "serror");
+        puts(con, k, "serror");
     }
-    puts(b, k, " (vector ");
-    put_dec(b, k, kind);
-    puts(b, k, ")\r\n    esr ");
-    put_reg(b, k, esr);
-    puts(b, k, "\r\n    elr ");
-    put_reg(b, k, elr);
-    puts(b, k, "\r\n    far ");
-    put_reg(b, k, board_info(b, 8));
-    return puts(b, k, "\r\nhalted.\r\n");
+    puts(con, k, " (vector ");
+    put_dec(con, k, kind);
+    puts(con, k, ")\r\n    esr ");
+    put_reg(con, k, esr);
+    puts(con, k, "\r\n    elr ");
+    put_reg(con, k, elr);
+    puts(con, k, "\r\n    far ");
+    put_reg(con, k, board_info(b, 8));
+    return puts(con, k, "\r\nhalted.\r\n");
 }
 
 // ---- shell --------------------------------------------------------------------
@@ -795,91 +798,91 @@ fn same[&r, &s](line: &r [byte], n: int, word: &s [byte]) -> [] bool {
     return true;
 }
 
-fn run[&f, &s, &r](b: &f Ffi("board"), k: &!s [int], line: &r [byte], n: int) -> [ffi("board")] int {
+fn run[&f, &mc, &mu, &mt, &mz, &s, &r](b: &f Ffi("board"), con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), tab: &!mt Mmio("0x200000..0x208000"), probe: &!mz Mmio("0x0..0x1,0x80000..0x80001"), k: &!s [int], line: &r [byte], n: int) -> [ffi("board"), mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x200000..0x208000"), mmio("0x0..0x1,0x80000..0x80001")] int {
     if n == 0 {
         return 0;
     }
     if same(line, n, "help") {
-        puts(b, k, "commands: help, about, echo <text>, uptime, ticks, mem, servo scan, servo pos, arm zero, arm pose, arm check <5 angles>, crash [null|write]\r\n");
+        puts(con, k, "commands: help, about, echo <text>, uptime, ticks, mem, servo scan, servo pos, arm zero, arm pose, arm check <5 angles>, crash [null|write]\r\n");
     } else if same(line, n, "about") {
-        puts(b, k, "cancho-os 0.0.7: a kernel written in cancho, no Linux underneath (Raspberry Pi ");
-        put_dec(b, k, k[1]);
-        puts(b, k, ")\r\n");
+        puts(con, k, "cancho-os 0.0.8: a kernel written in cancho, no Linux underneath (Raspberry Pi ");
+        put_dec(con, k, k[1]);
+        puts(con, k, ")\r\n");
     } else if n > 5 && same(line, 5, "echo ") {
         var i = 5;
         while i < n {
-            putc(b, k, int_of(line[i]));
+            putc(con, k, int_of(line[i]));
             i = i + 1;
         }
-        puts(b, k, "\r\n");
+        puts(con, k, "\r\n");
     } else if same(line, n, "uptime") {
         let ms = uptime_ms(b);
-        put_dec(b, k, ms / 1000);
-        puts(b, k, ".");
-        put_dec(b, k, ms % 1000 / 100);
-        put_dec(b, k, ms % 100 / 10);
-        put_dec(b, k, ms % 10);
-        puts(b, k, " s\r\n");
+        put_dec(con, k, ms / 1000);
+        puts(con, k, ".");
+        put_dec(con, k, ms % 1000 / 100);
+        put_dec(con, k, ms % 100 / 10);
+        put_dec(con, k, ms % 10);
+        puts(con, k, " s\r\n");
     } else if same(line, n, "ticks") {
-        put_dec(b, k, k[5]);
-        puts(b, k, " timer interrupts\r\n");
+        put_dec(con, k, k[5]);
+        puts(con, k, " timer interrupts\r\n");
     } else if same(line, n, "mem") {
-        memory_map(b, k, false);
+        memory_map(b, con, tab, k, false);
     } else if same(line, n, "servo scan") {
-        servo_scan(b, k);
+        servo_scan(b, con, bus, k);
     } else if same(line, n, "servo pos") {
-        servo_pos(b, k);
+        servo_pos(b, con, bus, k);
     } else if same(line, n, "arm zero") {
-        arm_zero(b, k);
+        arm_zero(con, k);
     } else if same(line, n, "arm pose") {
-        arm_pose(b, k);
+        arm_pose(b, con, bus, k);
     } else if n > 10 && same(line, 10, "arm check ") {
-        arm_check(b, k, line, 10, n);
+        arm_check(b, con, bus, k, line, 10, n);
     } else if same(line, n, "crash null") {
         // page 0 is not mapped
-        board_r8(b, 0);
+        mmio_read8(probe, 0);
     } else if same(line, n, "crash write") {
         // the kernel's own code is mapped read+execute
-        board_w8(b, board_info(b, 0), 0);
+        mmio_write8(probe, board_info(b, 0), 0);
     } else if same(line, n, "crash") {
         // Read past the end of the line buffer: cancho's bounds check traps, and
         // the exception vector reports it instead of the machine hanging silently.
-        putc(b, k, int_of(line[n + 4096]));
+        putc(con, k, int_of(line[n + 4096]));
     } else {
-        puts(b, k, "unknown command\r\n");
+        puts(con, k, "unknown command\r\n");
     }
     return 0;
 }
 
-fn shell[&f, &s](b: &f Ffi("board"), k: &!s [int]) -> [ffi("board")] int {
-    puts(b, k, "\r\ncancho-os booted. type `help`.\r\n");
+fn shell[&f, &mc, &mi, &mu, &mt, &mz, &s](b: &f Ffi("board"), con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), irq: &!mi Mmio("0x40000040..0x40000064,0xff841000..0xff842014"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), tab: &!mt Mmio("0x200000..0x208000"), probe: &!mz Mmio("0x0..0x1,0x80000..0x80001"), k: &!s [int]) -> [ffi("board"), mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x40000040..0x40000064,0xff841000..0xff842014"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x200000..0x208000"), mmio("0x0..0x1,0x80000..0x80001")] int {
+    puts(con, k, "\r\ncancho-os booted. type `help`.\r\n");
     region r {
         let line = alloc_slice[r](128, byte_of(0));
         var n = 0;
-        puts(b, k, "> ");
+        puts(con, k, "> ");
         while true {
-            let c = getc(b, k);
+            let c = getc(b, con, irq, k);
             if c == 13 || c == 10 {
-                puts(b, k, "\r\n");
-                run(b, k, line, n);
+                puts(con, k, "\r\n");
+                run(b, con, bus, tab, probe, k, line, n);
                 n = 0;
-                puts(b, k, "> ");
+                puts(con, k, "> ");
             } else if (c == 127 || c == 8) && n > 0 {
                 n = n - 1;
-                putc(b, k, 8);
-                putc(b, k, 32);
-                putc(b, k, 8);
+                putc(con, k, 8);
+                putc(con, k, 32);
+                putc(con, k, 8);
             } else if c >= 32 && c < 127 && n < 128 {
                 line[n] = byte_of(c);
                 n = n + 1;
-                putc(b, k, c);
+                putc(con, k, c);
             }
         }
     }
     return 0;
 }
 
-fn kernel[&f](b: &f Ffi("board")) -> [ffi("board")] int {
+fn kernel[&f, &mc, &mp, &mi, &mu, &mt, &mx, &mz](b: &f Ffi("board"), con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), pins: &!mp Mmio("0x3f200004..0x3f200008,0xfe200004..0xfe200008"), irq: &!mi Mmio("0x40000040..0x40000064,0xff841000..0xff842014"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), tab: &!mt Mmio("0x200000..0x208000"), code: &mx Mmio("0x80001..0x200000"), probe: &!mz Mmio("0x0..0x1,0x80000..0x80001")) -> [ffi("board"), mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f200004..0x3f200008,0xfe200004..0xfe200008"), mmio("0x40000040..0x40000064,0xff841000..0xff842014"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x200000..0x208000"), mmio("0x80001..0x200000"), mmio("0x0..0x1,0x80000..0x80001")] int {
     region r {
         let k = alloc_slice[r](16, 0);
         if detect(b, k) == 0 {
@@ -888,36 +891,71 @@ fn kernel[&f](b: &f Ffi("board")) -> [ffi("board")] int {
         }
         if board_info(b, 5) >= 0 {
             // entered again by the exception vector: say what happened, and stop
-            return report_fault(b, k);
+            return report_fault(b, con, code, k);
         }
-        uart_init(b, k);
-        // table 0 of the pool is the top-level table
+        uart_init(con, pins, k);
+        // The tables start empty; table 0 of the pool is the top-level table.
+        var slot = 0;
+        while slot < board_info(b, 4) * 512 {
+            mmio_write64(tab, board_info(b, 3) + slot * 8, 0);
+            slot = slot + 1;
+        }
         k[6] = 1;
-        if memory_map(b, k, true) != 0 {
-            puts(b, k, "\r\nmemory map refused; running without the MMU\r\n");
+        if memory_map(b, con, tab, k, true) != 0 {
+            puts(con, k, "\r\nmemory map refused; running without the MMU\r\n");
         } else {
             mmu_on(b);
         }
-        tick_start(b, k, 100);
-        bus_init(b, k);
-        shell(b, k);
+        tick_start(b, irq, k, 100);
+        bus_init(bus, k);
+        shell(b, con, irq, bus, tab, probe, k);
     }
     return 0;
 }
 
 fn main(world: World) -> [] int {
-    let Split { io, ffi, fs, heap, args, net, clock } = split(world);
+    let Split { io, ffi, fs, heap, args, out, ports, clock, signals, exec, tty, camera, mic, speaker, mmio } = split(world);
     release(io);
     release(fs);
     release(heap);
     release(args);
-    release(net);
+    release(out);
+    release(ports);
     release(clock);
+    release(signals);
+    release(exec);
+    release(tty);
+    release(camera);
+    release(mic);
+    release(speaker);
     let board = narrow(ffi, "board");
+    // Every address, cut into what each driver holds. No two share one.
+    let (con, pins, irq, bus, tab, code, probe) = narrow(mmio, "0x3f201000..0x3f201048,0xfe201000..0xfe201048", "0x3f200004..0x3f200008,0xfe200004..0xfe200008", "0x40000040..0x40000064,0xff841000..0xff842014", "0x3f215004..0x3f21506c,0xfe215004..0xfe21506c", "0x200000..0x208000", "0x80001..0x200000", "0x0..0x1,0x80000..0x80001");
     var status = 0;
     borrow board as &b in {
-        status = kernel(b);
+        borrow mut con as &!c in {
+            borrow mut pins as &!p in {
+                borrow mut irq as &!i in {
+                    borrow mut bus as &!u in {
+                        borrow mut tab as &!t in {
+                            borrow code as &x in {
+                                borrow mut probe as &!z in {
+                                    status = kernel(b, c, p, i, u, t, x, z);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
     release(board);
+    release(con);
+    release(pins);
+    release(irq);
+    release(bus);
+    release(tab);
+    release(code);
+    release(probe);
     return status;
 }
