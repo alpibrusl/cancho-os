@@ -121,20 +121,52 @@ table and the four `bus_` functions (a PL011 behind the RP1 chip instead of the 
 UART); the protocol, and everything built on it, does not. Not verified in QEMU: timing at
 1 Mbaud, half-duplex behaviour, RP1.
 
-## Real Pi 4
+## On a real Pi 4
 
-SD card, FAT32, with `start4.elf` and `fixup4.dat` from
-https://github.com/raspberrypi/firmware/tree/master/boot, plus `kernel8.img` and this `config.txt`:
+**Not tried yet.** Every claim in this file was measured in QEMU. The steps below are what
+should boot it on a board; if you run them, what the serial console prints (or does not) is
+worth an issue.
 
-```
-arm_64bit=1
-kernel=kernel8.img
-enable_uart=1
-dtoverlay=disable-bt
-```
+You need a Raspberry Pi 4, a microSD card and a USB-serial cable with **3.3 V** levels (a
+5 V one damages the pins).
 
-`disable-bt` puts the PL011 on GPIO14/15. USB-serial cable (3.3 V!): GND→pin 6,
-RX→pin 8 (GPIO14, TXD), TX→pin 10 (GPIO15, RXD). Then `picocom -b 115200 /dev/ttyUSB0`.
+1. **Build the image** (above): `./build.sh` writes `build/kernel8.img`, about 64 KB.
+2. **Put the firmware on the card.** The Pi's own firmware loads the kernel; it is not part
+   of this repository. Either flash Raspberry Pi OS Lite with Raspberry Pi Imager, which
+   leaves the firmware on the card's FAT partition (`bootfs`), or format the card FAT32 and
+   copy `start4.elf` and `fixup4.dat` from
+   https://github.com/raspberrypi/firmware/tree/master/boot.
+3. **Copy two files** to that partition, replacing what is there: `build/kernel8.img` and
+   `board/config.txt`. On a Mac with the card mounted as `bootfs`:
+
+   ```
+   cp build/kernel8.img board/config.txt /Volumes/bootfs/ && diskutil eject /Volumes/bootfs
+   ```
+
+   `config.txt` is four lines: 64-bit, this kernel, the UART on, and `disable-bt`, which
+   puts the PL011 on GPIO14/15 instead of the Bluetooth chip.
+4. **Wire the cable** to the 40-pin header: GND to pin 6, the cable's RX to pin 8 (GPIO14,
+   the Pi's TXD), the cable's TX to pin 10 (GPIO15, the Pi's RXD). Leave the cable's power
+   wire unconnected.
+5. **Open the console, then power the Pi.** 115200 baud, 8N1:
+
+   ```
+   screen /dev/cu.usbserial-XXXX 115200      # macOS; the name depends on the cable
+   picocom -b 115200 /dev/ttyUSB0            # Linux
+   ```
+
+   It should print ``cancho-os booted. type `help`.``, and `about` should say `(Raspberry Pi 4)`.
+   Then `ticks`, `uptime`, `crash null`.
+
+What QEMU does not model, so where a real board may differ:
+
+- **The data cache.** The kernel turns it on with the MMU and does not invalidate it first.
+  QEMU has no cache. A hang right after boot points here.
+- **The UART clock.** The divisor is for 48 MHz, the Pi 4's default. Garbage on the console
+  points here (`init_uart_clock=48000000` in `config.txt` pins it).
+- **The servo bus does not work on a Pi 4 header yet.** It is the mini UART, whose only
+  header pins are the two the console uses. It has to move to another PL011 (UART3, on
+  GPIO4/5) before a real arm can be read.
 
 ## How it is built, and what is left to remove
 
