@@ -34,7 +34,10 @@ At the commit that adds this file. `inet` still holds no capability; `./authorit
 | `MACHINE=virt ./test.sh 'net up' 'net dhcp' net` | QEMU's own DHCP server (libslirp) | "address 10.0.0.15, mask 255.255.255.0, gateway 10.0.0.1, names from 10.0.0.3", lent for 86,400 s |
 | `... 'lookup example.com'` | QEMU's name server, which asks the host's | "example.com is 104.20.23.154" on this machine, 2026-11-26; "no such name" for a name under `.invalid` |
 | `... 'http example.com 80'` | the real internet: the name looked up, the connection through the gateway | "HTTP/1.1 200 OK" and example.com's page, 888 bytes printed in the five seconds |
-| `sudo MACHINE=virt ./ping.sh` (Linux, CI) | dnsmasq as DHCP and name server on a second network of the tap interface | DNSMASQ_ROW |
+| `sudo MACHINE=virt ./ping.sh` (Linux, CI) | dnsmasq as DHCP and name server on a second network of the tap interface | dnsmasq's own log: DISCOVER, OFFER 172.31.77.58, REQUEST, ACK; then the kernel says "address 172.31.77.58, mask 255.255.255.0, gateway 172.31.77.1", "www.cancho-os.test is 172.31.77.1", "no such name: nothing.cancho-os.test", fetches the page by name, and pings 10.0.0.1, now outside its network, through the gateway |
+
+In that run dnsmasq logged two DISCOVERs: it tests an address before offering it, which took longer
+than the two seconds the kernel waits, and the second try was answered at once.
 
 The first try at example.com got "403 Forbidden": the request named no host, and the server answers for
 many. The request now carries a `Host` line with the name as it was typed.
