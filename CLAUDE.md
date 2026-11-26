@@ -86,6 +86,8 @@ Rules of the road
 - Randomness (docs/random.md): `rng_word` reads the generator, the pool at k[4136..] is what other code takes
   from. QEMU's raspi4b has no RNG200 and reading 0xfe104000 there faults: do not add the Pi 4 driver without
   a real board to try it on. Never print or reuse a word taken from the pool.
+- `restart` (docs/restart.md) holds the `pm` capability, the watchdog's two registers; no other function may.
+  It is due 50 ticks after it is asked (k[4261]; `getc` answers -6), so that what was said has left.
 - All shell output goes through `putc`: never write to the UART elsewhere. Over SSH it is queued in `k`.
 - `put` (docs/update.md): `sshd.step` answers 4 with file bytes in `rline` while k[4258] > 0; the kernel moves
   them to the staging memory and `disk.store` writes them. The hash is checked twice (what came, what the disk

@@ -295,7 +295,8 @@ has a line in `LOG.TXT` that says who made it, each line chained to the one befo
 checks the chain; so does `tests/checklog.py`, with Python alone). Only `purge <number>`, at the serial
 console, gives a version up. Short names only. A whole file, a new kernel among them, comes in over
 SSH with `board/put.sh` ([docs/update.md](docs/update.md)): it is kept only if the bytes that came and
-the bytes the disk gives back have the SHA-256 the sender gave.
+the bytes the disk gives back have the SHA-256 the sender gave. `restart` then starts the board again
+from the card ([docs/restart.md](docs/restart.md)).
 
 ```
 MACHINE=virt DISK=some-fat.img ./test.sh disk ls 'sum KERNEL8.IMG'

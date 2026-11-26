@@ -236,6 +236,22 @@ jobs:
           mcopy -i u.img ::OLD/00000001.V first.out && cmp first.out build/kernel8.img
           if mdir -i u.img :: | grep -q '^X '; then exit 1; fi
           python3 tests/checklog.py uout/LOG.TXT uout
+      - name: restart
+        # docs/restart.md. As a Pi 3 the board must start a second time and answer; with a card, the record
+        # must have the line; on virt, which has no such watchdog, the command must say so.
+        run: |
+          ./test.sh about restart about 'echo after' > restart.txt; cat restart.txt
+          test "$(grep -c "^cancho-os booted" restart.txt)" = 2
+          test "$(grep -c "a kernel written in cancho" restart.txt)" = 2
+          grep -q "^after" restart.txt
+          cp fat16.img r-sd.img
+          SD=r-sd.img ./test.sh 'write A.TXT x' restart record > restart-sd.txt; cat restart-sd.txt
+          grep -q "^the record: 2 lines, each following from the one before" restart-sd.txt
+          mcopy -i r-sd.img ::LOG.TXT rlog.out && python3 tests/checklog.py rlog.out > rlog.txt; cat rlog.txt
+          grep -q "^2 [0-9]* console console restart board " rlog.txt
+          MACHINE=virt ./test.sh restart about > restart-virt.txt; cat restart-virt.txt
+          grep -q "^restart is a Pi 3's and a Pi 4's" restart-virt.txt
+          test "$(grep -c "^cancho-os booted" restart-virt.txt)" = 1
       - name: who may log in, and the host key kept
         # docs/permissions.md, slice 2, with OpenSSH's own client and three keys made here. The owner's is
         # built into the image; the reader's is put in KEYS.TXT at the console; the third is in neither.

@@ -66,6 +66,8 @@
   for a wider one (cancho `docs/mmio.md` 3), not fixed yet.
 - `load` (docs/load.md): a kernel sent over the serial console replaces the running one. A tool for bringing up
   hardware on the real boards without moving the SD card for every build; `board/send.py` is the sender.
+- `restart` (2026-11-26, docs/restart.md): the board started again through its watchdog; with `put`, an update
+  with nobody at the board. No fallback from a kernel that does not boot.
 - Update over SSH (2026-11-26, docs/update.md): `put` keeps a file sent over SSH only with the SHA-256 it was
   told, checked on arrival and again read back from the disk; the firmware's files are changed no other way
   over SSH. The open shell on port 23 is removed. Next: keys and grants for agents, with cancho-tools as what
