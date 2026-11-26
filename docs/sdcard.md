@@ -69,14 +69,22 @@ On the real Pi 4 (4 GB), with the card it boots from, a 128 GB card whose first 
 | `sum START4.ELF` (2,228,800 bytes) over SSH | 4.0 s: about 550 KB a second |
 | `copy START4.ELF S4COPY.ELF` | 18.9 s, about 118 KB a second; the copy has the original's checksum |
 
+## Judged by another system
+
+The card was then moved to a Pi 5 running Linux, which had no part in writing it:
+
+| what | result |
+|---|---|
+| `fsck.fat -n` (dosfstools 4.2) | "347 files, 104982/516190 clusters"; nothing wrong with the table or the directories. It reports the volume's "not properly unmounted" flag, which Linux had already reported for this card before the kernel first wrote to it |
+| the three small files and the version, read by Linux | the text the kernel wrote |
+| `cmp` of the 2.2 MB copy with the file it was copied from | the same, byte for byte |
+| `tests/checklog.py` on `LOG.TXT`, with the files beside it | 5 lines, each following; the three files hold what their lines say |
+
 ## What was not done
 
-- **No other system has checked the real card yet.** Everything in the table was read back by the kernel
-  that wrote it. `fsck.fat` on another machine is the judge `permissions.md` asks for, and that needs the
-  card moved. In QEMU the same code's writes were judged by macOS's checker.
 - **No power cycle.** The restart was a kernel loaded over the serial console. The board has not been
   turned off and on with the new files on its card.
-- **The kernel on the card is still an old one.** There is no command that writes a kernel to the card.
+- **No command writes a kernel to the card.** The kernel the board boots from was put there by another machine.
 - **One card.** Cards differ, above all in how long they take to become ready and to store a block.
 - **It is slow**, by choice: one data line and one block a command. Four lines and many blocks a command
   would be several times faster, and are not built.
