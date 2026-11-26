@@ -5,6 +5,8 @@ import calibration;
 import kinematics;
 import safety;
 import inet;
+import base;
+import network;
 
 // cancho-os: the kernel. Every driver here is cancho. A register is reached through
 // an `Mmio`, a capability whose type names the addresses it holds: `main` is given
@@ -40,6 +42,7 @@ import inet;
 //   the shell over a connection: k[26] `putc` writes to it, not the serial port   k[27] bytes waiting to go there, at k[40..]
 //   k[28] bytes of a telnet option still to skip   k[29] its connection, plus one (0: none)   k[30] its port (0: closed)
 //   randomness: k[34] the generator (0 none, 1 virtio-rng, 3 the Pi 3's)   k[35] its registers   k[36] its queue's counter
+//   k[4154] our address   k[4155] the mask of our network   k[4156] the gateway   k[4157] the name server (0: none)   k[4158] the lease, s
 //   k[39] a command is waiting on the network (the shell's connection is not read)   k[4152] `exit` was typed over the connection
 //   k[37] words ready, at k[4136..]   k[38] words used to begin connections
 //   k[31] the length of the line typed there   k[32] its last byte was a carriage return   k[33] bytes printed and not kept
@@ -100,59 +103,17 @@ fn uart_init[&mc, &mp, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f
     return mmio_write32(con, uart + 0x30, 1 | 1 << 8 | 1 << 9);
 }
 
-fn putc[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], c: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
-    if k[26] != 0 {
-        // a line from the network is being run: what it prints waits here for the connection
-        if k[27] < 4096 {
-            k[40 + k[27]] = c;
-            k[27] = k[27] + 1;
-        } else {
-            k[33] = k[33] + 1;
-        }
-        return 0;
-    }
-    let uart = k[0];
-    while mmio_read32(con, uart + 0x18) & 32 != 0 {
-    }
-    return mmio_write32(con, uart, c);
-}
 
-fn puts[&mc, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], s: &r [byte]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
-    var i = 0;
-    while i < len(s) {
-        putc(con, k, int_of(s[i]));
-        i = i + 1;
-    }
-    return 0;
-}
 
-fn put_dec[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], v: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
-    if v >= 10 {
-        put_dec(con, k, v / 10);
-    }
-    return putc(con, k, 48 + v % 10);
-}
 
-fn put_digit[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], d: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
-    if d < 10 {
-        return putc(con, k, 48 + d);
-    }
-    return putc(con, k, 87 + d);
-}
 
-fn put_hex[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], v: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
-    if v >= 16 {
-        put_hex(con, k, v >> 4);
-    }
-    return put_digit(con, k, v & 15);
-}
 
 // All sixteen digits, for a register.
 fn put_reg[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], v: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
-    puts(con, k, "0x");
+    base.puts(con, k, "0x");
     var shift = 60;
     while shift >= 0 {
-        put_digit(con, k, v >> shift & 15);
+        base.put_digit(con, k, v >> shift & 15);
         shift = shift - 4;
     }
     return 0;
@@ -210,11 +171,6 @@ fn poll[&f, &mi, &s](cpu: &!f Cpu, irq: &!mi Mmio("0x8000000..0x8000420,0x801000
     return 0;
 }
 
-fn uptime_ms[&f](cpu: &!f Cpu) -> [cpu("cntfrq_el0"), cpu("cntvct_el0")] int {
-    let f = cpu_read(cpu, "cntfrq_el0");
-    let c = cpu_read(cpu, "cntvct_el0");
-    return c / f * 1000 + c % f * 1000 / f;
-}
 
 // (It also answers -2 or -3 when the network has something for the shell: see `session`.)
 // Sleep until a key arrives, handling whatever else wakes the core meanwhile. While the
@@ -224,10 +180,10 @@ fn getc[&f, &mc, &mi, &mu, &mr, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l](cp
     let uart = k[0];
     while mmio_read32(con, uart + 0x18) & 16 != 0 {
         if k[37] < 16 && k[34] != 0 {
-            rng_fill(rng, vio, dma, k);
+            network.rng_fill(rng, vio, dma, k);
         }
         if k[10] != 0 {
-            let ready = net_poll(bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, rline, uptime_ms(cpu), cpu_read(cpu, "cntvct_el0"));
+            let ready = network.net_poll(bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, rline, base.uptime_ms(cpu), cpu_read(cpu, "cntvct_el0"));
             if ready != 0 {
                 // not a key: -2 a line from the network is ready, -3 a connection is to be greeted
                 return -1 - ready;
@@ -240,11 +196,6 @@ fn getc[&f, &mc, &mi, &mu, &mr, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l](cp
     return mmio_read32(con, uart) & 255;
 }
 
-fn now_us[&f](cpu: &!f Cpu) -> [cpu("cntfrq_el0"), cpu("cntvct_el0")] int {
-    let f = cpu_read(cpu, "cntfrq_el0");
-    let c = cpu_read(cpu, "cntvct_el0");
-    return c / f * 1000000 + c % f * 1000000 / f;
-}
 
 // ---- the servo bus --------------------------------------------------------------
 // The arm's servos (Feetech STS) share one serial line. On the emulated boards it is
@@ -266,21 +217,7 @@ fn bus_init[&mu, &s](bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe2150
     return mmio_write32(bus, u + 0x60, 3);
 }
 
-fn bus_put[&mu, &s](bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), k: &!s [int], c: int) -> [mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c")] int {
-    let u = k[9];
-    while mmio_read32(bus, u + 0x54) & 32 == 0 {
-    }
-    return mmio_write32(bus, u + 0x40, c);
-}
 
-// The next byte, or -1 when none is waiting.
-fn bus_get[&mu, &s](bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), k: &!s [int]) -> [mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c")] int {
-    let u = k[9];
-    if mmio_read32(bus, u + 0x54) & 1 == 0 {
-        return -1;
-    }
-    return mmio_read32(bus, u + 0x40) & 255;
-}
 
 // What `transact` answers besides what `feetech.decode` does.
 fn bus_timeout() -> [] int {
@@ -297,18 +234,18 @@ fn bus_overflow() -> [] int {
 // of the packet, with `table` filled, or one of its errors), or `bus_timeout`/`bus_overflow`.
 // The same shape as cancho-robot's `serial.transact`, on our own driver.
 fn transact[&f, &mu, &s, &p, &r, &t](cpu: &!f Cpu, bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), k: &!s [int], pkt: &p [byte], n: int, reply: &!r [byte], id: int, table: &!t [int], timeout_us: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c")] int {
-    while bus_get(bus, k) >= 0 {
+    while base.bus_get(bus, k) >= 0 {
     }
     var i = 0;
     while i < n {
-        bus_put(bus, k, int_of(pkt[i]));
+        base.bus_put(bus, k, int_of(pkt[i]));
         i = i + 1;
     }
-    let start = now_us(cpu);
+    let start = base.now_us(cpu);
     var got = 0;
     var result = feetech.need_more();
     while result == feetech.need_more() {
-        let c = bus_get(bus, k);
+        let c = base.bus_get(bus, k);
         if c >= 0 {
             if got >= len(reply) {
                 result = bus_overflow();
@@ -317,875 +254,21 @@ fn transact[&f, &mu, &s, &p, &r, &t](cpu: &!f Cpu, bus: &!mu Mmio("0x3f215004..0
                 got = got + 1;
                 result = feetech.decode(reply[0..got], id, table);
             }
-        } else if now_us(cpu) - start > timeout_us {
+        } else if base.now_us(cpu) - start > timeout_us {
             result = bus_timeout();
         }
     }
     return result;
 }
 
-// ---- the network link ---------------------------------------------------------------
-// IPv4 over the second serial port, framed with SLIP (docs/network.md). The port is the
-// servo bus's: `net up` gives it to the network, `net down` gives it back, and the servo
-// commands refuse while it is up. Everything about packets is src/inet.cho, which holds
-// no hardware; this is the part that moves bytes.
-
-// 10.0.0.2. The other end of the line is whoever is there; SLIP has no addresses.
-fn net_address() -> [] int {
-    return 10 * 16777216 + 2;
-}
-
-// The next whole packet from the line, in `frame`: its length, or 0 if there is none yet.
-// At most 256 bytes are taken at once.
-fn slip_recv[&mu, &s, &n, &a](bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), k: &!s [int], ns: &!n [int], frame: &!a [byte]) -> [mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c")] int {
-    var budget = 256;
-    while budget > 0 {
-        let c = bus_get(bus, k);
-        if c < 0 {
-            return 0;
-        }
-        budget = budget - 1;
-        let got = inet.slip_feed(ns, frame, c);
-        if got > 0 {
-            return got;
-        }
-    }
-    return 0;
-}
-
-// ---- the network card: virtio-net ---------------------------------------------------
-// QEMU's virt machine has 32 places for a virtio device, 0x200 apart; a network card says
-// device 1 (VIRTIO 1.2, section 4.2 for the registers, 5.1 for the card, 2.7 for a queue).
-// The card and the driver share memory: two queues of eight entries, one to receive and
-// one to send. A queue is three tables: descriptors (where a buffer is, how long), the
-// ring of buffers offered to the card, and the ring of buffers it has finished with.
-// That memory is `dma`, and nothing else is in it:
-//     +0x0000 receive queue: descriptors, +0x100 offered, +0x200 finished
-//     +0x0400 send queue, the same three
-//     +0x1000 eight receive buffers of 2 KB     +0x5000 one send buffer
-// Every packet has 12 bytes of the card's own header in front, all zero here.
-// No interrupt is used: `vnet_poll` looks at the finished ring.
-
-fn put16le[&md](dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), at: int, v: int) -> [mmio("0x210000..0x220000,0x40210000..0x40220000")] int {
-    mmio_write8(dma, at, v & 255);
-    return mmio_write8(dma, at + 1, v >> 8 & 255);
-}
-
-fn get16le[&md](dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), at: int) -> [mmio("0x210000..0x220000,0x40210000..0x40220000")] int {
-    return mmio_read8(dma, at) | mmio_read8(dma, at + 1) << 8;
-}
-
-// Tell the card where queue `q`'s three tables are (they start at `at`), and that it is ready.
-fn vnet_queue[&mv](vio: &!mv Mmio("0xa000000..0xa004000"), base: int, q: int, at: int) -> [mmio("0xa000000..0xa004000")] int {
-    mmio_write32(vio, base + 0x30, q);
-    if mmio_read32(vio, base + 0x34) < 8 {
-        return 1;
-    }
-    mmio_write32(vio, base + 0x38, 8);
-    mmio_write32(vio, base + 0x80, at & 0xffffffff);
-    mmio_write32(vio, base + 0x84, at >> 32);
-    mmio_write32(vio, base + 0x90, at + 0x100 & 0xffffffff);
-    mmio_write32(vio, base + 0x94, at >> 32);
-    mmio_write32(vio, base + 0xa0, at + 0x200 & 0xffffffff);
-    mmio_write32(vio, base + 0xa4, at >> 32);
-    mmio_write32(vio, base + 0x44, 1);
-    return 0;
-}
-
-// Find the card and bring it up. k[15] is its registers afterwards, or 0 if there is none
-// or it refused; k[19] is its address.
-fn vnet_start[&mv, &md, &s](vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int]) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
-    var base = 0;
-    var slot = 0;
-    while slot < 32 && base == 0 {
-        let at = 0xa000000 + slot * 0x200;
-        // "virt", version 2 (not the legacy interface), device 1
-        if mmio_read32(vio, at) == 0x74726976 && mmio_read32(vio, at + 4) == 2 && mmio_read32(vio, at + 8) == 1 {
-            base = at;
-        }
-        slot = slot + 1;
-    }
-    if base == 0 {
-        return 1;
-    }
-    let d = k[14] + 0x210000;
-    var z = 0;
-    while z < 0x1000 {
-        mmio_write64(dma, d + z, 0);
-        z = z + 8;
-    }
-    // reset; then "I see you" (1), "I can drive you" (2)
-    mmio_write32(vio, base + 0x70, 0);
-    mmio_write32(vio, base + 0x70, 1);
-    mmio_write32(vio, base + 0x70, 3);
-    // of what the card offers, two things are taken: its address in its configuration
-    // (bit 5) and the current version of the interface (bit 32)
-    mmio_write32(vio, base + 0x14, 0);
-    let low = mmio_read32(vio, base + 0x10);
-    mmio_write32(vio, base + 0x14, 1);
-    let high = mmio_read32(vio, base + 0x10);
-    if low & 32 == 0 || high & 1 == 0 {
-        mmio_write32(vio, base + 0x70, 128);
-        return 1;
-    }
-    mmio_write32(vio, base + 0x24, 0);
-    mmio_write32(vio, base + 0x20, 32);
-    mmio_write32(vio, base + 0x24, 1);
-    mmio_write32(vio, base + 0x20, 1);
-    mmio_write32(vio, base + 0x70, 11);
-    if mmio_read32(vio, base + 0x70) & 8 == 0 {
-        mmio_write32(vio, base + 0x70, 128);
-        return 1;
-    }
-    // every receive buffer is offered: the card may write (2) 2 KB at each
-    var i = 0;
-    while i < 8 {
-        mmio_write64(dma, d + i * 16, d + 0x1000 + i * 0x800);
-        mmio_write32(dma, d + i * 16 + 8, 0x800);
-        put16le(dma, d + i * 16 + 12, 2);
-        put16le(dma, d + 0x104 + i * 2, i);
-        i = i + 1;
-    }
-    put16le(dma, d + 0x102, 8);
-    k[16] = 8;
-    k[17] = 0;
-    k[18] = 0;
-    if vnet_queue(vio, base, 0, d) != 0 || vnet_queue(vio, base, 1, d + 0x400) != 0 {
-        mmio_write32(vio, base + 0x70, 128);
-        return 1;
-    }
-    mmio_write32(vio, base + 0x70, 15);
-    mmio_write32(vio, base + 0x50, 0);
-    var mac = 0;
-    var b = 0;
-    while b < 6 {
-        mac = mac << 8 | mmio_read8(vio, base + 0x100 + b);
-        b = b + 1;
-    }
-    k[19] = mac;
-    k[15] = base;
-    return 0;
-}
-
-// Send `frame[0..n]`, and wait until the card has taken it.
-fn vnet_send[&mv, &md, &s, &b](vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], frame: &b [byte], n: int) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
-    let d = k[14] + 0x210000;
-    let buf = d + 0x5000;
-    mmio_write64(dma, buf, 0);
-    mmio_write32(dma, buf + 8, 0);
-    var i = 0;
-    while i < n {
-        mmio_write8(dma, buf + 12 + i, int_of(frame[i]));
-        i = i + 1;
-    }
-    mmio_write64(dma, d + 0x400, buf);
-    mmio_write32(dma, d + 0x408, 12 + n);
-    put16le(dma, d + 0x40c, 0);
-    put16le(dma, d + 0x504 + k[18] % 8 * 2, 0);
-    k[18] = (k[18] + 1) % 65536;
-    put16le(dma, d + 0x502, k[18]);
-    mmio_write32(vio, k[15] + 0x50, 1);
-    var spins = 0;
-    while get16le(dma, d + 0x602) != k[18] && spins < 1000000 {
-        spins = spins + 1;
-    }
-    return 0;
-}
-
-// The next frame the card has finished with, in `frame`: its length, or 0 if there is none.
-// Its buffer is offered to the card again.
-fn vnet_recv[&mv, &md, &s, &a](vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], frame: &!a [byte]) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
-    let d = k[14] + 0x210000;
-    var got = 0;
-    while got == 0 && get16le(dma, d + 0x202) != k[17] {
-        let entry = d + 0x204 + k[17] % 8 * 8;
-        let id = mmio_read32(dma, entry) & 7;
-        let n = mmio_read32(dma, entry + 4) - 12;
-        if n > 0 && n <= len(frame) {
-            var i = 0;
-            while i < n {
-                frame[i] = byte_of(mmio_read8(dma, d + 0x1000 + id * 0x800 + 12 + i));
-                i = i + 1;
-            }
-            got = n;
-        }
-        put16le(dma, d + 0x104 + k[16] % 8 * 2, id);
-        k[16] = (k[16] + 1) % 65536;
-        put16le(dma, d + 0x102, k[16]);
-        k[17] = (k[17] + 1) % 65536;
-        mmio_write32(vio, k[15] + 0x50, 0);
-    }
-    // the card raises its interrupt line for each; nobody listens, and this lowers it
-    let raised = mmio_read32(vio, k[15] + 0x60);
-    if raised != 0 {
-        mmio_write32(vio, k[15] + 0x64, raised);
-    }
-    return got;
-}
-
-// ---- randomness ------------------------------------------------------------------------
-// Numbers nobody outside can guess, from the board's own generator (docs/random.md):
-// on QEMU's virt a virtio device (number 4), which fills a buffer it is offered; on a Pi 3
-// the BCM2835 generator (control +0, status +4 with the words ready in its top byte,
-// data +8). A Pi 4 has another (the RNG200), which QEMU's Pi 4 does not have: no driver
-// for it yet, and there the kernel has no randomness.
-// k[34] says which (0: none), k[35] where. The virtio queue is in `dma`, after the
-// network card's: +0x6000 its three tables, +0x6400 the buffer.
-
-fn rng_start[&mr, &mv, &md, &s](rng: &!mr Mmio("0x3f104000..0x3f10400c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int]) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f104000..0x3f10400c"), mmio("0xa000000..0xa004000")] int {
-    if k[1] == 3 {
-        k[35] = 0x3f104000;
-        // the first words are to be thrown away: this many, the chip's own advice
-        mmio_write32(rng, k[35] + 4, 0x40000);
-        mmio_write32(rng, k[35], 1);
-        k[34] = 3;
-        return 0;
-    }
-    if k[1] != 1 {
-        return 1;
-    }
-    var base = 0;
-    var slot = 0;
-    while slot < 32 && base == 0 {
-        let at = 0xa000000 + slot * 0x200;
-        if mmio_read32(vio, at) == 0x74726976 && mmio_read32(vio, at + 4) == 2 && mmio_read32(vio, at + 8) == 4 {
-            base = at;
-        }
-        slot = slot + 1;
-    }
-    if base == 0 {
-        return 1;
-    }
-    let d = k[14] + 0x216000;
-    var z = 0;
-    while z < 0x800 {
-        mmio_write64(dma, d + z, 0);
-        z = z + 8;
-    }
-    mmio_write32(vio, base + 0x70, 0);
-    mmio_write32(vio, base + 0x70, 1);
-    mmio_write32(vio, base + 0x70, 3);
-    // nothing is asked of the device but the current version of the interface (bit 32)
-    mmio_write32(vio, base + 0x24, 0);
-    mmio_write32(vio, base + 0x20, 0);
-    mmio_write32(vio, base + 0x24, 1);
-    mmio_write32(vio, base + 0x20, 1);
-    mmio_write32(vio, base + 0x70, 11);
-    if mmio_read32(vio, base + 0x70) & 8 == 0 || vnet_queue(vio, base, 0, d) != 0 {
-        mmio_write32(vio, base + 0x70, 128);
-        return 1;
-    }
-    // one buffer of 16 bytes, which the device may write (2)
-    mmio_write64(dma, d, d + 0x400);
-    mmio_write32(dma, d + 8, 16);
-    put16le(dma, d + 12, 2);
-    mmio_write32(vio, base + 0x70, 15);
-    k[36] = 0;
-    k[35] = base;
-    k[34] = 1;
-    return 0;
-}
-
-// One word of 32 bits from the generator, or -1 if it gave none in time.
-fn rng_word[&mr, &mv, &md, &s](rng: &!mr Mmio("0x3f104000..0x3f10400c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int]) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f104000..0x3f10400c"), mmio("0xa000000..0xa004000")] int {
-    var spins = 0;
-    if k[34] == 3 {
-        while mmio_read32(rng, k[35] + 4) >> 24 == 0 && spins < 1000000 {
-            spins = spins + 1;
-        }
-        if mmio_read32(rng, k[35] + 4) >> 24 == 0 {
-            return -1;
-        }
-        return mmio_read32(rng, k[35] + 8);
-    }
-    if k[34] != 1 {
-        return -1;
-    }
-    let d = k[14] + 0x216000;
-    // offer the buffer, say so, and wait for it to come back
-    put16le(dma, d + 0x104 + k[36] % 8 * 2, 0);
-    k[36] = (k[36] + 1) % 65536;
-    put16le(dma, d + 0x102, k[36]);
-    mmio_write32(vio, k[35] + 0x50, 0);
-    while get16le(dma, d + 0x202) != k[36] && spins < 1000000 {
-        spins = spins + 1;
-    }
-    let raised = mmio_read32(vio, k[35] + 0x60);
-    if raised != 0 {
-        mmio_write32(vio, k[35] + 0x64, raised);
-    }
-    if get16le(dma, d + 0x202) != k[36] {
-        return -1;
-    }
-    // how many bytes the device says it wrote
-    if mmio_read32(dma, d + 0x204 + (k[36] + 7) % 8 * 8 + 4) < 4 {
-        return -1;
-    }
-    return mmio_read32(dma, d + 0x400);
-}
-
-// Keep 16 words ready at k[4136..]; k[37] is how many there are. What needs one takes it
-// from there, and so needs no capability.
-fn rng_fill[&mr, &mv, &md, &s](rng: &!mr Mmio("0x3f104000..0x3f10400c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int]) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f104000..0x3f10400c"), mmio("0xa000000..0xa004000")] int {
-    while k[34] != 0 && k[37] < 16 {
-        let w = rng_word(rng, vio, dma, k);
-        if w < 0 {
-            return 1;
-        }
-        k[4136 + k[37]] = w;
-        k[37] = k[37] + 1;
-    }
-    return 0;
-}
-
-fn put_rng_name[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
-    if k[34] == 1 {
-        return puts(con, k, "virtio-rng");
-    }
-    return puts(con, k, "the BCM2835 generator");
-}
-
-// `random`: sixteen bytes straight from the generator, and which one it is.
-fn put_random[&mc, &mr, &mv, &md, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), rng: &!mr Mmio("0x3f104000..0x3f10400c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f104000..0x3f10400c"), mmio("0xa000000..0xa004000")] int {
-    if k[34] == 0 {
-        return puts(con, k, "this board gave the kernel no source of randomness\r\n");
-    }
-    puts(con, k, "random (");
-    put_rng_name(con, k);
-    puts(con, k, "): ");
-    var i = 0;
-    while i < 4 {
-        let w = rng_word(rng, vio, dma, k);
-        if w < 0 {
-            return puts(con, k, " the generator gave nothing\r\n");
-        }
-        var shift = 28;
-        while shift >= 0 {
-            put_hex(con, k, w >> shift & 15);
-            shift = shift - 4;
-        }
-        i = i + 1;
-    }
-    return puts(con, k, "\r\n");
-}
-
-// ---- the two links as one -----------------------------------------------------------
-// What arrives is a frame on the card and a bare packet on the serial line; `inet` has
-// a function for each, and these four are where the kernel chooses.
-
-fn link_recv[&mu, &mv, &md, &s, &n, &a](bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte]) -> [mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
-    if k[10] == 2 {
-        return vnet_recv(vio, dma, k, frame);
-    }
-    return slip_recv(bus, k, ns, frame);
-}
-
-fn link_send[&mu, &mv, &md, &s, &b, &w](bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], pkt: &b [byte], n: int, wire: &!w [byte]) -> [mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
-    if k[10] == 2 {
-        return vnet_send(vio, dma, k, pkt, n);
-    }
-    let w = inet.slip_encode(pkt, n, wire);
-    var i = 0;
-    while i < w {
-        bus_put(bus, k, int_of(wire[i]));
-        i = i + 1;
-    }
-    return 0;
-}
-
-// What arrived, `frame[0..n]`, given to `inet`, and its answer sent. `iss` is where a new
-// connection's sequence numbers start if the pool of random words is empty: the counter's
-// value, which is not a secret.
-fn net_take[&mu, &mv, &md, &s, &a, &b, &w, &t, &g, &h](bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], frame: &!a [byte], n: int, reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], now: int, iss: int) -> [mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
-    var m = 0;
-    // a word nobody can guess, if the board has given any; else the counter
-    var first = iss;
-    if k[37] > 0 {
-        first = k[4136 + k[37] - 1];
-    }
-    var at = 0;
-    if k[10] == 2 {
-        at = 14;
-        m = inet.eth_serve(frame, n, k[19], net_address(), tcp, bufs, inbox, k[30], now, first, reply);
-    } else {
-        m = inet.serve(frame, n, net_address(), tcp, bufs, inbox, k[30], now, first, reply);
-    }
-    if k[37] > 0 && m >= at + 40 && int_of(reply[at + 9]) == 6 && int_of(reply[at + 33]) == 18 {
-        // the reply opens a connection (SYN and ACK): it began at that word, which is not used again
-        k[37] = k[37] - 1;
-        k[38] = k[38] + 1;
-    }
-    if m > 0 {
-        link_send(bus, vio, dma, k, reply, m, wire);
-        k[11] = k[11] + 1;
-    } else if m == 0 {
-        k[20] = k[20] + 1;
-    } else {
-        k[12] = k[12] + 1;
-        k[13] = m;
-    }
-    if k[29] != 0 && inet.tcp_state(tcp, k[29] - 1) != 2 && inet.tcp_state(tcp, k[29] - 1) != 3 {
-        // the shell's connection has gone: what it had typed and what waited for it go with it
-        k[29] = 0;
-        k[27] = 0;
-        k[28] = 0;
-        k[31] = 0;
-        k[32] = 0;
-        k[4152] = 0;
-    }
-    return 0;
-}
-
-// ---- the shell over a connection -----------------------------------------------------
-// Port 23, when `net shell on` has opened it (docs/network.md, section 8). One connection
-// at a time has the shell; another waits, unread. This function moves bytes between that
-// connection and two things in the kernel: the line being typed there (`rline`, k[31]
-// bytes of it) and the output waiting for it (k[40..], k[27] of it; `putc` fills it).
-// It touches no hardware. Answers 1 when a whole line is in `rline`, 2 when a connection
-// has just been given the shell and should be greeted, 0 otherwise.
-fn session[&s, &t, &g, &h, &l, &w](k: &!s [int], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], rline: &!l [byte], wire: &!w [byte], now: int) -> [] int {
-    if k[29] != 0 && inet.tcp_state(tcp, k[29] - 1) != 2 && inet.tcp_state(tcp, k[29] - 1) != 3 {
-        // the shell's connection has gone
-        k[29] = 0;
-        k[27] = 0;
-        k[28] = 0;
-        k[31] = 0;
-        k[32] = 0;
-        k[4152] = 0;
-    }
-    if k[30] == 0 || k[39] != 0 {
-        // the port is closed; or a command is itself waiting on the network, and the line it was typed
-        // on must not be read further meanwhile
-        return 0;
-    }
-    if k[29] == 0 {
-        var c = 0;
-        while c < inet.tcp_count(tcp, bufs, inbox) && k[29] == 0 {
-            if inet.tcp_port(tcp, c) == k[30] && (inet.tcp_state(tcp, c) == 2 || inet.tcp_state(tcp, c) == 3) {
-                k[29] = c + 1;
-            }
-            c = c + 1;
-        }
-        if k[29] == 0 {
-            return 0;
-        }
-        return 2;
-    }
-    let c = k[29] - 1;
-    if k[27] > 0 {
-        // output first: as much as the connection has room for
-        var n = k[27];
-        if n > len(wire) {
-            n = len(wire);
-        }
-        var i = 0;
-        while i < n {
-            wire[i] = byte_of(k[40 + i] & 255);
-            i = i + 1;
-        }
-        let took = inet.tcp_write(tcp, bufs, c, wire, 0, n);
-        i = took;
-        while i < k[27] {
-            k[40 + i - took] = k[40 + i];
-            i = i + 1;
-        }
-        k[27] = k[27] - took;
-    }
-    if k[27] > 0 {
-        // nothing more is read until what was said has gone
-        return 0;
-    }
-    if k[4152] != 0 || inet.tcp_quiet(tcp, c, now) > 300000 {
-        // `exit` was typed there, or nothing has been for five minutes: the kernel hangs up
-        k[4152] = 0;
-        inet.tcp_close(tcp, c);
-        return 0;
-    }
-    while inet.tcp_read(tcp, inbox, c, wire, 1) == 1 {
-        let ch = int_of(wire[0]);
-        if k[28] > 0 {
-            // the two bytes after a telnet client's 255: an option it asks about, not answered
-            k[28] = k[28] - 1;
-        } else if ch == 255 {
-            k[28] = 2;
-        } else if ch == 10 && k[32] != 0 {
-            // the line feed of a carriage return and line feed: the line ended at the first
-            k[32] = 0;
-        } else if ch == 13 || ch == 10 {
-            k[32] = 0;
-            if ch == 13 {
-                k[32] = 1;
-            }
-            return 1;
-        } else {
-            k[32] = 0;
-            if ch >= 32 && ch < 127 && k[31] < len(rline) {
-                rline[k[31]] = byte_of(ch);
-                k[31] = k[31] + 1;
-            }
-        }
-    }
-    if inet.tcp_state(tcp, c) == 3 {
-        // the other end has finished, and everything it sent has been answered: we finish too
-        inet.tcp_close(tcp, c);
-    }
-    return 0;
-}
-
-// Take what has arrived, at most eight packets, and answer each; move the shell's bytes;
-// then send again whatever a connection has had out too long, and whatever is new.
-// Answers what `session` does.
-fn net_poll[&mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l](bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], rline: &!l [byte], now: int, iss: int) -> [mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
-    var budget = 8;
-    while budget > 0 {
-        let n = link_recv(bus, vio, dma, k, ns, frame);
-        if n == 0 {
-            budget = 0;
-        } else {
-            net_take(bus, vio, dma, k, frame, n, reply, wire, tcp, bufs, inbox, now, iss);
-            budget = budget - 1;
-        }
-    }
-    let ready = session(k, tcp, bufs, inbox, rline, wire, now);
-    var c = 0;
-    while c < inet.tcp_count(tcp, bufs, inbox) {
-        var m = 0;
-        if k[10] == 2 {
-            m = inet.eth_tick(tcp, bufs, c, now, k[19], net_address(), reply);
-        } else {
-            m = inet.tcp_tick(tcp, bufs, c, now, net_address(), reply, 0);
-        }
-        if m > 0 {
-            link_send(bus, vio, dma, k, reply, m, wire);
-            k[25] = k[25] + 1;
-        }
-        // and what the shell's connection has to send that it has not sent
-        if k[10] == 2 {
-            m = inet.eth_flush(tcp, bufs, c, now, k[19], net_address(), reply);
-        } else {
-            m = inet.tcp_flush(tcp, bufs, c, now, net_address(), reply, 0);
-        }
-        if m > 0 {
-            link_send(bus, vio, dma, k, reply, m, wire);
-        }
-        c = c + 1;
-    }
-    k[24] = inet.tcp_open(tcp, bufs, inbox);
-    return ready;
-}
-
-// `a.b.c.d` at `line[from..n]` as a number, or -1.
-fn address[&r](line: &r [byte], from: int, n: int) -> [] int {
-    var value = 0;
-    var part = 0;
-    var parts = 0;
-    var digits = 0;
-    var i = from;
-    while i < n {
-        let c = int_of(line[i]);
-        if c >= '0' && c <= '9' && digits < 3 {
-            part = part * 10 + c - '0';
-            digits = digits + 1;
-        } else if c == '.' && digits > 0 && part < 256 && parts < 3 {
-            value = value * 256 + part;
-            part = 0;
-            digits = 0;
-            parts = parts + 1;
-        } else {
-            return -1;
-        }
-        i = i + 1;
-    }
-    if parts != 3 || digits == 0 || part > 255 {
-        return -1;
-    }
-    return value * 256 + part;
-}
-
-fn put_address[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], a: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
-    put_dec(con, k, a >> 24 & 255);
-    puts(con, k, ".");
-    put_dec(con, k, a >> 16 & 255);
-    puts(con, k, ".");
-    put_dec(con, k, a >> 8 & 255);
-    puts(con, k, ".");
-    return put_dec(con, k, a & 255);
-}
-
-// Whose card has `target`? Asked of every card (ARP), unless it is the neighbour already
-// remembered. Its card's address; 0 on the serial line, which has none; -1 if nobody answers
-// within a second. Whatever else arrives meanwhile is answered as always.
-fn resolve[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], target: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
-    if k[10] != 2 {
-        return 0;
-    }
-    if k[21] == target {
-        return k[22];
-    }
-    let ours = net_address();
-    let q = inet.arp_request(reply, k[19], ours, target);
-    if q > 0 {
-        vnet_send(vio, dma, k, reply, q);
-    }
-    let asked = now_us(cpu);
-    var card = -1;
-    while card < 0 && now_us(cpu) - asked < 1000000 {
-        let n = link_recv(bus, vio, dma, k, ns, frame);
-        if n > 0 {
-            card = inet.arp_answer_from(frame, n, k[19], ours, target);
-            if card < 0 {
-                net_take(bus, vio, dma, k, frame, n, reply, wire, tcp, bufs, inbox, uptime_ms(cpu), cpu_read(cpu, "cntvct_el0"));
-            }
-        }
-    }
-    if card < 0 {
-        puts(con, k, "nobody on this network says they are ");
-        put_address(con, k, target);
-        puts(con, k, "\r\n");
-        return -1;
-    }
-    k[21] = target;
-    k[22] = card;
-    return card;
-}
-
-// `<a.b.c.d> <port>` at `line[from..n]`: the address times 65536, plus the port. -1 if it is not that.
-fn address_and_port[&r](line: &r [byte], from: int, n: int) -> [] int {
-    var sp = from;
-    while sp < n && int_of(line[sp]) != ' ' {
-        sp = sp + 1;
-    }
-    let a = address(line, from, sp);
-    var port = 0;
-    var i = sp + 1;
-    if a < 0 || i >= n {
-        return -1;
-    }
-    while i < n {
-        let c = int_of(line[i]);
-        if c < '0' || c > '9' || port > 6553 {
-            return -1;
-        }
-        port = port * 10 + c - '0';
-        i = i + 1;
-    }
-    if port < 1 || port > 65535 {
-        return -1;
-    }
-    return a * 65536 + port;
-}
-
-// `http <address> <port>`: the kernel opens a connection, asks for `/` in HTTP/1.0, and
-// prints what comes back until the other end finishes, for at most five seconds. The
-// shell waits meanwhile; the network is served as always.
-fn net_http[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], rline: &!l [byte], dest: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
-    if k[10] == 0 {
-        return puts(con, k, "the link is down: `net up` first\r\n");
-    }
-    if dest < 0 {
-        return puts(con, k, "usage: http <a.b.c.d> <port>\r\n");
-    }
-    let target = dest / 65536;
-    let card = resolve(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, target);
-    if card < 0 {
-        return 0;
-    }
-    // a number nobody can guess to begin at, if there is one; and a port of ours not used a moment ago
-    var first = cpu_read(cpu, "cntvct_el0");
-    if k[37] > 0 {
-        k[37] = k[37] - 1;
-        first = k[4136 + k[37]];
-    }
-    k[23] = k[23] + 1;
-    let c = inet.tcp_dial(tcp, bufs, inbox, target, dest % 65536, 49152 + k[23] % 16384, uptime_ms(cpu), first, card);
-    if c < 0 {
-        return puts(con, k, "no room for another connection\r\n");
-    }
-    let began = uptime_ms(cpu);
-    var opened = false;
-    var printed = 0;
-    k[39] = 1;
-    while inet.tcp_state(tcp, c) != 0 && uptime_ms(cpu) - began < 5000 {
-        net_poll(bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, rline, uptime_ms(cpu), cpu_read(cpu, "cntvct_el0"));
-        let state = inet.tcp_state(tcp, c);
-        if state == 2 && !opened {
-            opened = true;
-            inet.tcp_write(tcp, bufs, c, "GET / HTTP/1.0\r\n\r\n", 0, 18);
-        }
-        let n = inet.tcp_read(tcp, inbox, c, wire, 256);
-        var i = 0;
-        while i < n {
-            let ch = int_of(wire[i]);
-            if ch == 10 {
-                puts(con, k, "\r\n");
-            } else if ch >= 32 && ch < 127 {
-                putc(con, k, ch);
-            } else if ch != 13 {
-                putc(con, k, '.');
-            }
-            i = i + 1;
-        }
-        printed = printed + n;
-        if state == 3 && n == 0 {
-            // the other end has finished and all of it is printed: we finish too
-            inet.tcp_close(tcp, c);
-        }
-    }
-    if inet.tcp_state(tcp, c) != 0 {
-        // five seconds: hang up, and let the closing happen behind the shell
-        inet.tcp_close(tcp, c);
-    }
-    k[39] = 0;
-    if !opened {
-        puts(con, k, "no connection to ");
-        put_address(con, k, target);
-        puts(con, k, " port ");
-        put_dec(con, k, dest % 65536);
-        return puts(con, k, ": refused, or no answer\r\n");
-    }
-    puts(con, k, "\r\n[");
-    put_dec(con, k, printed);
-    return puts(con, k, " bytes]\r\n");
-}
-
-// `ping <address>`: the kernel speaks first. An echo request, and the time to its reply.
-// On the card the address must first be asked for (ARP); the last answer is remembered.
-// Whatever else arrives meanwhile is answered as always.
-fn net_ping[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], line: &r [byte], from: int, len_line: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
-    if k[10] == 0 {
-        return puts(con, k, "the link is down: `net up` first\r\n");
-    }
-    let target = address(line, from, len_line);
-    if target < 0 {
-        return puts(con, k, "usage: ping <a.b.c.d>\r\n");
-    }
-    let ours = net_address();
-    if resolve(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, target) < 0 {
-        return 0;
-    }
-    k[23] = k[23] + 1;
-    var at = 0;
-    if k[10] == 2 {
-        at = 14;
-    }
-    var m = inet.echo_request(reply, at, ours, target, 51724, k[23], 32);
-    if m > 0 && k[10] == 2 {
-        m = inet.eth_frame(reply, m, k[22], k[19]);
-    }
-    if m <= 0 {
-        return puts(con, k, "the request could not be built\r\n");
-    }
-    link_send(bus, vio, dma, k, reply, m, wire);
-    let sent = now_us(cpu);
-    while now_us(cpu) - sent < 1000000 {
-        let n = link_recv(bus, vio, dma, k, ns, frame);
-        if n > 0 {
-            var hit = false;
-            if k[10] == 2 {
-                hit = n > 14 && inet.get16(frame, 12) == 2048 && inet.is_echo_reply(frame, 14, n - 14, ours, target, 51724, k[23]);
-            } else {
-                hit = inet.is_echo_reply(frame, 0, n, ours, target, 51724, k[23]);
-            }
-            if hit {
-                let took = now_us(cpu) - sent;
-                puts(con, k, "reply from ");
-                put_address(con, k, target);
-                puts(con, k, " in ");
-                put_dec(con, k, took);
-                return puts(con, k, " us\r\n");
-            }
-            net_take(bus, vio, dma, k, frame, n, reply, wire, tcp, bufs, inbox, uptime_ms(cpu), cpu_read(cpu, "cntvct_el0"));
-        }
-    }
-    puts(con, k, "no reply from ");
-    put_address(con, k, target);
-    return puts(con, k, " within a second\r\n");
-}
-
-fn put_net[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
-    if k[10] == 0 && k[9] == 0 && k[15] == 0 {
-        puts(con, k, "no network card, and no second serial port");
-    } else if k[10] == 0 {
-        puts(con, k, "link down");
-    } else if k[10] == 2 {
-        puts(con, k, "link up: virtio-net, card ");
-        var shift = 40;
-        while shift >= 0 {
-            put_hex(con, k, k[19] >> shift + 4 & 15);
-            put_hex(con, k, k[19] >> shift & 15);
-            if shift > 0 {
-                puts(con, k, ":");
-            }
-            shift = shift - 8;
-        }
-        puts(con, k, ", address 10.0.0.2");
-    } else {
-        puts(con, k, "link up: SLIP on the second serial port, address 10.0.0.2");
-    }
-    puts(con, k, "\r\n");
-    put_dec(con, k, k[11]);
-    puts(con, k, " packets answered, ");
-    put_dec(con, k, k[12]);
-    puts(con, k, " dropped");
-    if k[12] != 0 {
-        puts(con, k, " (the last: ");
-        if k[13] == inet.drop_short() {
-            puts(con, k, "cut short");
-        } else if k[13] == inet.drop_not_ipv4() {
-            puts(con, k, "not IPv4");
-        } else if k[13] == inet.drop_bad_header_checksum() {
-            puts(con, k, "header checksum");
-        } else if k[13] == inet.drop_not_ours() {
-            puts(con, k, "for another address");
-        } else if k[13] == inet.drop_fragment() {
-            puts(con, k, "a fragment");
-        } else if k[13] == inet.drop_bad_checksum() {
-            puts(con, k, "checksum");
-        } else if k[13] == inet.drop_not_our_frame() {
-            puts(con, k, "a frame for another card");
-        } else if k[13] == inet.drop_too_long() {
-            puts(con, k, "too long");
-        } else {
-            puts(con, k, "nothing here answers it");
-        }
-        puts(con, k, ")");
-    }
-    puts(con, k, "\r\n");
-    if k[34] != 0 && k[37] > 0 {
-        puts(con, k, "connections begin at a random number (");
-        put_rng_name(con, k);
-        puts(con, k, ")\r\n");
-    } else {
-        puts(con, k, "connections begin at the counter's value: it can be guessed\r\n");
-    }
-    if k[30] != 0 {
-        puts(con, k, "shell on port 23: ");
-        if k[29] != 0 {
-            puts(con, k, "a session is open\r\n");
-        } else {
-            puts(con, k, "nobody connected\r\n");
-        }
-    }
-    if k[20] != 0 || k[24] != 0 || k[25] != 0 {
-        puts(con, k, "tcp: ");
-        put_dec(con, k, k[24]);
-        puts(con, k, " open, ");
-        put_dec(con, k, k[20]);
-        puts(con, k, " segments taken without a reply, ");
-        put_dec(con, k, k[25]);
-        puts(con, k, " sent again\r\n");
-    }
-    return 0;
-}
-
 fn put_bus_error[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], code: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
     if code == bus_timeout() {
-        return puts(con, k, "no answer");
+        return base.puts(con, k, "no answer");
     }
     if code == bus_overflow() {
-        return puts(con, k, "answer too long");
+        return base.puts(con, k, "answer too long");
     }
-    return puts(con, k, feetech.error_tag(code));
+    return base.puts(con, k, feetech.error_tag(code));
 }
 
 // `servo scan`: ping ids 1 to 8 and say who answered. Read-only: this kernel builds no
@@ -1200,21 +283,21 @@ fn servo_scan[&f, &mc, &mu, &s](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x90000
         while id <= 8 {
             let n = feetech.ping(pkt, id);
             let got = transact(cpu, bus, k, pkt, n, reply, id, table, 20000);
-            puts(con, k, "servo ");
-            put_dec(con, k, id);
+            base.puts(con, k, "servo ");
+            base.put_dec(con, k, id);
             if got > 0 {
-                puts(con, k, ": present\r\n");
+                base.puts(con, k, ": present\r\n");
                 found = found + 1;
             } else {
-                puts(con, k, ": ");
+                base.puts(con, k, ": ");
                 put_bus_error(con, k, got);
-                puts(con, k, "\r\n");
+                base.puts(con, k, "\r\n");
             }
             id = id + 1;
         }
     }
-    put_dec(con, k, found);
-    return puts(con, k, " servos found\r\n");
+    base.put_dec(con, k, found);
+    return base.puts(con, k, " servos found\r\n");
 }
 
 // `servo pos`: the present position (register 56, two bytes) of servos 1 to 6, in raw ticks.
@@ -1227,16 +310,16 @@ fn servo_pos[&f, &mc, &mu, &s](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x900004
         while id <= 6 {
             let n = feetech.read(pkt, id, 56, 2);
             let got = transact(cpu, bus, k, pkt, n, reply, id, table, 20000);
-            puts(con, k, "servo ");
-            put_dec(con, k, id);
+            base.puts(con, k, "servo ");
+            base.put_dec(con, k, id);
             if got > 0 && table[3] == 2 {
-                puts(con, k, ": position ");
-                put_dec(con, k, feetech.u16(reply, table[2]));
-                puts(con, k, "\r\n");
+                base.puts(con, k, ": position ");
+                base.put_dec(con, k, feetech.u16(reply, table[2]));
+                base.puts(con, k, "\r\n");
             } else {
-                puts(con, k, ": ");
+                base.puts(con, k, ": ");
                 put_bus_error(con, k, got);
-                puts(con, k, "\r\n");
+                base.puts(con, k, "\r\n");
             }
             id = id + 1;
         }
@@ -1286,10 +369,10 @@ fn span_max(joint: int) -> [] int {
 
 fn put_int[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], v: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
     if v < 0 {
-        putc(con, k, 45);
-        return put_dec(con, k, 0 - v);
+        base.putc(con, k, 45);
+        return base.put_dec(con, k, 0 - v);
     }
-    return put_dec(con, k, v);
+    return base.put_dec(con, k, v);
 }
 
 // Where the gripper frame is for five joint angles, in micrometres, in the base's frame.
@@ -1297,16 +380,16 @@ fn put_gripper[&mc, &s, &d](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3
     region r {
         let pose = alloc_slice[r](16, 0.0);
         if kinematics.forward(degrees, pose) != 0 {
-            return puts(con, k, "kinematics refused the angles\r\n");
+            return base.puts(con, k, "kinematics refused the angles\r\n");
         }
-        puts(con, k, "gripper at x ");
+        base.puts(con, k, "gripper at x ");
         put_int(con, k, truncate(pose[3] * 1000000.0));
-        puts(con, k, " y ");
+        base.puts(con, k, " y ");
         put_int(con, k, truncate(pose[7] * 1000000.0));
-        puts(con, k, " z ");
+        base.puts(con, k, " z ");
         put_int(con, k, truncate(pose[11] * 1000000.0));
     }
-    return puts(con, k, " um\r\n");
+    return base.puts(con, k, " um\r\n");
 }
 
 // `arm zero`: the pose with every joint at zero. No bus involved: placo puts it at
@@ -1334,17 +417,17 @@ fn arm_pose[&f, &mc, &mu, &s](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048
             let got = transact(cpu, bus, k, pkt, n, reply, joint + 1, table, 20000);
             if got > 0 && table[3] == 2 {
                 degrees[joint] = calibration.degrees(feetech.u16(reply, table[2]), span_min(joint), span_max(joint));
-                puts(con, k, "joint ");
-                put_dec(con, k, joint + 1);
-                puts(con, k, ": ");
+                base.puts(con, k, "joint ");
+                base.put_dec(con, k, joint + 1);
+                base.puts(con, k, ": ");
                 put_int(con, k, truncate(degrees[joint] * 1000.0));
-                puts(con, k, " mdeg\r\n");
+                base.puts(con, k, " mdeg\r\n");
             } else {
-                puts(con, k, "joint ");
-                put_dec(con, k, joint + 1);
-                puts(con, k, ": ");
+                base.puts(con, k, "joint ");
+                base.put_dec(con, k, joint + 1);
+                base.puts(con, k, ": ");
                 put_bus_error(con, k, got);
-                puts(con, k, "\r\n");
+                base.puts(con, k, "\r\n");
                 bad = 1;
             }
             joint = joint + 1;
@@ -1433,17 +516,17 @@ fn arm_check[&f, &mc, &mu, &s, &l](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x90
     region r {
         let wanted = alloc_slice[r](5, 0);
         if numbers(line, from, n, wanted) != 5 {
-            return puts(con, k, "usage: arm check a1 a2 a3 a4 a5 (whole degrees)\r\n");
+            return base.puts(con, k, "usage: arm check a1 a2 a3 a4 a5 (whole degrees)\r\n");
         }
         let current = alloc_slice[r](5, 0.0);
         let at = alloc_slice[r](1, 0);
         let read = read_joints(cpu, bus, k, current, at);
         if read != 0 {
-            puts(con, k, "joint ");
-            put_dec(con, k, at[0] + 1);
-            puts(con, k, ": ");
+            base.puts(con, k, "joint ");
+            base.put_dec(con, k, at[0] + 1);
+            base.puts(con, k, ": ");
             put_bus_error(con, k, read);
-            return puts(con, k, "\r\n");
+            return base.puts(con, k, "\r\n");
         }
         let request = alloc_slice[r](5, 0.0);
         let limits = alloc_slice[r](10, 0.0);
@@ -1465,32 +548,32 @@ fn arm_check[&f, &mc, &mu, &s, &l](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x90
             rule = safety.approve(request, current, limits, m, other, 0, 10, goals, scale, joint);
         }
         if rule == safety.rule_ok() {
-            puts(con, k, "approved");
+            base.puts(con, k, "approved");
             if scale[0] < 1.0 {
-                puts(con, k, ", slowed to ");
+                base.puts(con, k, ", slowed to ");
                 put_int(con, k, truncate(scale[0] * 1000.0));
-                puts(con, k, " per mille of the step");
+                base.puts(con, k, " per mille of the step");
             }
-            puts(con, k, "\r\ngoals:");
+            base.puts(con, k, "\r\ngoals:");
             j = 0;
             while j < 5 {
-                puts(con, k, " ");
+                base.puts(con, k, " ");
                 put_int(con, k, truncate(goals[j] * 1000.0));
                 j = j + 1;
             }
-            puts(con, k, " mdeg\r\n");
+            base.puts(con, k, " mdeg\r\n");
         } else {
-            puts(con, k, "refused: ");
-            puts(con, k, safety.rule_name(rule));
+            base.puts(con, k, "refused: ");
+            base.puts(con, k, safety.rule_name(rule));
             if joint[0] >= 0 {
-                puts(con, k, " (joint ");
-                put_dec(con, k, joint[0] + 1);
-                puts(con, k, ")");
+                base.puts(con, k, " (joint ");
+                base.put_dec(con, k, joint[0] + 1);
+                base.puts(con, k, ")");
             }
-            puts(con, k, "\r\n");
+            base.puts(con, k, "\r\n");
         }
     }
-    return puts(con, k, "nothing was sent\r\n");
+    return base.puts(con, k, "nothing was sent\r\n");
 }
 
 // ---- memory: identity-mapped translation tables ---------------------------------
@@ -1580,21 +663,21 @@ fn range[&mc, &mt, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f
     if apply {
         return map(tab, k, start, end, perm);
     }
-    puts(con, k, "  0x");
-    put_hex(con, k, start);
-    puts(con, k, " - 0x");
-    put_hex(con, k, end);
+    base.puts(con, k, "  0x");
+    base.put_hex(con, k, start);
+    base.puts(con, k, " - 0x");
+    base.put_hex(con, k, end);
     if perm == 0 {
-        puts(con, k, "  r-x  ");
+        base.puts(con, k, "  r-x  ");
     } else if perm == 1 {
-        puts(con, k, "  r--  ");
+        base.puts(con, k, "  r--  ");
     } else if perm == 2 {
-        puts(con, k, "  rw-  ");
+        base.puts(con, k, "  rw-  ");
     } else {
-        puts(con, k, "  rw- device  ");
+        base.puts(con, k, "  rw- device  ");
     }
-    puts(con, k, name);
-    puts(con, k, "\r\n");
+    base.puts(con, k, name);
+    base.puts(con, k, "\r\n");
     return 0;
 }
 
@@ -1634,7 +717,7 @@ fn report_fault[&f, &mc, &mx, &mq, &s](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..
     let elr = cpu_read(cpu, "elr_el1");
     let class = esr >> 26 & 63;
     let sync = kind & 3 == 0;
-    puts(con, k, "\r\n*** ");
+    base.puts(con, k, "\r\n*** ");
     // (only an address inside the image is read: a jump into nowhere must not fault again here)
     var stopped_at = 0;
     if elr >= k[14] + 0x80004 && elr < k[14] + 0x200000 - 3 && elr & 3 == 0 {
@@ -1642,41 +725,41 @@ fn report_fault[&f, &mc, &mx, &mq, &s](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..
     }
     if sync && class == 0 && stopped_at == 0xc11f {
         // cancho's own checks (bounds, overflow, ...) end in `udf #0xc11f`
-        puts(con, k, "cancho trap");
+        base.puts(con, k, "cancho trap");
     } else if sync && (class == 0x25 || class == 0x21) {
         if class == 0x25 {
-            puts(con, k, "data abort: ");
+            base.puts(con, k, "data abort: ");
         } else {
-            puts(con, k, "instruction abort: ");
+            base.puts(con, k, "instruction abort: ");
         }
         let why = esr >> 2 & 15;
         if why == 1 {
-            puts(con, k, "address not mapped");
+            base.puts(con, k, "address not mapped");
         } else if why == 3 && class == 0x25 && esr & 64 != 0 {
-            puts(con, k, "write to read-only memory");
+            base.puts(con, k, "write to read-only memory");
         } else if why == 3 {
-            puts(con, k, "permission denied");
+            base.puts(con, k, "permission denied");
         } else {
-            puts(con, k, "other");
+            base.puts(con, k, "other");
         }
     } else if sync {
-        puts(con, k, "synchronous exception");
+        base.puts(con, k, "synchronous exception");
     } else if kind & 3 == 1 {
-        puts(con, k, "unexpected irq");
+        base.puts(con, k, "unexpected irq");
     } else if kind & 3 == 2 {
-        puts(con, k, "unexpected fiq");
+        base.puts(con, k, "unexpected fiq");
     } else {
-        puts(con, k, "serror");
+        base.puts(con, k, "serror");
     }
-    puts(con, k, " (vector ");
-    put_dec(con, k, kind);
-    puts(con, k, ")\r\n    esr ");
+    base.puts(con, k, " (vector ");
+    base.put_dec(con, k, kind);
+    base.puts(con, k, ")\r\n    esr ");
     put_reg(con, k, esr);
-    puts(con, k, "\r\n    elr ");
+    base.puts(con, k, "\r\n    elr ");
     put_reg(con, k, elr);
-    puts(con, k, "\r\n    far ");
+    base.puts(con, k, "\r\n    far ");
     put_reg(con, k, cpu_read(cpu, "far_el1"));
-    return puts(con, k, "\r\nhalted.\r\n");
+    return base.puts(con, k, "\r\nhalted.\r\n");
 }
 
 // ---- shell --------------------------------------------------------------------
@@ -1699,61 +782,61 @@ fn run[&f, &mc, &mu, &mt, &mx, &mz, &s, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000
         return 0;
     }
     if same(line, n, "help") {
-        puts(con, k, "commands: help, about, echo <text>, uptime, ticks, mem, random, net [up|down], net shell [on|off], ping <address>, http <address> <port>, servo scan, servo pos, arm zero, arm pose, arm check <5 angles>, crash [null|write]\r\n");
+        base.puts(con, k, "commands: help, about, echo <text>, uptime, ticks, mem, random, net [up|down|dhcp], net shell [on|off], lookup <name>, ping <address or name>, http <address or name> <port>, servo scan, servo pos, arm zero, arm pose, arm check <5 angles>, crash [null|write]\r\n");
     } else if same(line, n, "about") {
-        puts(con, k, "cancho-os 0.0.15: a kernel written in cancho, no Linux underneath (");
+        base.puts(con, k, "cancho-os 0.0.16: a kernel written in cancho, no Linux underneath (");
         if k[1] >= 3 {
-            puts(con, k, "Raspberry Pi ");
-            put_dec(con, k, k[1]);
+            base.puts(con, k, "Raspberry Pi ");
+            base.put_dec(con, k, k[1]);
         } else {
-            puts(con, k, "QEMU virt");
+            base.puts(con, k, "QEMU virt");
         }
-        puts(con, k, ")\r\n");
+        base.puts(con, k, ")\r\n");
     } else if n > 5 && same(line, 5, "echo ") {
         var i = 5;
         while i < n {
-            putc(con, k, int_of(line[i]));
+            base.putc(con, k, int_of(line[i]));
             i = i + 1;
         }
-        puts(con, k, "\r\n");
+        base.puts(con, k, "\r\n");
     } else if same(line, n, "uptime") {
-        let ms = uptime_ms(cpu);
-        put_dec(con, k, ms / 1000);
-        puts(con, k, ".");
-        put_dec(con, k, ms % 1000 / 100);
-        put_dec(con, k, ms % 100 / 10);
-        put_dec(con, k, ms % 10);
-        puts(con, k, " s\r\n");
+        let ms = base.uptime_ms(cpu);
+        base.put_dec(con, k, ms / 1000);
+        base.puts(con, k, ".");
+        base.put_dec(con, k, ms % 1000 / 100);
+        base.put_dec(con, k, ms % 100 / 10);
+        base.put_dec(con, k, ms % 10);
+        base.puts(con, k, " s\r\n");
     } else if same(line, n, "ticks") {
-        put_dec(con, k, k[5]);
-        puts(con, k, " timer interrupts\r\n");
+        base.put_dec(con, k, k[5]);
+        base.puts(con, k, " timer interrupts\r\n");
     } else if same(line, n, "mem") {
         memory_map(con, tab, code, k, false);
     } else if k[9] == 0 && same(line, n, "net up") {
         if k[15] != 0 {
             k[10] = 2;
         }
-        put_net(con, k);
+        network.put_net(con, k);
     } else if k[9] == 0 && (same(line, n, "servo scan") || same(line, n, "servo pos") || same(line, n, "arm pose") || n > 10 && same(line, 10, "arm check ")) {
-        puts(con, k, "this board has no second serial port\r\n");
+        base.puts(con, k, "this board has no second serial port\r\n");
     } else if same(line, n, "net up") {
         k[10] = 1;
-        put_net(con, k);
+        network.put_net(con, k);
     } else if same(line, n, "net down") {
         k[10] = 0;
-        put_net(con, k);
+        network.put_net(con, k);
     } else if same(line, n, "net shell on") && k[26] != 0 {
-        puts(con, k, "only from the serial console\r\n");
+        base.puts(con, k, "only from the serial console\r\n");
     } else if same(line, n, "net shell on") {
         k[30] = 23;
-        puts(con, k, "the shell is on port 23: no password, not encrypted, for a cable you trust\r\n");
+        base.puts(con, k, "the shell is on port 23: no password, not encrypted, for a cable you trust\r\n");
     } else if same(line, n, "net shell off") {
         k[30] = 0;
-        puts(con, k, "port 23 is closed\r\n");
+        base.puts(con, k, "port 23 is closed\r\n");
     } else if same(line, n, "net") {
-        put_net(con, k);
+        network.put_net(con, k);
     } else if k[10] != 0 && (same(line, n, "servo scan") || same(line, n, "servo pos") || same(line, n, "arm pose") || n > 10 && same(line, 10, "arm check ")) {
-        puts(con, k, "the second serial port is the network link: `net down` first\r\n");
+        base.puts(con, k, "the second serial port is the network link: `net down` first\r\n");
     } else if same(line, n, "servo scan") {
         servo_scan(cpu, con, bus, k);
     } else if same(line, n, "servo pos") {
@@ -1773,15 +856,15 @@ fn run[&f, &mc, &mu, &mt, &mx, &mz, &s, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000
     } else if same(line, n, "crash") {
         // Read past the end of the line buffer: cancho's bounds check traps, and
         // the exception vector reports it instead of the machine hanging silently.
-        putc(con, k, int_of(line[n + 4096]));
+        base.putc(con, k, int_of(line[n + 4096]));
     } else {
-        puts(con, k, "unknown command\r\n");
+        base.puts(con, k, "unknown command\r\n");
     }
     return 0;
 }
 
 fn shell[&f, &mc, &mi, &mu, &mr, &mv, &md, &mt, &mx, &mz, &s](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), irq: &!mi Mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), rng: &!mr Mmio("0x3f104000..0x3f10400c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), tab: &!mt Mmio("0x200000..0x208000,0x40200000..0x40208000"), code: &mx Mmio("0x80001..0x200000,0x40080001..0x40200000"), probe: &!mz Mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001"), k: &!s [int]) -> [cpu("cntfrq_el0"), cpu("cntv_cval_el0"), cpu("cntvct_el0"), cpu("wfi"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x200000..0x208000,0x40200000..0x40208000"), mmio("0x80001..0x200000,0x40080001..0x40200000"), mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000"), mmio("0x3f104000..0x3f10400c")] int {
-    puts(con, k, "\r\ncancho-os booted. type `help`.\r\n");
+    base.puts(con, k, "\r\ncancho-os booted. type `help`.\r\n");
     region r {
         let line = alloc_slice[r](128, byte_of(0));
         // the network link's: the SLIP decoder's state, a received packet, the reply, the reply framed
@@ -1795,62 +878,60 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mv, &md, &mt, &mx, &mz, &s](cpu: &!f Cpu, con:
         // what has arrived for the shell's port and not been read, and the line being typed there
         let inbox = alloc_slice[r](4 * inet.tcp_inbox(), byte_of(0));
         let rline = alloc_slice[r](128, byte_of(0));
+        let cmd = alloc_slice[r](128, byte_of(0));
         var n = 0;
-        puts(con, k, "> ");
+        base.puts(con, k, "> ");
         while true {
             let c = getc(cpu, con, irq, bus, rng, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, rline);
             if c == -3 {
                 k[26] = 1;
-                puts(con, k, "cancho-os: the kernel's shell. One session, not encrypted. Type `help`.\r\n> ");
+                base.puts(con, k, "cancho-os: the kernel's shell. One session, not encrypted. Type `help`.\r\n> ");
                 k[26] = 0;
             } else if c == -2 {
                 // a line from the network: the same commands, and what they print goes back there
                 k[26] = 1;
-                if same(rline, k[31], "exit") {
-                    puts(con, k, "bye\r\n");
+                // (copied: a command may wait on the network, and that reads the connection's line)
+                var i = 0;
+                while i < k[31] {
+                    cmd[i] = rline[i];
+                    i = i + 1;
+                }
+                if same(cmd, k[31], "exit") {
+                    base.puts(con, k, "bye\r\n");
                     k[4152] = 1;
-                } else if k[31] > 5 && same(rline, 5, "http ") {
-                    let dest = address_and_port(rline, 5, k[31]);
-                    net_http(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, rline, dest);
-                } else if same(rline, k[31], "random") {
-                    put_random(con, rng, vio, dma, k);
-                } else if k[31] > 5 && same(rline, 5, "ping ") {
-                    net_ping(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, rline, 5, k[31]);
-                } else {
-                    run(cpu, con, bus, tab, code, probe, k, rline, k[31]);
+                } else if same(cmd, k[31], "random") {
+                    network.put_random(con, rng, vio, dma, k);
+                } else if network.net_command(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, rline, cmd, k[31]) == 0 {
+                    run(cpu, con, bus, tab, code, probe, k, cmd, k[31]);
                 }
                 if k[33] != 0 {
                     k[33] = 0;
                     k[27] = 4000;
-                    puts(con, k, "\r\n[more was printed than is kept: cut]\r\n");
+                    base.puts(con, k, "\r\n[more was printed than is kept: cut]\r\n");
                 }
                 if k[4152] == 0 {
-                    puts(con, k, "> ");
+                    base.puts(con, k, "> ");
                 }
                 k[26] = 0;
                 k[31] = 0;
             } else if c == 13 || c == 10 {
-                puts(con, k, "\r\n");
-                if n > 5 && same(line, 5, "http ") {
-                    net_http(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, rline, address_and_port(line, 5, n));
-                } else if same(line, n, "random") {
-                    put_random(con, rng, vio, dma, k);
-                } else if n > 5 && same(line, 5, "ping ") {
-                    net_ping(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, line, 5, n);
-                } else {
+                base.puts(con, k, "\r\n");
+                if same(line, n, "random") {
+                    network.put_random(con, rng, vio, dma, k);
+                } else if network.net_command(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, rline, line, n) == 0 {
                     run(cpu, con, bus, tab, code, probe, k, line, n);
                 }
                 n = 0;
-                puts(con, k, "> ");
+                base.puts(con, k, "> ");
             } else if (c == 127 || c == 8) && n > 0 {
                 n = n - 1;
-                putc(con, k, 8);
-                putc(con, k, 32);
-                putc(con, k, 8);
+                base.putc(con, k, 8);
+                base.putc(con, k, 32);
+                base.putc(con, k, 8);
             } else if c >= 32 && c < 127 && n < 128 {
                 line[n] = byte_of(c);
                 n = n + 1;
-                putc(con, k, c);
+                base.putc(con, k, c);
             }
         }
     }
@@ -1860,6 +941,10 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mv, &md, &mt, &mx, &mz, &s](cpu: &!f Cpu, con:
 fn kernel[&f, &mc, &mp, &mi, &mu, &mr, &mv, &md, &mt, &mx, &mz, &mq](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), pins: &!mp Mmio("0x3f200004..0x3f200008,0xfe200004..0xfe200008"), irq: &!mi Mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), rng: &!mr Mmio("0x3f104000..0x3f10400c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), tab: &!mt Mmio("0x200000..0x208000,0x40200000..0x40208000"), code: &mx Mmio("0x80001..0x200000,0x40080001..0x40200000"), probe: &!mz Mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001"), fault: &mq Mmio("0x208000..0x208008,0x40208000..0x40208008")) -> [cpu("cntfrq_el0"), cpu("cntv_ctl_el0"), cpu("cntv_cval_el0"), cpu("cntv_tval_el0"), cpu("cntvct_el0"), cpu("elr_el1"), cpu("esr_el1"), cpu("far_el1"), cpu("mair_el1"), cpu("midr_el1"), cpu("sctlr_el1"), cpu("tcr_el1"), cpu("tlbi_vmalle1"), cpu("ttbr0_el1"), cpu("wfi"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f200004..0x3f200008,0xfe200004..0xfe200008"), mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x200000..0x208000,0x40200000..0x40208000"), mmio("0x80001..0x200000,0x40080001..0x40200000"), mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001"), mmio("0x208000..0x208008,0x40208000..0x40208008"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000"), mmio("0x3f104000..0x3f10400c")] int {
     region r {
         let k = alloc_slice[r](40 + 4096 + 16 + 8, 0);
+        // the address the kernel has until it is given another: 10.0.0.2 on a network of 256, gateway 10.0.0.1
+        k[4154] = 0x0a000002;
+        k[4155] = 0xffffff00;
+        k[4156] = 0x0a000001;
         if detect(cpu, k) == 0 {
             // a board this kernel has no addresses for: nothing can even be printed
             return 1;
@@ -1877,7 +962,7 @@ fn kernel[&f, &mc, &mp, &mi, &mu, &mr, &mv, &md, &mt, &mx, &mz, &mq](cpu: &!f Cp
         }
         k[6] = 1;
         if memory_map(con, tab, code, k, true) != 0 {
-            puts(con, k, "\r\nmemory map refused; running without the MMU\r\n");
+            base.puts(con, k, "\r\nmemory map refused; running without the MMU\r\n");
         } else {
             mmu_on(cpu, k[14]);
         }
@@ -1886,9 +971,9 @@ fn kernel[&f, &mc, &mp, &mi, &mu, &mr, &mv, &md, &mt, &mx, &mz, &mq](cpu: &!f Cp
             bus_init(bus, k);
         }
         if k[1] == 1 {
-            vnet_start(vio, dma, k);
+            network.vnet_start(vio, dma, k);
         }
-        rng_start(rng, vio, dma, k);
+        network.rng_start(rng, vio, dma, k);
         shell(cpu, con, irq, bus, rng, vio, dma, tab, code, probe, k);
     }
     return 0;

@@ -340,10 +340,18 @@ kernel advertised a window of zero (it takes nothing more), and Linux does not s
 of zero: it probes, for ever. The window in that state is now what the kernel is in fact willing to
 receive and throw away, and the Linux check ends by insisting that no connection is left open.
 
-## 10. Next
+## 10. Addresses, a gateway and names
+
+Sixth slice, in its own file: [`addresses.md`](addresses.md). The kernel's address is no longer a constant;
+`net dhcp` asks for one; machines outside its network are reached through a gateway; `lookup`, `ping`
+and `http` take names. The kernel's network code moved from `src/kernel.cho` to `src/network.cho` with it
+(the file had reached its 2,000 lines), so where sections 6 to 9 say `src/kernel.cho`, read that.
+
+## 11. Next
 
 The order, the boards and what each driver is written from are in [`drivers.md`](drivers.md).
 
+1. What a real network also asks: the lease renewed, answers remembered, more than one gateway.
 1. SSH, as its own package (the cryptography is in cancho's standard library; the kernel needs a source
    of randomness first), to replace the open port 23. Then connections opened from the kernel.
 2. A link the console does not share pins with (another UART), so the serial line works on a real Pi 4.

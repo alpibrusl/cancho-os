@@ -14,12 +14,14 @@ drops to EL1 and calls `main`, and everything after that is cancho — the PL011
 driver, the timer and interrupt controller, the page tables, the fault report, the shell.
 
 ```
-src/kernel.cho   the kernel, drivers included (cancho)
+src/kernel.cho   the kernel: boot, memory, the shell, the servo and arm commands (cancho)
+src/base.cho     the console's output, the clock, bytes on the second serial port
+src/network.cho  the kernel's side of the network: both links, the generator, the commands
 src/feetech.cho  the Feetech servo protocol, read side only        } vendored from
 src/calibration.cho, kinematics.cho, so101.cho  ticks to degrees,  } cancho-robot,
                  and the SO-101's forward kinematics               } unchanged
 src/safety.cho   the safety core: one `approve` every motion must pass }
-src/inet.cho     the network: SLIP, IPv4, ping and UDP echo; holds no hardware
+src/inet.cho     the network's packets: SLIP, Ethernet, IPv4, UDP, TCP, DHCP, DNS; holds no hardware
 sim/servos.cho   six simulated servos for QEMU: a program for the host, not in the image
 sim/expect.cho   what `arm pose` must print for them, computed on the host
 sim/netpeer.cho  the other end of the network link for QEMU, also a program for the host
@@ -138,7 +140,9 @@ Pi 4's generator has no driver yet, because QEMU's Pi 4 does not have the device
 The kernel answers `ping`, a UDP echo and a TCP echo (port 7) over two links: a serial line
 (SLIP) on the second serial port of a Pi, and Ethernet, with ARP, through a virtio network card
 on QEMU's `virt` machine. It can also speak first: `ping 10.0.0.1` in its shell, and `http 10.0.0.1 8000` opens a connection
-and prints the page a web server there gives. And `net shell on`, typed at the serial
+and prints the page a web server there gives. On the card, `net dhcp` asks the network for an address,
+a gateway and a name server, after which names work (`lookup example.com`, `http example.com 80`):
+[docs/addresses.md](docs/addresses.md). And `net shell on`, typed at the serial
 console, gives that shell to whoever connects to port 23 (`nc 10.0.0.2 23`): no password and no
 encryption, so only on a cable you trust, and only until SSH replaces it. TCP here is small
 on purpose: connections are opened from the other end only, and at most one segment's worth of

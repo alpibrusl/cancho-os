@@ -9,7 +9,7 @@
 set -eu
 cd "$(dirname "$0")"
 CANCHO=${CANCHO:-cancho}
-SOURCES="src/feetech.cho src/calibration.cho src/kinematics.cho src/so101.cho src/safety.cho src/inet.cho"
+SOURCES="src/feetech.cho src/calibration.cho src/kinematics.cho src/so101.cho src/safety.cho src/inet.cho src/base.cho src/network.cho"
 mkdir -p build
 "$CANCHO" authority src/kernel.cho $SOURCES --std | sed '/^provably pure/,$d' > build/authority.txt
 if ! diff docs/authority.txt build/authority.txt; then
@@ -17,8 +17,8 @@ if ! diff docs/authority.txt build/authority.txt; then
     exit 1
 fi
 # the first statement of arm_zero becomes a write to the bus through the console's capability
-awk '{ print } /^fn arm_zero\[/ { print "    bus_put(con, k, 0);" }' src/kernel.cho > build/steal.cho
-grep -q '^    bus_put(con, k, 0);$' build/steal.cho
+awk '{ print } /^fn arm_zero\[/ { print "    base.bus_put(con, k, 0);" }' src/kernel.cho > build/steal.cho
+grep -q '^    base.bus_put(con, k, 0);$' build/steal.cho
 if "$CANCHO" check build/steal.cho $SOURCES --std --output json > build/steal.json 2>&1; then
     echo "authority.sh: a function lent the console wrote to the servo bus, and the compiler accepted it" >&2
     exit 1

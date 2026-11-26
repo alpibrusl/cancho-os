@@ -218,6 +218,11 @@ pub fn answer[&p, &o](pkt: &p [byte], n: int, ours: int, out: &!o [byte]) -> [] 
 // The header of the packet `pkt[at..at + n]`, held to everything a packet must be before it is read further.
 // Answers the header's length, or the `drop_*` that says what is wrong.
 fn checked[&p](pkt: &p [byte], at: int, n: int, ours: int) -> [] int {
+    return checked_for(pkt, at, n, ours, false);
+}
+
+// The same, and if `any`, whoever it is addressed to: for the answers that come before we have an address.
+fn checked_for[&p](pkt: &p [byte], at: int, n: int, ours: int, any: bool) -> [] int {
     if at < 0 || n < 20 || at + n > len(pkt) {
         return drop_short();
     }
@@ -233,7 +238,7 @@ fn checked[&p](pkt: &p [byte], at: int, n: int, ours: int) -> [] int {
     if sum16(pkt, at, at + ihl, 0) != 65535 {
         return drop_bad_header_checksum();
     }
-    if get32(pkt, at + 16) != ours {
+    if !any && get32(pkt, at + 16) != ours {
         return drop_not_ours();
     }
     // more fragments, or an offset: bits 13 and 0..12 of the word at 6
@@ -1211,4 +1216,347 @@ pub fn arp_answer_from[&p](frame: &p [byte], n: int, mac: int, ours: int, who: i
 // The packet already at `out[14..14 + n]`, made a frame for the card `to`. Answers the frame's length, or a drop.
 pub fn eth_frame[&o](out: &!o [byte], n: int, to: int, mac: int) -> [] int {
     return eth_wrap(out, 14 + n, to, mac, 2048);
+}
+
+// ── a way out, datagrams of our own, names, and an address that is given ─────────────────────────────────
+// docs/addresses.md.
+
+// Where a packet for `to` is sent on a network with cards: to `to` itself if it is on our network (`mask`),
+// else to `gateway`. 0: it is outside and there is no gateway.
+pub fn next_hop(ours: int, mask: int, gateway: int, to: int) -> [] int {
+    if mask == 0 || to / (4294967296 - mask) == ours / (4294967296 - mask) {
+        return to;
+    }
+    return gateway;
+}
+
+// A datagram of ours at `out[o..]`: `data[at..at + n]` from our port `sport` to `dport` of `to`. Its length, or -1.
+pub fn udp_packet[&o, &d](out: &!o [byte], o: int, ours: int, to: int, sport: int, dport: int, data: &d [byte], at: int, n: int) -> [] int {
+    if o < 0 || at < 0 || n < 0 || at + n > len(data) || 28 + n > mtu() || o + 28 + n > len(out) {
+        return -1;
+    }
+    header(out, o, 28 + n, 17, ours, to);
+    put16(out, o + 20, sport);
+    put16(out, o + 22, dport);
+    put16(out, o + 24, 8 + n);
+    put16(out, o + 26, 0);
+    var i = 0;
+    while i < n {
+        out[o + 28 + i] = data[at + i];
+        i = i + 1;
+    }
+    var sum = complement(sum16(out, o + 20, o + 28 + n, pseudo(ours, to, 17, 8 + n)));
+    if sum == 0 {
+        sum = 65535;
+    }
+    put16(out, o + 26, sum);
+    return 28 + n;
+}
+
+// Is the packet `pkt[at..at + n]` a whole datagram to our port `dport` from port `sport` of `from`? Where its
+// data starts, or -1. `udp_size` then says how long the data is.
+pub fn udp_data[&p](pkt: &p [byte], at: int, n: int, ours: int, from: int, sport: int, dport: int) -> [] int {
+    let ihl = checked(pkt, at, n, ours);
+    if ihl < 0 {
+        return -1;
+    }
+    let body = get16(pkt, at + 2) - ihl;
+    let s = at + ihl;
+    if int_of(pkt[at + 9]) != 17 || get32(pkt, at + 12) != from || body < 8 || get16(pkt, s + 4) != body {
+        return -1;
+    }
+    if get16(pkt, s) != sport || get16(pkt, s + 2) != dport {
+        return -1;
+    }
+    if get16(pkt, s + 6) != 0 && sum16(pkt, s, s + body, pseudo(from, ours, 17, body)) != 65535 {
+        return -1;
+    }
+    return s + 8;
+}
+
+// The length of the data `udp_data` found at `data`.
+pub fn udp_size[&p](pkt: &p [byte], data: int) -> [] int {
+    if data < 8 || data > len(pkt) {
+        return 0;
+    }
+    return get16(pkt, data - 4) - 8;
+}
+
+// ── DNS (RFC 1035) ──
+
+// The question "what is the address of `name[at..to]`?" at `out[o..]`, numbered `id`. Its length, or -1 if
+// the name is not one: labels of 1 to 63 letters, digits, `-` or `_`, with dots between, 253 bytes at most.
+pub fn dns_question[&o, &m](out: &!o [byte], o: int, id: int, name: &m [byte], at: int, to: int) -> [] int {
+    let n = to - at;
+    if o < 0 || at < 0 || to > len(name) || n < 1 || n > 253 || o + 18 + n > len(out) {
+        return -1;
+    }
+    put16(out, o, id % 65536);
+    // one question, and "ask others if you do not know" (recursion desired)
+    put16(out, o + 2, 256);
+    put16(out, o + 4, 1);
+    put16(out, o + 6, 0);
+    put16(out, o + 8, 0);
+    put16(out, o + 10, 0);
+    // each label goes after a byte that says how long it is
+    var mark = o + 12;
+    var count = 0;
+    var i = 0;
+    while i < n {
+        let c = int_of(name[at + i]);
+        if c == '.' {
+            if count == 0 {
+                return -1;
+            }
+            out[mark] = byte_of(count);
+            mark = o + 13 + i;
+            count = 0;
+        } else {
+            let letter = c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_';
+            if !letter || count >= 63 {
+                return -1;
+            }
+            out[o + 13 + i] = byte_of(c);
+            count = count + 1;
+        }
+        i = i + 1;
+    }
+    if count == 0 {
+        return -1;
+    }
+    out[mark] = byte_of(count);
+    out[o + 13 + n] = byte_of(0);
+    // an address (type 1), on the Internet (class 1)
+    put16(out, o + 14 + n, 1);
+    put16(out, o + 16 + n, 1);
+    return 18 + n;
+}
+
+pub fn dns_not_an_answer() -> [] int {
+    return -1;
+}
+
+pub fn dns_no_such_name() -> [] int {
+    return -2;
+}
+
+pub fn dns_no_address() -> [] int {
+    return -3;
+}
+
+// Past the name at `msg[at..]`, or -1. A name is labels, each after its length, ended by a zero or by two
+// bytes that point at another name (the top two bits of the first are set).
+fn dns_skip[&p](msg: &p [byte], at: int, end: int) -> [] int {
+    var i = at;
+    while i < end {
+        let b = int_of(msg[i]);
+        if b == 0 {
+            return i + 1;
+        }
+        if b >= 192 {
+            if i + 2 > end {
+                return -1;
+            }
+            return i + 2;
+        }
+        if b >= 64 {
+            return -1;
+        }
+        i = i + 1 + b;
+    }
+    return -1;
+}
+
+// The answer `msg[at..at + n]` to question `id`: the first IPv4 address in it, or one of the three above.
+pub fn dns_address[&p](msg: &p [byte], at: int, n: int, id: int) -> [] int {
+    if at < 0 || n < 12 || at + n > len(msg) {
+        return dns_not_an_answer();
+    }
+    let end = at + n;
+    let flags = get16(msg, at + 2);
+    if get16(msg, at) != id % 65536 || flags < 32768 {
+        return dns_not_an_answer();
+    }
+    if flags % 16 == 3 {
+        return dns_no_such_name();
+    }
+    if flags % 16 != 0 {
+        return dns_no_address();
+    }
+    var i = at + 12;
+    var q = get16(msg, at + 4);
+    while q > 0 {
+        i = dns_skip(msg, i, end);
+        if i < 0 || i + 4 > end {
+            return dns_no_address();
+        }
+        i = i + 4;
+        q = q - 1;
+    }
+    var a = get16(msg, at + 6);
+    while a > 0 {
+        i = dns_skip(msg, i, end);
+        if i < 0 || i + 10 > end {
+            return dns_no_address();
+        }
+        let kind = get16(msg, i);
+        let class = get16(msg, i + 2);
+        let size = get16(msg, i + 8);
+        if i + 10 + size > end {
+            return dns_no_address();
+        }
+        if kind == 1 && class == 1 && size == 4 {
+            return get32(msg, i + 10);
+        }
+        i = i + 10 + size;
+        a = a - 1;
+    }
+    return dns_no_address();
+}
+
+// ── DHCP (RFC 2131) ──
+// Asked before we have an address, so these are whole frames: from 0.0.0.0 to everyone, port 68 to port 67.
+// After the UDP header, at frame[42..]: 236 bytes of fixed fields (the message is ours: 1, or the server's: 2;
+// at +4 the number of this exchange; at +16 the address offered; at +28 our card), the four bytes 99 130 83
+// 99, and options, each a kind, a length and that many bytes, ended by 255.
+
+// The fixed part of a message of ours in `out`, with option 53 saying what it is (`what`: 1 a DISCOVER, 3 a
+// REQUEST). Answers where the next option goes.
+fn dhcp_begin[&o](out: &!o [byte], mac: int, xid: int, what: int) -> [] int {
+    var i = 14;
+    while i < 342 {
+        out[i] = byte_of(0);
+        i = i + 1;
+    }
+    out[42] = byte_of(1);
+    out[43] = byte_of(1);
+    out[44] = byte_of(6);
+    put32(out, 46, xid % 4294967296);
+    // "answer to everyone": we cannot yet be sent anything by address
+    put16(out, 52, 32768);
+    put48(out, 70, mac);
+    put32(out, 278, 1669485411);
+    out[282] = byte_of(53);
+    out[283] = byte_of(1);
+    out[284] = byte_of(what);
+    return 285;
+}
+
+// The options that end a message of ours (which of the server's we want: the mask 1, the gateway 3, the name
+// server 6), then the headers in front of it. The frame is 342 bytes.
+fn dhcp_end[&o](out: &!o [byte], at: int, mac: int) -> [] int {
+    out[at] = byte_of(55);
+    out[at + 1] = byte_of(3);
+    out[at + 2] = byte_of(1);
+    out[at + 3] = byte_of(3);
+    out[at + 4] = byte_of(6);
+    out[at + 5] = byte_of(255);
+    header(out, 14, 328, 17, 0, 4294967295);
+    put16(out, 34, 68);
+    put16(out, 36, 67);
+    put16(out, 38, 308);
+    put16(out, 40, 0);
+    var sum = complement(sum16(out, 34, 342, pseudo(0, 4294967295, 17, 308)));
+    if sum == 0 {
+        sum = 65535;
+    }
+    put16(out, 40, sum);
+    return eth_wrap(out, 342, 281474976710655, mac, 2048);
+}
+
+// "Is there a server that will give this card an address?" Answers the frame's length (342), or -1.
+pub fn dhcp_discover[&o](out: &!o [byte], mac: int, xid: int) -> [] int {
+    if len(out) < 342 {
+        return -1;
+    }
+    return dhcp_end(out, dhcp_begin(out, mac, xid, 1), mac);
+}
+
+// "I take the address `offered`, from the server `server`."
+pub fn dhcp_request[&o](out: &!o [byte], mac: int, xid: int, offered: int, server: int) -> [] int {
+    if len(out) < 342 {
+        return -1;
+    }
+    let at = dhcp_begin(out, mac, xid, 3);
+    out[at] = byte_of(50);
+    out[at + 1] = byte_of(4);
+    put32(out, at + 2, offered);
+    out[at + 6] = byte_of(54);
+    out[at + 7] = byte_of(4);
+    put32(out, at + 8, server);
+    return dhcp_end(out, at + 12, mac);
+}
+
+// How many ints `dhcp_answer` fills: the address offered, the mask, the gateway, the name server, the server
+// that answers, and for how many seconds the address is ours. One it was not told is 0.
+pub fn dhcp_facts() -> [] int {
+    return 6;
+}
+
+// Is the frame a server's answer to exchange `xid` for the card `mac`? What it is (2 an OFFER, 5 an ACK,
+// 6 a refusal), with `facts` filled; or -1.
+pub fn dhcp_answer[&p, &f](frame: &p [byte], n: int, mac: int, xid: int, facts: &!f [int]) -> [] int {
+    if n < 282 || n > len(frame) || len(facts) < dhcp_facts() || get16(frame, 12) != 2048 {
+        return -1;
+    }
+    let ihl = checked_for(frame, 14, n - 14, 0, true);
+    if ihl < 0 || int_of(frame[23]) != 17 {
+        return -1;
+    }
+    let u = 14 + ihl;
+    let body = get16(frame, 16) - ihl;
+    if body < 248 || get16(frame, u) != 67 || get16(frame, u + 2) != 68 || get16(frame, u + 4) != body {
+        return -1;
+    }
+    if get16(frame, u + 6) != 0 && sum16(frame, u, u + body, pseudo(get32(frame, 26), get32(frame, 30), 17, body)) != 65535 {
+        return -1;
+    }
+    let b = u + 8;
+    let end = u + body;
+    if int_of(frame[b]) != 2 || get32(frame, b + 4) != xid % 4294967296 || get48(frame, b + 28) != mac || get32(frame, b + 236) != 1669485411 {
+        return -1;
+    }
+    var i = 0;
+    while i < dhcp_facts() {
+        facts[i] = 0;
+        i = i + 1;
+    }
+    facts[0] = get32(frame, b + 16);
+    var what = -1;
+    var at = b + 240;
+    while at < end {
+        let kind = int_of(frame[at]);
+        if kind == 255 {
+            return what;
+        }
+        if kind == 0 {
+            at = at + 1;
+        } else {
+            if at + 2 > end {
+                return -1;
+            }
+            let size = int_of(frame[at + 1]);
+            if at + 2 + size > end {
+                return -1;
+            }
+            if kind == 53 && size == 1 {
+                what = int_of(frame[at + 2]);
+            } else if size >= 4 {
+                let value = get32(frame, at + 2);
+                if kind == 1 {
+                    facts[1] = value;
+                } else if kind == 3 {
+                    facts[2] = value;
+                } else if kind == 6 {
+                    facts[3] = value;
+                } else if kind == 54 {
+                    facts[4] = value;
+                } else if kind == 51 {
+                    facts[5] = value;
+                }
+            }
+            at = at + 2 + size;
+        }
+    }
+    return what;
 }

@@ -33,6 +33,11 @@ Rules of the road
   A change to TCP is tried against a real stack before it is believed: `MACHINE=virt TCPFILE=... ./test.sh`
   (QEMU's own TCP) here, `sudo ./ping.sh` (Linux's) in CI. Twice every test passed and a real stack
   showed the code wrong (docs/network.md, section 7): never take back window that was offered.
+- Three files, none near 2,000 lines: `src/kernel.cho` (boot, memory, shell, servo and arm), `src/base.cho`
+  (console output, clock, bus bytes), `src/network.cho` (links, generator, session, network commands). A
+  new network command goes in `network.net_command`, never in the shell's loop.
+- The kernel's address, mask, gateway and name server are k[4154..4157] (docs/addresses.md); nothing may
+  assume 10.0.0.2. DHCP and DNS answers are parsed by `inet` and must have a no-trap test like the others.
 - `tcp_connect` is a name of cancho's prelude, and `where` a keyword: `inet` says `tcp_dial`.
   A command that waits on the network (`http`) sets k[39] so `session` leaves the shell's connection alone.
 - Randomness (docs/random.md): `rng_word` reads the generator, the pool at k[4136..] is what other code takes

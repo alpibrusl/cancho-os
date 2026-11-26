@@ -1,0 +1,269 @@
+import std.test;
+import inet;
+
+// A way out of the network, datagrams of our own, names and a given address (docs/addresses.md), with no
+// machine under them. As in the other tests, every message here was built by a second implementation in
+// another language (Python's `struct`) and pasted as hex.
+
+fn digit(c: int) -> [] int {
+    if c >= '0' && c <= '9' {
+        return c - '0';
+    }
+    return c - 'a' + 10;
+}
+
+fn set[&b, &s](buf: &!b [byte], hex: &s [byte]) -> [] int {
+    var i = 0;
+    while i * 2 + 1 < len(hex) {
+        buf[i] = byte_of(digit(int_of(hex[i * 2])) * 16 + digit(int_of(hex[i * 2 + 1])));
+        i = i + 1;
+    }
+    return i;
+}
+
+fn same[&a, &b](x: &a [byte], y: &b [byte], n: int) -> [] bool {
+    var i = 0;
+    while i < n {
+        if int_of(x[i]) != int_of(y[i]) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn ours() -> [] int {
+    return 10 * 16777216 + 2;
+}
+
+fn mac() -> [] int {
+    return 90520731923542;
+}
+
+// 0x3903f326, the number the exchange in the vectors has
+fn xid() -> [] int {
+    return 956560166;
+}
+
+// ── a way out ──
+
+fn test_a_machine_on_our_network_is_sent_to_directly_and_another_by_the_gateway() -> [] int {
+    let mask = 4294967040;
+    let gateway = 10 * 16777216 + 1;
+    test.assert_eq(inet.next_hop(ours(), mask, gateway, 10 * 16777216 + 77), 10 * 16777216 + 77);
+    test.assert_eq(inet.next_hop(ours(), mask, gateway, 10 * 16777216 + 256 + 77), gateway);
+    test.assert_eq(inet.next_hop(ours(), mask, gateway, 3232235777), gateway);
+    // no gateway: 0, there is no way
+    test.assert_eq(inet.next_hop(ours(), mask, 0, 3232235777), 0);
+    // a mask of 16 bits; and no mask at all, where everything is near
+    test.assert_eq(inet.next_hop(ours(), 4294901760, gateway, 10 * 16777216 + 256 + 77), 10 * 16777216 + 256 + 77);
+    test.assert_eq(inet.next_hop(ours(), 0, gateway, 3232235777), 3232235777);
+    return 0;
+}
+
+// ── names ──
+
+fn test_the_question_is_the_one_a_second_implementation_asks() -> [] int {
+    region a {
+        let want = alloc_slice[a](300, byte_of(0));
+        let out = alloc_slice[a](300, byte_of(0));
+        let pkt = alloc_slice[a](300, byte_of(0));
+        let m = set(want, "123401000001000000000000037777770963616e63686f2d6f7304746573740000010001");
+        test.assert_eq(inet.dns_question(out, 0, 4660, "www.cancho-os.test", 0, 18), m);
+        test.assert(same(out, want, m));
+        // and in a datagram to the name server, 10.0.0.3, from our port 50001
+        let n = set(want, "4500004000000000401166a90a0000020a000003c3510035002c0f23123401000001000000000000037777770963616e63686f2d6f7304746573740000010001");
+        test.assert_eq(inet.udp_packet(pkt, 0, ours(), 10 * 16777216 + 3, 50001, 53, out, 0, m), n);
+        test.assert(same(pkt, want, n));
+    }
+    return 0;
+}
+
+fn test_what_is_not_a_name_is_not_asked_about() -> [] int {
+    region a {
+        let out = alloc_slice[a](300, byte_of(0));
+        let long = alloc_slice[a](300, byte_of('a'));
+        test.assert_eq(inet.dns_question(out, 0, 1, "", 0, 0), -1);
+        test.assert_eq(inet.dns_question(out, 0, 1, ".test", 0, 5), -1);
+        test.assert_eq(inet.dns_question(out, 0, 1, "a..test", 0, 7), -1);
+        test.assert_eq(inet.dns_question(out, 0, 1, "test.", 0, 5), -1);
+        test.assert_eq(inet.dns_question(out, 0, 1, "a b", 0, 3), -1);
+        // a label of 63 is one, of 64 is not; 253 bytes at most
+        test.assert_eq(inet.dns_question(out, 0, 1, long, 0, 63), 81);
+        test.assert_eq(inet.dns_question(out, 0, 1, long, 0, 64), -1);
+        long[63] = byte_of('.');
+        long[127] = byte_of('.');
+        long[191] = byte_of('.');
+        test.assert_eq(inet.dns_question(out, 0, 1, long, 0, 253), 271);
+        test.assert_eq(inet.dns_question(out, 0, 1, long, 0, 254), -1);
+    }
+    return 0;
+}
+
+// What `dns_address` makes of `hex`.
+fn answer_is[&s](hex: &s [byte], id: int, expected: int) -> [] int {
+    region a {
+        let msg = alloc_slice[a](300, byte_of(0));
+        let n = set(msg, hex);
+        test.assert_eq(inet.dns_address(msg, 0, n, id), expected);
+    }
+    return 0;
+}
+
+fn test_the_address_is_read_from_the_answer() -> [] int {
+    // 192.0.2.7
+    answer_is("123481800001000100000000037777770963616e63686f2d6f7304746573740000010001c00c000100010000003c0004c0000207", 4660, 3221225991);
+    // behind an alias and an IPv6 address: 192.0.2.9
+    answer_is("123481800001000300000000037777770963616e63686f2d6f7304746573740000010001c00c000500010000003c001504686f73740963616e63686f2d6f7304746573740004686f73740963616e63686f2d6f73047465737400001c00010000003c00100000000000000000000000000000000004686f73740963616e63686f2d6f73047465737400000100010000003c0004c0000209", 4660, 3221225993);
+    answer_is("123481830001000000000000037777770963616e63686f2d6f7304746573740000010001", 4660, inet.dns_no_such_name());
+    answer_is("123481800001000000000000037777770963616e63686f2d6f7304746573740000010001", 4660, inet.dns_no_address());
+    answer_is("123481820001000000000000037777770963616e63686f2d6f7304746573740000010001", 4660, inet.dns_no_address());
+    // an answer to another question; our own question; an answer cut short
+    answer_is("123581800001000100000000037777770963616e63686f2d6f7304746573740000010001c00c000100010000003c0004c0000207", 4660, inet.dns_not_an_answer());
+    answer_is("123401000001000000000000037777770963616e63686f2d6f7304746573740000010001", 4660, inet.dns_not_an_answer());
+    answer_is("123481800001000100000000037777770963616e63686f2d6f7304746573740000010001c00c000100010000003c0004c000", 4660, inet.dns_no_address());
+    return 0;
+}
+
+fn test_the_answer_is_taken_only_from_the_server_and_port_asked() -> [] int {
+    region a {
+        let pkt = alloc_slice[a](300, byte_of(0));
+        let server = 10 * 16777216 + 3;
+        var n = set(pkt, "4500005000770000401166220a0000030a0000020035c351003c0c2b123481800001000100000000037777770963616e63686f2d6f7304746573740000010001c00c000100010000003c0004c0000207");
+        let at = inet.udp_data(pkt, 0, n, ours(), server, 53, 50001);
+        test.assert_eq(at, 28);
+        test.assert_eq(inet.dns_address(pkt, at, inet.udp_size(pkt, at), 4660), 3221225991);
+        test.assert_eq(inet.udp_data(pkt, 0, n, ours(), server + 1, 53, 50001), -1);
+        test.assert_eq(inet.udp_data(pkt, 0, n, ours(), server, 53, 50002), -1);
+        test.assert_eq(inet.udp_data(pkt, 0, n, ours(), server, 54, 50001), -1);
+        test.assert_eq(inet.udp_data(pkt, 0, n, ours() + 1, server, 53, 50001), -1);
+        test.assert_eq(inet.udp_data(pkt, 0, n - 1, ours(), server, 53, 50001), -1);
+        // no checksum is allowed; a wrong one is not
+        n = set(pkt, "4500005000770000401166220a0000030a0000020035c351003c0000123481800001000100000000037777770963616e63686f2d6f7304746573740000010001c00c000100010000003c0004c0000207");
+        test.assert_eq(inet.udp_data(pkt, 0, n, ours(), server, 53, 50001), 28);
+        n = set(pkt, "4500005000770000401166220a0000030a0000020035c351003c0c2b123481800001000100000000037777770963616e63686f2d6f7304746573740000010001c00c000100010000003c0004c0000206");
+        test.assert_eq(inet.udp_data(pkt, 0, n, ours(), server, 53, 50001), -1);
+    }
+    return 0;
+}
+
+fn test_no_damage_to_an_answer_makes_dns_address_trap() -> [] int {
+    region a {
+        let msg = alloc_slice[a](300, byte_of(0));
+        let n = set(msg, "123481800001000300000000037777770963616e63686f2d6f7304746573740000010001c00c000500010000003c001504686f73740963616e63686f2d6f7304746573740004686f73740963616e63686f2d6f73047465737400001c00010000003c00100000000000000000000000000000000004686f73740963616e63686f2d6f73047465737400000100010000003c0004c0000209");
+        var at = 0;
+        var tried = 0;
+        while at < n {
+            let kept = msg[at];
+            var v = 0;
+            while v < 256 {
+                msg[at] = byte_of(v);
+                var cut = 0;
+                while cut <= n {
+                    let r = inet.dns_address(msg, 0, cut, 4660);
+                    test.assert(r >= -3 && r <= 4294967295);
+                    tried = tried + 1;
+                    cut = cut + 7;
+                }
+                v = v + 1;
+            }
+            msg[at] = kept;
+            at = at + 1;
+        }
+        test.assert(tried > 400000);
+    }
+    return 0;
+}
+
+// ── an address that is given ──
+
+fn test_the_two_frames_we_send_are_the_ones_a_second_implementation_builds() -> [] int {
+    region a {
+        let want = alloc_slice[a](400, byte_of(0));
+        let out = alloc_slice[a](400, byte_of(255));
+        let short = alloc_slice[a](341, byte_of(0));
+        var m = set(want, "ffffffffffff52540012345608004500014800000000401179a600000000ffffffff004400430134d0f1010106003903f326000080000000000000000000000000000000000052540012345600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000638253633501013703010306ff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+        test.assert_eq(m, 342);
+        test.assert_eq(inet.dhcp_discover(out, mac(), xid()), m);
+        test.assert(same(out, want, m));
+        // 172.31.77.53 from the server 172.31.77.1
+        m = set(want, "ffffffffffff52540012345608004500014800000000401179a600000000ffffffff0044004301345097010106003903f326000080000000000000000000000000000000000052540012345600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000638253633501033204ac1f4d353604ac1f4d013703010306ff000000000000000000000000000000000000000000000000000000000000000000000000000000");
+        test.assert_eq(inet.dhcp_request(out, mac(), xid(), 2887732533, 2887732481), m);
+        test.assert(same(out, want, m));
+        test.assert_eq(inet.dhcp_discover(short, mac(), xid()), -1);
+        test.assert_eq(inet.dhcp_request(short, mac(), xid(), 1, 2), -1);
+    }
+    return 0;
+}
+
+fn test_an_offer_and_an_acknowledgement_are_read() -> [] int {
+    region a {
+        let frame = alloc_slice[a](700, byte_of(0));
+        let facts = alloc_slice[a](inet.dhcp_facts(), 7);
+        var n = set(frame, "ffffffffffff02aabbccdd01080045000133001000004011808aac1f4d01ffffffff00430044011fb6e2020106003903f3260000800000000000ac1f4d35ac1f4d010000000052540012345600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000638253633501023604ac1f4d01330400000e100104ffffff00000308ac1f4d01ac1f4d020604ac1f4d01ff");
+        test.assert_eq(inet.dhcp_answer(frame, n, mac(), xid(), facts), 2);
+        test.assert_eq(facts[0], 2887732533);
+        test.assert_eq(facts[1], 4294967040);
+        // two gateways were named: the first
+        test.assert_eq(facts[2], 2887732481);
+        test.assert_eq(facts[3], 2887732481);
+        test.assert_eq(facts[4], 2887732481);
+        test.assert_eq(facts[5], 3600);
+        // the acknowledgement comes to our card and our new address, with an option we do not know
+        n = set(frame, "52540012345602aabbccdd01080045000139001100004011872eac1f4d01ac1f4d35004300440125c3a3020106003903f3260000800000000000ac1f4d35ac1f4d010000000052540012345600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000638253633501053604ac1f4d01330400000e100104ffffff00000308ac1f4d01ac1f4d020604ac1f4d010f0474657374ff");
+        test.assert_eq(inet.dhcp_answer(frame, n, mac(), xid(), facts), 5);
+        test.assert_eq(facts[0], 2887732533);
+        n = set(frame, "ffffffffffff02aabbccdd0108004500011600120000401180a5ac1f4d01ffffffff004300440102b145020106003903f326000080000000000000000000000000000000000052540012345600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000638253633501063604ac1f4d01ff");
+        test.assert_eq(inet.dhcp_answer(frame, n, mac(), xid(), facts), 6);
+        test.assert_eq(facts[1], 0);
+    }
+    return 0;
+}
+
+fn test_an_answer_for_another_exchange_or_card_is_not_ours() -> [] int {
+    region a {
+        let frame = alloc_slice[a](700, byte_of(0));
+        let facts = alloc_slice[a](inet.dhcp_facts(), 0);
+        var n = set(frame, "ffffffffffff02aabbccdd010800450001330013000040118087ac1f4d01ffffffff00430044011fb6e1020106003903f3270000800000000000ac1f4d35ac1f4d010000000052540012345600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000638253633501023604ac1f4d01330400000e100104ffffff00000308ac1f4d01ac1f4d020604ac1f4d01ff");
+        test.assert_eq(inet.dhcp_answer(frame, n, mac(), xid(), facts), -1);
+        n = set(frame, "ffffffffffff02aabbccdd010800450001330014000040118086ac1f4d01ffffffff00430044011f3ff6020106003903f3260000800000000000ac1f4d35ac1f4d0100000000525400aaaaaa00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000638253633501023604ac1f4d01330400000e100104ffffff00000308ac1f4d01ac1f4d020604ac1f4d01ff");
+        test.assert_eq(inet.dhcp_answer(frame, n, mac(), xid(), facts), -1);
+        // our own question is not an answer
+        n = set(frame, "ffffffffffff52540012345608004500014800000000401179a600000000ffffffff004400430134d0f1010106003903f326000080000000000000000000000000000000000052540012345600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000638253633501013703010306ff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+        test.assert_eq(inet.dhcp_answer(frame, n, mac(), xid(), facts), -1);
+        n = set(frame, "ffffffffffff02aabbccdd01080045000133001000004011808aac1f4d01ffffffff00430044011fb6e2020106003903f3260000800000000000ac1f4d35ac1f4d010000000052540012345600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000638253633501023604ac1f4d01330400000e100104ffffff00000308ac1f4d01ac1f4d020604ac1f4d01ff");
+        test.assert_eq(inet.dhcp_answer(frame, n - 1, mac(), xid(), facts), -1);
+        test.assert_eq(inet.dhcp_answer(frame, n, mac() + 1, xid(), facts), -1);
+    }
+    return 0;
+}
+
+fn test_no_damage_to_an_offer_makes_dhcp_answer_trap() -> [] int {
+    region a {
+        let frame = alloc_slice[a](700, byte_of(0));
+        let facts = alloc_slice[a](inet.dhcp_facts(), 0);
+        let n = set(frame, "ffffffffffff02aabbccdd01080045000133001000004011808aac1f4d01ffffffff00430044011fb6e2020106003903f3260000800000000000ac1f4d35ac1f4d010000000052540012345600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000638253633501023604ac1f4d01330400000e100104ffffff00000308ac1f4d01ac1f4d020604ac1f4d01ff");
+        var at = 0;
+        var tried = 0;
+        while at < n {
+            let kept = frame[at];
+            var v = 0;
+            while v < 256 {
+                frame[at] = byte_of(v);
+                let r = inet.dhcp_answer(frame, n, mac(), xid(), facts);
+                test.assert(r >= -1 && r <= 255);
+                tried = tried + 1;
+                // the options are what is walked: also with the frame cut inside them
+                if at >= 282 {
+                    let c = inet.dhcp_answer(frame, n - 9, mac(), xid(), facts);
+                    test.assert(c >= -1 && c <= 255);
+                }
+                v = v + 1;
+            }
+            frame[at] = kept;
+            at = at + 1;
+        }
+        test.assert_eq(tried, n * 256);
+    }
+    return 0;
+}

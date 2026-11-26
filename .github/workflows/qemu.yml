@@ -9,7 +9,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: tools
-        run: sudo apt-get update && sudo apt-get install -y clang lld llvm qemu-system-arm net-tools netcat-openbsd iputils-ping
+        run: sudo apt-get update && sudo apt-get install -y clang lld llvm qemu-system-arm net-tools netcat-openbsd iputils-ping dnsmasq-base
       - name: cancho, built from its seed by itself
         # The bare-metal target (cancho docs/freestanding.md) is newer than the committed seed, so the
         # compiler is built from source: the seed builds stage 1, which builds the cancho used here.
@@ -25,6 +25,8 @@ jobs:
           /tmp/cancho-out/cancho test tests/inet_test.cho src/inet.cho --std
           # TCP: whole conversations against segments the second implementation built, with the time made up
           /tmp/cancho-out/cancho test tests/tcp_test.cho src/inet.cho --std
+          # the gateway, datagrams, names and a given address
+          /tmp/cancho-out/cancho test tests/addr_test.cho src/inet.cho --std
       - name: what the kernel can touch
         run: CANCHO=/tmp/cancho-out/cancho ./authority.sh
       - name: boot and drive the shell
@@ -121,6 +123,18 @@ jobs:
           grep -q "^remote: > bye" http.txt
           ! grep -q "^remote: .*no Linux underneath" http.txt
           grep -q "^tcp: 0 open" http.txt
+          # an address from QEMU's own DHCP server, and the page again from that address; a name asked of
+          # QEMU's name server is not insisted on (it needs the runner's resolver), a name that is none is
+          MACHINE=virt ./test.sh 'net up' 'lookup example.com' 'net dhcp' net 'lookup bad..name' 'ping 10.0.0.1' 'http 10.0.0.1 8099' 'lookup example.com' > dhcp.txt; cat dhcp.txt
+          grep -q "^no name server is known" dhcp.txt
+          grep -q "^address 10.0.0.15, mask 255.255.255.0, gateway 10.0.0.1, names from 10.0.0.3" dhcp.txt
+          grep -q "^link up: virtio-net, card 52:54:00:12:34:56, address 10.0.0.15" dhcp.txt
+          grep -q "^not a name: bad..name" dhcp.txt
+          grep -q "^reply from 10.0.0.1 in " dhcp.txt
+          grep -q "^a page from the host, for cancho-os" dhcp.txt
+          # on the serial line there is nobody to ask
+          ./test.sh 'net up' 'net dhcp' > nodhcp.txt; cat nodhcp.txt
+          grep -q "^an address is asked for on a network card" nodhcp.txt
           # randomness: the virtual generator here, the Pi 3's own on that board, none on QEMU's Pi 4 (which
           # has no such device); two draws are 32 hex digits each and differ
           MACHINE=virt ./test.sh random random 'net up' net > rng.txt; cat rng.txt
@@ -151,6 +165,12 @@ jobs:
           grep -q " 0% packet loss" eping.txt
           grep -q "^udp echo: 'cancho-os over udp'" eping.txt
           grep -q "10.0.0.2 lladdr 52:54:00:12:34:56" eping.txt
+          # dnsmasq gave the address and answered for the names; then 10.0.0.1 was reached by the gateway
+          grep -q "DHCPACK(tap0) 172.31.77.5" eping.txt
+          grep -q "^address 172.31.77.5[0-9], mask 255.255.255.0, gateway 172.31.77.1, names from 172.31.77.1" eping.txt
+          grep -q "^www.cancho-os.test is 172.31.77.1" eping.txt
+          grep -q "^no such name: nothing.cancho-os.test" eping.txt
+          grep -q "^link up: virtio-net, card 52:54:00:12:34:56, address 172.31.77.5" eping.txt
           grep -q "^tcp echo: 'cancho-os over tcp'" eping.txt
           grep -q "^tcp echo: 65536 bytes came back the same" eping.txt
           grep -qi "^tcp port 9: .*refused" eping.txt

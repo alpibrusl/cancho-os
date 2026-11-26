@@ -8,7 +8,8 @@
 # Exit 0 if every ping was answered, a UDP datagram to port 7 came back, a TCP connection to it echoed a line
 # and then 64 KB (BYTES=n for another size), port 9 refused one, and the kernel's own ping of this machine
 # was answered; the kernel fetched a page from a web server here and was refused by a port with none; `exit`
-# over the shell's connection made the kernel hang up; and port 23 refused a connection before `net shell on` and gave the kernel's shell after it.
+# over the shell's connection made the kernel hang up; on the card, dnsmasq gave the kernel an address and
+# answered its questions about names, and the kernel then reached 10.0.0.1 by the gateway; and port 23 refused a connection before `net shell on` and gave the kernel's shell after it.
 set -u
 cd "$(dirname "$0")"
 MACHINE=${MACHINE:-raspi3b}
@@ -118,6 +119,36 @@ if [ -n "$ready" ]; then
     if [ "$MACHINE" = virt ]; then
         # what this machine's own ARP table learned from the kernel's answer
         ip neigh show dev tap0
+    fi
+    if [ "$MACHINE" = virt ]; then
+        # An address that is given, and names, from a server that is not ours: dnsmasq, on a second network
+        # of the same interface (172.31.77.0/24), so that the kernel's address really changes. After it the
+        # kernel is no longer on 10.0.0.1's network, and its ping of 10.0.0.1 below goes by the gateway.
+        ip addr add 172.31.77.1/24 dev tap0
+        dnsmasq --keep-in-foreground --user=root --conf-file=/dev/null --interface=tap0 --bind-interfaces \
+            --dhcp-range=172.31.77.50,172.31.77.60,255.255.255.0,1h --dhcp-option=3,172.31.77.1 \
+            --dhcp-option=6,172.31.77.1 --address=/www.cancho-os.test/172.31.77.1 --local=/cancho-os.test/ \
+            --no-resolv --no-hosts --dhcp-leasefile="$PWD/build/leases" --log-dhcp --log-queries \
+            --log-facility="$PWD/build/dnsmasq.log" &
+        DNSMASQ=$!
+        (cd build/www && exec python3 -m http.server 8099 --bind 172.31.77.1) > /dev/null 2>&1 &
+        WWW=$!
+        sleep 1
+        printf 'net dhcp\r' >&3
+        sleep 5
+        printf 'lookup www.cancho-os.test\r' >&3
+        sleep 2
+        printf 'lookup nothing.cancho-os.test\r' >&3
+        sleep 2
+        printf 'http www.cancho-os.test 8099\r' >&3
+        sleep 3
+        kill $DNSMASQ $WWW 2>/dev/null
+        echo "what dnsmasq saw:"
+        grep -E "DHCP(DISCOVER|OFFER|REQUEST|ACK)|query\[A\]" build/dnsmasq.log | sed 's/^.*dnsmasq[^:]*: /  /'
+        grep -q "^address 172.31.77.5[0-9], mask 255.255.255.0, gateway 172.31.77.1, names from 172.31.77.1" build/ping-uart.out || status=1
+        grep -q "^www.cancho-os.test is 172.31.77.1" build/ping-uart.out || status=1
+        grep -q "^no such name: nothing.cancho-os.test" build/ping-uart.out || status=1
+        test "$(grep -c "a page from linux, for cancho-os" build/ping-uart.out)" = 2 || status=1
     fi
     # the kernel speaks first: it asks who 10.0.0.1 is (on the card) and pings it; Linux answers both
     printf 'ping 10.0.0.1\r' >&3
