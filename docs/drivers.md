@@ -59,7 +59,8 @@ Why this order:
    the driver may hand out, as a capability, and the processor's cache-maintenance instructions, which
    `Cpu` does not offer yet (a change to the compiler).
 3. **The Pi 5's Ethernet third**: the same kind of driver, after RP1 is reachable, which the robot's
-   serial ports need anyway.
+   serial ports need anyway. (The robot's servo adapters turned out to be USB devices, behind RP1's USB
+   controller: [`pi5.md`](pi5.md). A USB host stack is not in this list, and is larger than anything in it.)
 4. **Wi-Fi last, and with a known cost.** The chip is a computer of its own: the driver loads a closed
    firmware file into it at start-up and then talks to that firmware. So cancho-os with Wi-Fi is no longer
    "only cancho runs", in the same way it already is not on a Pi, whose boot firmware is closed too. It

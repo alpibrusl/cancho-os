@@ -1,4 +1,14 @@
+# One card for a Pi 4 or a Pi 5 (README, "On a real Pi 4" and "On a real Pi 5").
 arm_64bit=1
 kernel=kernel8.img
 enable_uart=1
+
+[pi4]
+# the PL011 on GPIO14/15 instead of the Bluetooth chip
 dtoverlay=disable-bt
+
+[pi5]
+# the image is linked for this address; a Pi 5 would look for kernel_2712.img first
+kernel_address=0x80000
+# do not refuse a card whose device tree file is not the one expected
+os_check=0

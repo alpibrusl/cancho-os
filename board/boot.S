@@ -28,6 +28,9 @@ boot:
     mov     x0, #3
     msr     cnthctl_el2, x0
     msr     cntvoff_el2, xzr
+    // SCTLR_EL1 is undefined at reset on a real processor: the bits that must be one, and the MMU off
+    ldr     x0, =0x30d00800
+    msr     sctlr_el1, x0
     mov     x0, #0x3c5            // EL1h, interrupts masked (they stay masked: the kernel polls, see kernel.cho)
     msr     spsr_el2, x0
     adr     x0, at_el1
