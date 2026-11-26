@@ -347,7 +347,12 @@ Sixth slice, in its own file: [`addresses.md`](addresses.md). The kernel's addre
 and `http` take names. The kernel's network code moved from `src/kernel.cho` to `src/network.cho` with it
 (the file had reached its 2,000 lines), so where sections 6 to 9 say `src/kernel.cho`, read that.
 
-## 11. Next
+## 11. A real card
+
+Seventh slice, in its own file: [`genet.md`](genet.md). The Pi 4's Ethernet controller, on a real board
+and a real network. Everything above the driver is the code the earlier sections describe.
+
+## 12. Next
 
 The order, the boards and what each driver is written from are in [`drivers.md`](drivers.md).
 

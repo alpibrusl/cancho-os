@@ -43,6 +43,7 @@ any Linux, answers both cells: `lspci -nn | grep -Ei 'net|wireless|ethernet'` (a
 
 | # | device | board | reference read | its licence | size of the reference | can CI test it |
 |---|---|---|---|---|---|---|
+| 2 | the Pi 4's GENET (**built, and it works on a real board**: [`genet.md`](genet.md)) | Pi 4 | NetBSD `bcmgenet.c`, FreeBSD `if_genet.c` | BSD-2-Clause | about 230 lines here | no: a real board only |
 | 1 | virtio-net (**built**, [`network.md`](network.md) section 6) | QEMU `virt` | the VIRTIO specification | an OASIS standard | — | **yes** |
 | 2 | GENET Ethernet | Pi 4 | NetBSD `sys/dev/ic/bcmgenet.c` (FreeBSD's `if_genet.c` beside it) | BSD, 2 clauses | about 900 lines (1,450) | no: QEMU's Pi 4 has no such device |
 | 3 | Cadence GEM Ethernet | Pi 5 | OpenBSD `sys/dev/fdt/if_cad.c` (FreeBSD's `if_cgem.c`, BSD-2-Clause) | ISC | about 1,600 lines | no |
