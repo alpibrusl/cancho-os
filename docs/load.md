@@ -35,7 +35,8 @@ built without it.
 
 ## What was measured
 
-At the commit that adds this file, QEMU 11.1.3, `./load.sh` (and `MACHINE=raspi4b`, `MACHINE=virt`):
+At the commit that adds this file, QEMU 11.1.3, `./load.sh` (and `MACHINE=raspi4b`, `MACHINE=virt`; CI runs
+the Pi 3 and `virt`, its QEMU having no Pi 4):
 
 | | result |
 |---|---|
