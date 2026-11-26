@@ -1,6 +1,6 @@
 # Loading a kernel over the serial line
 
-> **Status: built; in QEMU on all three boards.** Not yet tried on the real Pi 4.
+> **Status: built; in QEMU on all three boards, and once on a real Pi 4.**
 
 ## What is wanted
 
@@ -49,7 +49,13 @@ the Pi 3 and `virt`, its QEMU having no Pi 4):
 QEMU has no caches, so the part of the stub that empties them and turns them off has been assembled
 and executed there, and tested by nothing. That part is what a real board decides.
 
-**On the real Pi 4: not tried yet.** The kernel on the card there is 0.0.17, which has no `load`.
+**On the real Pi 4** (2026-11-26, one board): 0.0.18 booted from the card; `board/send.py`, run on the
+machine wired to its console, sent the 0.0.99 image: "sent 127464 bytes in 11.2 s; checksum ours
+bf805bc8, the kernel's bf805bc8", then "starting it", the boot message, and `about` said 0.0.99. `mem`
+printed the new image's map and `uptime` went on counting. So the cache handling in the stub did what
+it is for, once. One thing was not as in QEMU: `ticks` in the loaded kernel began some thousands too
+high and then rose by 100 a second as it should. The timer's old deadline seems to survive into the new
+kernel; not explained yet.
 
 ## What it does not do
 
