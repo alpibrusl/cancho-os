@@ -89,8 +89,9 @@ First slice built: IPv4 over SLIP on the second serial port, `ping` and a UDP ec
 every milestone here boots in QEMU. Second slice (same day): QEMU's `virt` machine as a third board, a virtio-net driver, Ethernet
 frames and ARP; `ping` from Linux over a tap interface in CI. Third slice (same day): TCP in `inet`, passive, port 7, a buffer of one segment whose room is the window
 (state owned by the caller, so `inet` is still pure), and the kernel speaking first (`ping <address>`, with an ARP request
-on the card). Next: a link on pins the console does not use; the Pi 4's Ethernet (GENET, memory-mapped), testable only
-on the board; a service worth connecting to (the shell over TCP), then connections opened from the kernel.
+on the card). Fourth slice: the shell over a connection (port 23, off until `net shell on` at the console; `inet` gained a port
+the caller reads and writes). Next: SSH as its own package, cancho-ssh (needs a randomness driver in the kernel first),
+replacing the open port; a link on pins the console does not use; the Pi 4's Ethernet (GENET), testable only on the board.
 
 ## Prior art
 seL4 (capabilities), Redox, Theseus, Hubris, Asterinas (Linux ABI in a Rust kernel),

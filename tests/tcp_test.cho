@@ -52,14 +52,14 @@ fn iss() -> [] int {
 
 // At time `now`, `request` arrives and `reply` is what is sent back, byte for byte. An empty `reply`: the
 // segment is taken and nothing is sent.
-fn says[&t, &b, &q, &r](tcp: &!t [int], bufs: &!b [byte], now: int, request: &q [byte], reply: &r [byte]) -> [] int {
+fn says[&t, &b, &i, &q, &r](tcp: &!t [int], bufs: &!b [byte], inbox: &!i [byte], port: int, now: int, request: &q [byte], reply: &r [byte]) -> [] int {
     region a {
         let pkt = alloc_slice[a](1100, byte_of(0));
         let want = alloc_slice[a](1100, byte_of(0));
         let out = alloc_slice[a](1100, byte_of(0));
         let n = set(pkt, request);
         let m = set(want, reply);
-        test.assert_eq(inet.serve(pkt, n, ours(), tcp, bufs, now, iss(), out), m);
+        test.assert_eq(inet.serve(pkt, n, ours(), tcp, bufs, inbox, port, now, iss(), out), m);
         test.assert(same(out, want, m));
     }
     return 0;
@@ -78,9 +78,9 @@ fn ticks[&t, &b, &r](tcp: &!t [int], bufs: &!b [byte], c: int, now: int, again: 
 }
 
 // A connection opened: the SYN, our SYN and acknowledgement, the acknowledgement of ours.
-fn open[&t, &b](tcp: &!t [int], bufs: &!b [byte]) -> [] int {
-    says(tcp, bufs, 100, "4500003011110000400655b50a0000010a0000029c400007fffffffa000000007002faf0d8e20000020405b401030307", "4500002c00000000400666ca0a0000020a00000100079c40fffffffdfffffffb601203c6e5fa0000020403c6");
-    return says(tcp, bufs, 101, "4500002811110000400655bd0a0000010a0000029c400007fffffffbfffffffe5010faf0049f0000", "");
+fn open[&t, &b, &i](tcp: &!t [int], bufs: &!b [byte], inbox: &!i [byte]) -> [] int {
+    says(tcp, bufs, inbox, 0, 100, "4500003011110000400655b50a0000010a0000029c400007fffffffa000000007002faf0d8e20000020405b401030307", "4500002c00000000400666ca0a0000020a00000100079c40fffffffdfffffffb601203c6e5fa0000020403c6");
+    return says(tcp, bufs, inbox, 0, 101, "4500002811110000400655bd0a0000010a0000029c400007fffffffbfffffffe5010faf0049f0000", "");
 }
 
 // ── a whole conversation ──
@@ -89,19 +89,20 @@ fn test_a_connection_opens_echoes_and_closes() -> [] int {
     region a {
         let tcp = alloc_slice[a](4 * inet.tcp_conn(), 0);
         let bufs = alloc_slice[a](4 * inet.tcp_segment_max(), byte_of(0));
-        test.assert_eq(inet.tcp_count(tcp, bufs), 4);
+        let inbox = alloc_slice[a](4 * inet.tcp_inbox(), byte_of(0));
+        test.assert_eq(inet.tcp_count(tcp, bufs, inbox), 4);
         // the SYN carries an option we know (the most it takes, 1460) and one we do not
-        says(tcp, bufs, 100, "4500003011110000400655b50a0000010a0000029c400007fffffffa000000007002faf0d8e20000020405b401030307", "4500002c00000000400666ca0a0000020a00000100079c40fffffffdfffffffb601203c6e5fa0000020403c6");
-        test.assert_eq(inet.tcp_open(tcp, bufs), 1);
-        says(tcp, bufs, 101, "4500002811110000400655bd0a0000010a0000029c400007fffffffbfffffffe5010faf0049f0000", "");
+        says(tcp, bufs, inbox, 0, 100, "4500003011110000400655b50a0000010a0000029c400007fffffffa000000007002faf0d8e20000020405b401030307", "4500002c00000000400666ca0a0000020a00000100079c40fffffffdfffffffb601203c6e5fa0000020403c6");
+        test.assert_eq(inet.tcp_open(tcp, bufs, inbox), 1);
+        says(tcp, bufs, inbox, 0, 101, "4500002811110000400655bd0a0000010a0000029c400007fffffffbfffffffe5010faf0049f0000", "");
         // "hello\n" comes back; the window is the room left while those six bytes are out
-        says(tcp, bufs, 102, "4500002e11110000400655b70a0000010a0000029c400007fffffffbfffffffe5018faf0c0b4000068656c6c6f0a", "4500002e00000000400666c80a0000020a00000100079c40fffffffe00000001501803c0b7e0000068656c6c6f0a");
+        says(tcp, bufs, inbox, 0, 102, "4500002e11110000400655b70a0000010a0000029c400007fffffffbfffffffe5018faf0c0b4000068656c6c6f0a", "4500002e00000000400666c80a0000020a00000100079c40fffffffe00000001501803c0b7e0000068656c6c6f0a");
         // acknowledged: the window is whole again
-        says(tcp, bufs, 103, "4500002811110000400655bd0a0000010a0000029c40000700000001000000045010faf004950000", "4500002800000000400666ce0a0000020a00000100079c400000000400000001501003c6fbbf0000");
+        says(tcp, bufs, inbox, 0, 103, "4500002811110000400655bd0a0000010a0000029c40000700000001000000045010faf004950000", "4500002800000000400666ce0a0000020a00000100079c400000000400000001501003c6fbbf0000");
         // the other end finishes, so we do
-        says(tcp, bufs, 104, "4500002811110000400655bd0a0000010a0000029c40000700000001000000045011faf004940000", "4500002800000000400666ce0a0000020a00000100079c40000000040000000250110000ff830000");
-        says(tcp, bufs, 105, "4500002811110000400655bd0a0000010a0000029c40000700000002000000055010faf004930000", "");
-        test.assert_eq(inet.tcp_open(tcp, bufs), 0);
+        says(tcp, bufs, inbox, 0, 104, "4500002811110000400655bd0a0000010a0000029c40000700000001000000045011faf004940000", "4500002800000000400666ce0a0000020a00000100079c40000000040000000250110000ff830000");
+        says(tcp, bufs, inbox, 0, 105, "4500002811110000400655bd0a0000010a0000029c40000700000002000000055010faf004930000", "");
+        test.assert_eq(inet.tcp_open(tcp, bufs, inbox), 0);
     }
     return 0;
 }
@@ -110,9 +111,10 @@ fn test_data_and_fin_in_one_segment_get_one_segment_back() -> [] int {
     region a {
         let tcp = alloc_slice[a](4 * inet.tcp_conn(), 0);
         let bufs = alloc_slice[a](4 * inet.tcp_segment_max(), byte_of(0));
-        open(tcp, bufs);
-        says(tcp, bufs, 102, "4500002e11110000400655b70a0000010a0000029c400007fffffffbfffffffe5019faf0c0b3000068656c6c6f0a", "4500002e00000000400666c80a0000020a00000100079c40fffffffe0000000250190000bb9e000068656c6c6f0a");
-        test.assert_eq(inet.tcp_open(tcp, bufs), 1);
+        let inbox = alloc_slice[a](4 * inet.tcp_inbox(), byte_of(0));
+        open(tcp, bufs, inbox);
+        says(tcp, bufs, inbox, 0, 102, "4500002e11110000400655b70a0000010a0000029c400007fffffffbfffffffe5019faf0c0b3000068656c6c6f0a", "4500002e00000000400666c80a0000020a00000100079c40fffffffe0000000250190000bb9e000068656c6c6f0a");
+        test.assert_eq(inet.tcp_open(tcp, bufs, inbox), 1);
     }
     return 0;
 }
@@ -123,12 +125,13 @@ fn test_a_segment_from_further_on_is_told_what_is_expected() -> [] int {
     region a {
         let tcp = alloc_slice[a](4 * inet.tcp_conn(), 0);
         let bufs = alloc_slice[a](4 * inet.tcp_segment_max(), byte_of(0));
-        open(tcp, bufs);
-        says(tcp, bufs, 102, "4500002e11110000400655b70a0000010a0000029c4000070000005ffffffffe5018faf0c051000068656c6c6f0a", "4500002800000000400666ce0a0000020a00000100079c40fffffffefffffffb501003c6fbc90000");
+        let inbox = alloc_slice[a](4 * inet.tcp_inbox(), byte_of(0));
+        open(tcp, bufs, inbox);
+        says(tcp, bufs, inbox, 0, 102, "4500002e11110000400655b70a0000010a0000029c4000070000005ffffffffe5018faf0c051000068656c6c6f0a", "4500002800000000400666ce0a0000020a00000100079c40fffffffefffffffb501003c6fbc90000");
         // and it was not taken: the segment that does come next still is
-        says(tcp, bufs, 103, "4500002e11110000400655b70a0000010a0000029c400007fffffffbfffffffe5018faf0c0b4000068656c6c6f0a", "4500002e00000000400666c80a0000020a00000100079c40fffffffe00000001501803c0b7e0000068656c6c6f0a");
+        says(tcp, bufs, inbox, 0, 103, "4500002e11110000400655b70a0000010a0000029c400007fffffffbfffffffe5018faf0c0b4000068656c6c6f0a", "4500002e00000000400666c80a0000020a00000100079c40fffffffe00000001501803c0b7e0000068656c6c6f0a");
         // but what such a segment acknowledges counts: the echo is no longer out
-        says(tcp, bufs, 104, "4500002e11110000400655b70a0000010a0000029c4000070000005f000000045018faf0c04c000068656c6c6f0a", "4500002800000000400666ce0a0000020a00000100079c400000000400000001501003c6fbbf0000");
+        says(tcp, bufs, inbox, 0, 104, "4500002e11110000400655b70a0000010a0000029c4000070000005f000000045018faf0c04c000068656c6c6f0a", "4500002800000000400666ce0a0000020a00000100079c400000000400000001501003c6fbbf0000");
         ticks(tcp, bufs, 0, 99999, "");
     }
     return 0;
@@ -138,12 +141,13 @@ fn test_data_arriving_while_ours_is_out_is_echoed_after_it() -> [] int {
     region a {
         let tcp = alloc_slice[a](4 * inet.tcp_conn(), 0);
         let bufs = alloc_slice[a](4 * inet.tcp_segment_max(), byte_of(0));
-        open(tcp, bufs);
-        says(tcp, bufs, 102, "4500002e11110000400655b70a0000010a0000029c400007fffffffbfffffffe5018faf0c0b4000068656c6c6f0a", "4500002e00000000400666c80a0000020a00000100079c40fffffffe00000001501803c0b7e0000068656c6c6f0a");
+        let inbox = alloc_slice[a](4 * inet.tcp_inbox(), byte_of(0));
+        open(tcp, bufs, inbox);
+        says(tcp, bufs, inbox, 0, 102, "4500002e11110000400655b70a0000010a0000029c400007fffffffbfffffffe5018faf0c0b4000068656c6c6f0a", "4500002e00000000400666c80a0000020a00000100079c40fffffffe00000001501803c0b7e0000068656c6c6f0a");
         // "more" does not acknowledge the echo; there is room for it, and only it is sent
-        says(tcp, bufs, 103, "4500002c11110000400655b90a0000010a0000029c40000700000001fffffffe5018faf024b900006d6f7265", "4500002c00000000400666ca0a0000020a00000100079c400000000400000005501803bc1be500006d6f7265");
+        says(tcp, bufs, inbox, 0, 103, "4500002c11110000400655b90a0000010a0000029c40000700000001fffffffe5018faf024b900006d6f7265", "4500002c00000000400666ca0a0000020a00000100079c400000000400000005501803bc1be500006d6f7265");
         // the first echo is acknowledged and the second is not: the window widens by six
-        says(tcp, bufs, 104, "4500002811110000400655bd0a0000010a0000029c40000700000005000000045010faf004910000", "4500002800000000400666ce0a0000020a00000100079c400000000800000005501003c2fbbb0000");
+        says(tcp, bufs, inbox, 0, 104, "4500002811110000400655bd0a0000010a0000029c40000700000005000000045010faf004910000", "4500002800000000400666ce0a0000020a00000100079c400000000800000005501003c2fbbb0000");
         // and what is sent again is only what is still out
         ticks(tcp, bufs, 0, 1103, "");
         ticks(tcp, bufs, 0, 1104, "4500002c00000000400666ca0a0000020a00000100079c400000000400000005501803c21bdf00006d6f7265");
@@ -155,10 +159,11 @@ fn test_when_the_buffer_is_full_the_window_is_zero_and_nothing_more_is_taken() -
     region a {
         let tcp = alloc_slice[a](4 * inet.tcp_conn(), 0);
         let bufs = alloc_slice[a](4 * inet.tcp_segment_max(), byte_of(0));
-        open(tcp, bufs);
+        let inbox = alloc_slice[a](4 * inet.tcp_inbox(), byte_of(0));
+        open(tcp, bufs, inbox);
         // 966 bytes, all the room there is
-        says(tcp, bufs, 102, "450003ee11110000400651f70a0000010a0000029c400007fffffffbfffffffe5018faf09f380000030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f66", "450003ee00000000400663080a0000020a00000100079c40fffffffe000003c15018000096640000030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f66");
-        says(tcp, bufs, 103, "4500002911110000400655bc0a0000010a0000029c400007000003c1fffffffe5018faf0dfd0000021", "4500002800000000400666ce0a0000020a00000100079c40000003c4000003c150100000f8050000");
+        says(tcp, bufs, inbox, 0, 102, "450003ee11110000400651f70a0000010a0000029c400007fffffffbfffffffe5018faf09f380000030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f66", "450003ee00000000400663080a0000020a00000100079c40fffffffe000003c15018000096640000030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f66");
+        says(tcp, bufs, inbox, 0, 103, "4500002911110000400655bc0a0000010a0000029c400007000003c1fffffffe5018faf0dfd0000021", "4500002800000000400666ce0a0000020a00000100079c40000003c4000003c150100000f8050000");
     }
     return 0;
 }
@@ -167,12 +172,13 @@ fn test_a_damaged_segment_is_dropped() -> [] int {
     region a {
         let tcp = alloc_slice[a](4 * inet.tcp_conn(), 0);
         let bufs = alloc_slice[a](4 * inet.tcp_segment_max(), byte_of(0));
+        let inbox = alloc_slice[a](4 * inet.tcp_inbox(), byte_of(0));
         let pkt = alloc_slice[a](100, byte_of(0));
         let out = alloc_slice[a](100, byte_of(0));
-        open(tcp, bufs);
+        open(tcp, bufs, inbox);
         let n = set(pkt, "4500002e11110000400655b70a0000010a0000029c400007fffffffbfffffffe5018faf0c0b4000068656c6c6f0b");
-        test.assert_eq(inet.serve(pkt, n, ours(), tcp, bufs, 102, iss(), out), inet.drop_bad_checksum());
-        says(tcp, bufs, 103, "4500002e11110000400655b70a0000010a0000029c400007fffffffbfffffffe5018faf0c0b4000068656c6c6f0a", "4500002e00000000400666c80a0000020a00000100079c40fffffffe00000001501803c0b7e0000068656c6c6f0a");
+        test.assert_eq(inet.serve(pkt, n, ours(), tcp, bufs, inbox, 0, 102, iss(), out), inet.drop_bad_checksum());
+        says(tcp, bufs, inbox, 0, 103, "4500002e11110000400655b70a0000010a0000029c400007fffffffbfffffffe5018faf0c0b4000068656c6c6f0a", "4500002e00000000400666c80a0000020a00000100079c40fffffffe00000001501803c0b7e0000068656c6c6f0a");
     }
     return 0;
 }
@@ -181,15 +187,16 @@ fn test_a_segment_seen_before_is_not_taken_twice_but_its_acknowledgement_counts(
     region a {
         let tcp = alloc_slice[a](4 * inet.tcp_conn(), 0);
         let bufs = alloc_slice[a](4 * inet.tcp_segment_max(), byte_of(0));
-        open(tcp, bufs);
-        says(tcp, bufs, 102, "4500002e11110000400655b70a0000010a0000029c400007fffffffbfffffffe5018faf0c0b4000068656c6c6f0a", "4500002e00000000400666c80a0000020a00000100079c40fffffffe00000001501803c0b7e0000068656c6c6f0a");
+        let inbox = alloc_slice[a](4 * inet.tcp_inbox(), byte_of(0));
+        open(tcp, bufs, inbox);
+        says(tcp, bufs, inbox, 0, 102, "4500002e11110000400655b70a0000010a0000029c400007fffffffbfffffffe5018faf0c0b4000068656c6c6f0a", "4500002e00000000400666c80a0000020a00000100079c40fffffffe00000001501803c0b7e0000068656c6c6f0a");
         // the other end finishes before our echo has reached it: our FIN goes out after the echo
-        says(tcp, bufs, 103, "4500002811110000400655bd0a0000010a0000029c40000700000001fffffffe5011faf004990000", "4500002800000000400666ce0a0000020a00000100079c40000000040000000250110000ff830000");
+        says(tcp, bufs, inbox, 0, 103, "4500002811110000400655bd0a0000010a0000029c40000700000001fffffffe5011faf004990000", "4500002800000000400666ce0a0000020a00000100079c40000000040000000250110000ff830000");
         // its FIN again, this time acknowledging the echo: only our FIN is out now
-        says(tcp, bufs, 104, "4500002811110000400655bd0a0000010a0000029c40000700000001000000045011faf004940000", "4500002800000000400666ce0a0000020a00000100079c40000000050000000250100000ff830000");
+        says(tcp, bufs, inbox, 0, 104, "4500002811110000400655bd0a0000010a0000029c40000700000001000000045011faf004940000", "4500002800000000400666ce0a0000020a00000100079c40000000050000000250100000ff830000");
         ticks(tcp, bufs, 0, 1104, "4500002800000000400666ce0a0000020a00000100079c40000000040000000250110000ff830000");
-        says(tcp, bufs, 1105, "4500002811110000400655bd0a0000010a0000029c40000700000002000000055010faf004930000", "");
-        test.assert_eq(inet.tcp_open(tcp, bufs), 0);
+        says(tcp, bufs, inbox, 0, 1105, "4500002811110000400655bd0a0000010a0000029c40000700000002000000055010faf004930000", "");
+        test.assert_eq(inet.tcp_open(tcp, bufs, inbox), 0);
     }
     return 0;
 }
@@ -198,10 +205,11 @@ fn test_data_seen_before_is_not_echoed_twice() -> [] int {
     region a {
         let tcp = alloc_slice[a](4 * inet.tcp_conn(), 0);
         let bufs = alloc_slice[a](4 * inet.tcp_segment_max(), byte_of(0));
-        open(tcp, bufs);
-        says(tcp, bufs, 102, "4500002e11110000400655b70a0000010a0000029c400007fffffffbfffffffe5018faf0c0b4000068656c6c6f0a", "4500002e00000000400666c80a0000020a00000100079c40fffffffe00000001501803c0b7e0000068656c6c6f0a");
+        let inbox = alloc_slice[a](4 * inet.tcp_inbox(), byte_of(0));
+        open(tcp, bufs, inbox);
+        says(tcp, bufs, inbox, 0, 102, "4500002e11110000400655b70a0000010a0000029c400007fffffffbfffffffe5018faf0c0b4000068656c6c6f0a", "4500002e00000000400666c80a0000020a00000100079c40fffffffe00000001501803c0b7e0000068656c6c6f0a");
         // the same six bytes again, acknowledging the echo: they are not echoed again, and the window opens
-        says(tcp, bufs, 103, "4500002e11110000400655b70a0000010a0000029c400007fffffffb000000045018faf0c0af000068656c6c6f0a", "4500002800000000400666ce0a0000020a00000100079c400000000400000001501003c6fbbf0000");
+        says(tcp, bufs, inbox, 0, 103, "4500002e11110000400655b70a0000010a0000029c400007fffffffb000000045018faf0c0af000068656c6c6f0a", "4500002800000000400666ce0a0000020a00000100079c400000000400000001501003c6fbbf0000");
     }
     return 0;
 }
@@ -212,11 +220,12 @@ fn test_a_reset_for_the_next_byte_closes_the_connection() -> [] int {
     region a {
         let tcp = alloc_slice[a](4 * inet.tcp_conn(), 0);
         let bufs = alloc_slice[a](4 * inet.tcp_segment_max(), byte_of(0));
-        open(tcp, bufs);
-        says(tcp, bufs, 102, "4500002811110000400655bd0a0000010a0000029c4000070000002c000000005004faf0047a0000", "");
-        test.assert_eq(inet.tcp_open(tcp, bufs), 1);
-        says(tcp, bufs, 103, "4500002811110000400655bd0a0000010a0000029c400007fffffffb000000005004faf004aa0000", "");
-        test.assert_eq(inet.tcp_open(tcp, bufs), 0);
+        let inbox = alloc_slice[a](4 * inet.tcp_inbox(), byte_of(0));
+        open(tcp, bufs, inbox);
+        says(tcp, bufs, inbox, 0, 102, "4500002811110000400655bd0a0000010a0000029c4000070000002c000000005004faf0047a0000", "");
+        test.assert_eq(inet.tcp_open(tcp, bufs, inbox), 1);
+        says(tcp, bufs, inbox, 0, 103, "4500002811110000400655bd0a0000010a0000029c400007fffffffb000000005004faf004aa0000", "");
+        test.assert_eq(inet.tcp_open(tcp, bufs, inbox), 0);
     }
     return 0;
 }
@@ -225,8 +234,9 @@ fn test_a_port_nothing_listens_on_answers_with_a_reset() -> [] int {
     region a {
         let tcp = alloc_slice[a](4 * inet.tcp_conn(), 0);
         let bufs = alloc_slice[a](4 * inet.tcp_segment_max(), byte_of(0));
-        says(tcp, bufs, 100, "4500002811110000400655bd0a0000010a0000029c400009fffffffa000000005002faf004ab0000", "4500002800000000400666ce0a0000020a00000100099c4000000000fffffffb50140000ff880000");
-        test.assert_eq(inet.tcp_open(tcp, bufs), 0);
+        let inbox = alloc_slice[a](4 * inet.tcp_inbox(), byte_of(0));
+        says(tcp, bufs, inbox, 0, 100, "4500002811110000400655bd0a0000010a0000029c400009fffffffa000000005002faf004ab0000", "4500002800000000400666ce0a0000020a00000100099c4000000000fffffffb50140000ff880000");
+        test.assert_eq(inet.tcp_open(tcp, bufs, inbox), 0);
     }
     return 0;
 }
@@ -235,9 +245,10 @@ fn test_a_segment_of_no_connection_answers_with_a_reset() -> [] int {
     region a {
         let tcp = alloc_slice[a](4 * inet.tcp_conn(), 0);
         let bufs = alloc_slice[a](4 * inet.tcp_segment_max(), byte_of(0));
-        says(tcp, bufs, 100, "4500002811110000400655bd0a0000010a0000029c4000070000004d000010925010faf0f3ba0000", "4500002800000000400666ce0a0000020a00000100079c40000010920000000050040000ef040000");
+        let inbox = alloc_slice[a](4 * inet.tcp_inbox(), byte_of(0));
+        says(tcp, bufs, inbox, 0, 100, "4500002811110000400655bd0a0000010a0000029c4000070000004d000010925010faf0f3ba0000", "4500002800000000400666ce0a0000020a00000100079c40000010920000000050040000ef040000");
         // and a reset is never answered
-        says(tcp, bufs, 101, "4500002811110000400655bd0a0000010a0000029c400007fffffffb000000005004faf004aa0000", "");
+        says(tcp, bufs, inbox, 0, 101, "4500002811110000400655bd0a0000010a0000029c400007fffffffb000000005004faf004aa0000", "");
     }
     return 0;
 }
@@ -248,7 +259,8 @@ fn test_a_syn_that_names_no_size_is_given_536() -> [] int {
     region a {
         let tcp = alloc_slice[a](4 * inet.tcp_conn(), 0);
         let bufs = alloc_slice[a](4 * inet.tcp_segment_max(), byte_of(0));
-        says(tcp, bufs, 100, "4500002811110000400655bd0a0000010a0000029c410007fffffffa000000005002faf004ac0000", "4500002c00000000400666ca0a0000020a00000100079c41fffffffdfffffffb60120218e7a70000020403c6");
+        let inbox = alloc_slice[a](4 * inet.tcp_inbox(), byte_of(0));
+        says(tcp, bufs, inbox, 0, 100, "4500002811110000400655bd0a0000010a0000029c410007fffffffa000000005002faf004ac0000", "4500002c00000000400666ca0a0000020a00000100079c41fffffffdfffffffb60120218e7a70000020403c6");
     }
     return 0;
 }
@@ -257,15 +269,16 @@ fn test_a_fifth_connection_is_refused_until_one_has_been_silent_a_minute() -> []
     region a {
         let tcp = alloc_slice[a](4 * inet.tcp_conn(), 0);
         let bufs = alloc_slice[a](4 * inet.tcp_segment_max(), byte_of(0));
-        says(tcp, bufs, 100, "4500003011110000400655b50a0000010a0000029c400007fffffffa000000007002faf0d8e20000020405b401030307", "4500002c00000000400666ca0a0000020a00000100079c40fffffffdfffffffb601203c6e5fa0000020403c6");
-        says(tcp, bufs, 200, "4500002c11110000400655b90a0000010a0000029c420007fffffffa000000006002faf0ecee0000020405b4", "4500002c00000000400666ca0a0000020a00000100079c42fffffffdfffffffb601203c6e5f80000020403c6");
-        says(tcp, bufs, 300, "4500002c11110000400655b90a0000010a0000029c430007fffffffa000000006002faf0eced0000020405b4", "4500002c00000000400666ca0a0000020a00000100079c43fffffffdfffffffb601203c6e5f70000020403c6");
-        says(tcp, bufs, 400, "4500002c11110000400655b90a0000010a0000029c440007fffffffa000000006002faf0ecec0000020405b4", "4500002c00000000400666ca0a0000020a00000100079c44fffffffdfffffffb601203c6e5f60000020403c6");
-        test.assert_eq(inet.tcp_open(tcp, bufs), 4);
-        says(tcp, bufs, 60099, "4500002c11110000400655b90a0000010a0000029c450007fffffffa000000006002faf0eceb0000020405b4", "4500002800000000400666ce0a0000020a00000100079c4500000000fffffffb50140000ff850000");
+        let inbox = alloc_slice[a](4 * inet.tcp_inbox(), byte_of(0));
+        says(tcp, bufs, inbox, 0, 100, "4500003011110000400655b50a0000010a0000029c400007fffffffa000000007002faf0d8e20000020405b401030307", "4500002c00000000400666ca0a0000020a00000100079c40fffffffdfffffffb601203c6e5fa0000020403c6");
+        says(tcp, bufs, inbox, 0, 200, "4500002c11110000400655b90a0000010a0000029c420007fffffffa000000006002faf0ecee0000020405b4", "4500002c00000000400666ca0a0000020a00000100079c42fffffffdfffffffb601203c6e5f80000020403c6");
+        says(tcp, bufs, inbox, 0, 300, "4500002c11110000400655b90a0000010a0000029c430007fffffffa000000006002faf0eced0000020405b4", "4500002c00000000400666ca0a0000020a00000100079c43fffffffdfffffffb601203c6e5f70000020403c6");
+        says(tcp, bufs, inbox, 0, 400, "4500002c11110000400655b90a0000010a0000029c440007fffffffa000000006002faf0ecec0000020405b4", "4500002c00000000400666ca0a0000020a00000100079c44fffffffdfffffffb601203c6e5f60000020403c6");
+        test.assert_eq(inet.tcp_open(tcp, bufs, inbox), 4);
+        says(tcp, bufs, inbox, 0, 60099, "4500002c11110000400655b90a0000010a0000029c450007fffffffa000000006002faf0eceb0000020405b4", "4500002800000000400666ce0a0000020a00000100079c4500000000fffffffb50140000ff850000");
         // the first has now been silent 60 s: its place is taken
-        says(tcp, bufs, 60100, "4500002c11110000400655b90a0000010a0000029c450007fffffffa000000006002faf0eceb0000020405b4", "4500002c00000000400666ca0a0000020a00000100079c45fffffffdfffffffb601203c6e5f50000020403c6");
-        test.assert_eq(inet.tcp_open(tcp, bufs), 4);
+        says(tcp, bufs, inbox, 0, 60100, "4500002c11110000400655b90a0000010a0000029c450007fffffffa000000006002faf0eceb0000020405b4", "4500002c00000000400666ca0a0000020a00000100079c45fffffffdfffffffb601203c6e5f50000020403c6");
+        test.assert_eq(inet.tcp_open(tcp, bufs, inbox), 4);
     }
     return 0;
 }
@@ -276,9 +289,10 @@ fn test_an_unacknowledged_segment_is_sent_again_then_given_up() -> [] int {
     region a {
         let tcp = alloc_slice[a](4 * inet.tcp_conn(), 0);
         let bufs = alloc_slice[a](4 * inet.tcp_segment_max(), byte_of(0));
-        open(tcp, bufs);
+        let inbox = alloc_slice[a](4 * inet.tcp_inbox(), byte_of(0));
+        open(tcp, bufs, inbox);
         ticks(tcp, bufs, 0, 5000, "");
-        says(tcp, bufs, 10000, "4500002e11110000400655b70a0000010a0000029c400007fffffffbfffffffe5018faf0c0b4000068656c6c6f0a", "4500002e00000000400666c80a0000020a00000100079c40fffffffe00000001501803c0b7e0000068656c6c6f0a");
+        says(tcp, bufs, inbox, 0, 10000, "4500002e11110000400655b70a0000010a0000029c400007fffffffbfffffffe5018faf0c0b4000068656c6c6f0a", "4500002e00000000400666c80a0000020a00000100079c40fffffffe00000001501803c0b7e0000068656c6c6f0a");
         // 1 s, then 2, 4, 8 and 16 after the time before
         ticks(tcp, bufs, 0, 10999, "");
         ticks(tcp, bufs, 0, 11000, "4500002e00000000400666c80a0000020a00000100079c40fffffffe00000001501803c0b7e0000068656c6c6f0a");
@@ -290,9 +304,9 @@ fn test_an_unacknowledged_segment_is_sent_again_then_given_up() -> [] int {
         ticks(tcp, bufs, 0, 41000, "4500002e00000000400666c80a0000020a00000100079c40fffffffe00000001501803c0b7e0000068656c6c6f0a");
         // 32 s more and nothing: the connection is dropped
         ticks(tcp, bufs, 0, 72999, "");
-        test.assert_eq(inet.tcp_open(tcp, bufs), 1);
+        test.assert_eq(inet.tcp_open(tcp, bufs, inbox), 1);
         ticks(tcp, bufs, 0, 73000, "");
-        test.assert_eq(inet.tcp_open(tcp, bufs), 0);
+        test.assert_eq(inet.tcp_open(tcp, bufs, inbox), 0);
     }
     return 0;
 }
@@ -301,11 +315,166 @@ fn test_a_syn_never_acknowledged_is_sent_again() -> [] int {
     region a {
         let tcp = alloc_slice[a](4 * inet.tcp_conn(), 0);
         let bufs = alloc_slice[a](4 * inet.tcp_segment_max(), byte_of(0));
-        says(tcp, bufs, 100, "4500003011110000400655b50a0000010a0000029c400007fffffffa000000007002faf0d8e20000020405b401030307", "4500002c00000000400666ca0a0000020a00000100079c40fffffffdfffffffb601203c6e5fa0000020403c6");
+        let inbox = alloc_slice[a](4 * inet.tcp_inbox(), byte_of(0));
+        says(tcp, bufs, inbox, 0, 100, "4500003011110000400655b50a0000010a0000029c400007fffffffa000000007002faf0d8e20000020405b401030307", "4500002c00000000400666ca0a0000020a00000100079c40fffffffdfffffffb601203c6e5fa0000020403c6");
         ticks(tcp, bufs, 0, 1100, "4500002c00000000400666ca0a0000020a00000100079c40fffffffdfffffffb601203c6e5fa0000020403c6");
         // a connection that is not there has nothing to send
         ticks(tcp, bufs, 1, 99999, "");
         ticks(tcp, bufs, 9, 99999, "");
+    }
+    return 0;
+}
+
+// ── the caller's port ──
+// Port 23 here, from the other end's port 41000. What arrives is not echoed: it waits to be read.
+
+// At time `now`, connection `c` has `what` to send that it has not sent (empty: nothing).
+fn flushes[&t, &b, &r](tcp: &!t [int], bufs: &!b [byte], c: int, now: int, what: &r [byte]) -> [] int {
+    region a {
+        let want = alloc_slice[a](1100, byte_of(0));
+        let out = alloc_slice[a](1100, byte_of(0));
+        let m = set(want, what);
+        test.assert_eq(inet.tcp_flush(tcp, bufs, c, now, ours(), out, 0), m);
+        test.assert(same(out, want, m));
+    }
+    return 0;
+}
+
+fn test_a_line_is_read_and_an_answer_written() -> [] int {
+    region a {
+        let tcp = alloc_slice[a](4 * inet.tcp_conn(), 0);
+        let bufs = alloc_slice[a](4 * inet.tcp_segment_max(), byte_of(0));
+        let inbox = alloc_slice[a](4 * inet.tcp_inbox(), byte_of(0));
+        let got = alloc_slice[a](300, byte_of(0));
+        let want = alloc_slice[a](300, byte_of(0));
+        says(tcp, bufs, inbox, 23, 100, "4500002c11110000400655b90a0000010a000002a0280017fffffffa000000006002faf0e8f80000020405b4", "4500002c00000000400666ca0a0000020a0000010017a028fffffffdfffffffb60120100e4c80000020403c6");
+        says(tcp, bufs, inbox, 23, 101, "4500002811110000400655bd0a0000010a000002a0280017fffffffbfffffffe5010faf000a70000", "");
+        test.assert_eq(inet.tcp_port(tcp, 0), 23);
+        test.assert_eq(inet.tcp_state(tcp, 0), 2);
+        // "about\r\n" is acknowledged, not echoed; the window is the room left in the inbox
+        says(tcp, bufs, inbox, 23, 102, "4500002f11110000400655b60a0000010a000002a0280017fffffffbfffffffe5018faf0b1b2000061626f75740d0a", "4500002800000000400666ce0a0000020a0000010017a028fffffffe00000002501000f9fa980000");
+        flushes(tcp, bufs, 0, 103, "");
+        // read three bytes, then the rest
+        test.assert_eq(inet.tcp_read(tcp, inbox, 0, got, 3), 3);
+        test.assert_eq(inet.tcp_read(tcp, inbox, 0, got[3..300], 100), 4);
+        test.assert_eq(inet.tcp_read(tcp, inbox, 0, got, 100), 0);
+        let n = set(want, "61626f75740d0a");
+        test.assert(same(got, want, n));
+        // the answer: written, and nothing is sent until the flush
+        let m = set(want, "6f6b0d0a3e20");
+        test.assert_eq(inet.tcp_write(tcp, bufs, 0, want, 0, m), m);
+        ticks(tcp, bufs, 0, 5000, "");
+        flushes(tcp, bufs, 0, 5000, "4500002e00000000400666c80a0000020a0000010017a028fffffffe00000002501801003fee00006f6b0d0a3e20");
+        flushes(tcp, bufs, 0, 5001, "");
+        // not acknowledged for a second: sent again
+        ticks(tcp, bufs, 0, 5999, "");
+        ticks(tcp, bufs, 0, 6000, "4500002e00000000400666c80a0000020a0000010017a028fffffffe00000002501801003fee00006f6b0d0a3e20");
+        // acknowledged: nothing to say to that
+        says(tcp, bufs, inbox, 23, 6001, "4500002811110000400655bd0a0000010a000002a028001700000002000000045010faf0009c0000", "");
+        ticks(tcp, bufs, 0, 99999, "");
+    }
+    return 0;
+}
+
+fn test_the_port_is_closed_unless_the_caller_names_it() -> [] int {
+    region a {
+        let tcp = alloc_slice[a](4 * inet.tcp_conn(), 0);
+        let bufs = alloc_slice[a](4 * inet.tcp_segment_max(), byte_of(0));
+        let inbox = alloc_slice[a](4 * inet.tcp_inbox(), byte_of(0));
+        let got = alloc_slice[a](300, byte_of(0));
+        let want = alloc_slice[a](300, byte_of(0));
+        says(tcp, bufs, inbox, 0, 100, "4500002c11110000400655b90a0000010a000002a0280017fffffffa000000006002faf0e8f80000020405b4", "4500002800000000400666ce0a0000020a0000010017a02800000000fffffffb50140000fb920000");
+        says(tcp, bufs, inbox, 22, 100, "4500002c11110000400655b90a0000010a000002a0280017fffffffa000000006002faf0e8f80000020405b4", "4500002800000000400666ce0a0000020a0000010017a02800000000fffffffb50140000fb920000");
+        test.assert_eq(inet.tcp_open(tcp, bufs, inbox), 0);
+        // and a connection on port 7 is not the caller's to read or write
+        open(tcp, bufs, inbox);
+        test.assert_eq(inet.tcp_read(tcp, inbox, 0, got, 100), 0);
+        test.assert_eq(inet.tcp_write(tcp, bufs, 0, want, 0, 4), 0);
+        test.assert_eq(inet.tcp_close(tcp, 0), 0);
+        flushes(tcp, bufs, 0, 200, "");
+        test.assert_eq(inet.tcp_read(tcp, inbox, 3, got, 100), 0);
+        test.assert_eq(inet.tcp_read(tcp, inbox, 4, got, 100), 0);
+        test.assert_eq(inet.tcp_write(tcp, bufs, -1, want, 0, 4), 0);
+    }
+    return 0;
+}
+
+fn test_a_full_inbox_closes_the_window_and_reading_opens_it() -> [] int {
+    region a {
+        let tcp = alloc_slice[a](4 * inet.tcp_conn(), 0);
+        let bufs = alloc_slice[a](4 * inet.tcp_segment_max(), byte_of(0));
+        let inbox = alloc_slice[a](4 * inet.tcp_inbox(), byte_of(0));
+        let got = alloc_slice[a](300, byte_of(0));
+        let want = alloc_slice[a](300, byte_of(0));
+        says(tcp, bufs, inbox, 23, 100, "4500002c11110000400655b90a0000010a000002a0280017fffffffa000000006002faf0e8f80000020405b4", "4500002c00000000400666ca0a0000020a0000010017a028fffffffdfffffffb60120100e4c80000020403c6");
+        says(tcp, bufs, inbox, 23, 101, "4500002811110000400655bd0a0000010a000002a0280017fffffffbfffffffe5010faf000a70000", "");
+        // 256 bytes: all the room
+        says(tcp, bufs, inbox, 23, 102, "4500012811110000400654bd0a0000010a000002a0280017fffffffbfffffffe5018faf0bfde000001060b10151a1f24292e33383d42474c51565b60656a6f74797e83888d92979ca1a6abb0b5babfc4c9ced3d8dde2e7ecf1f6fb00050a0f14191e23282d32373c41464b50555a5f64696e73787d82878c91969ba0a5aaafb4b9bec3c8cdd2d7dce1e6ebf0f5faff04090e13181d22272c31363b40454a4f54595e63686d72777c81868b90959a9fa4a9aeb3b8bdc2c7ccd1d6dbe0e5eaeff4f9fe03080d12171c21262b30353a3f44494e53585d62676c71767b80858a8f94999ea3a8adb2b7bcc1c6cbd0d5dadfe4e9eef3f8fd02070c11161b20252a2f34393e43484d52575c61666b70757a7f84898e93989da2a7acb1b6bbc0c5cacfd4d9dee3e8edf2f7fc", "4500002800000000400666ce0a0000020a0000010017a028fffffffe000000fb50100000fa980000");
+        // one more is not taken
+        says(tcp, bufs, inbox, 23, 103, "4500002911110000400655bc0a0000010a000002a0280017000000fbfffffffe5018faf0de9e000021", "4500002800000000400666ce0a0000020a0000010017a028fffffffe000000fb50100000fa980000");
+        flushes(tcp, bufs, 0, 104, "");
+        test.assert_eq(inet.tcp_read(tcp, inbox, 0, got, 300), 256);
+        let n = set(want, "01060b10151a1f24292e33383d42474c51565b60656a6f74797e83888d92979ca1a6abb0b5babfc4c9ced3d8dde2e7ecf1f6fb00050a0f14191e23282d32373c41464b50555a5f64696e73787d82878c91969ba0a5aaafb4b9bec3c8cdd2d7dce1e6ebf0f5faff04090e13181d22272c31363b40454a4f54595e63686d72777c81868b90959a9fa4a9aeb3b8bdc2c7ccd1d6dbe0e5eaeff4f9fe03080d12171c21262b30353a3f44494e53585d62676c71767b80858a8f94999ea3a8adb2b7bcc1c6cbd0d5dadfe4e9eef3f8fd02070c11161b20252a2f34393e43484d52575c61666b70757a7f84898e93989da2a7acb1b6bbc0c5cacfd4d9dee3e8edf2f7fc");
+        test.assert(same(got, want, n));
+        // the window was said to be zero: now that there is room it is said again, once
+        flushes(tcp, bufs, 0, 105, "4500002800000000400666ce0a0000020a0000010017a028fffffffe000000fb50100100f9980000");
+        flushes(tcp, bufs, 0, 106, "");
+    }
+    return 0;
+}
+
+fn test_the_other_end_may_finish_first_and_still_be_answered() -> [] int {
+    region a {
+        let tcp = alloc_slice[a](4 * inet.tcp_conn(), 0);
+        let bufs = alloc_slice[a](4 * inet.tcp_segment_max(), byte_of(0));
+        let inbox = alloc_slice[a](4 * inet.tcp_inbox(), byte_of(0));
+        let got = alloc_slice[a](300, byte_of(0));
+        let want = alloc_slice[a](300, byte_of(0));
+        says(tcp, bufs, inbox, 23, 100, "4500002c11110000400655b90a0000010a000002a0280017fffffffa000000006002faf0e8f80000020405b4", "4500002c00000000400666ca0a0000020a0000010017a028fffffffdfffffffb60120100e4c80000020403c6");
+        says(tcp, bufs, inbox, 23, 101, "4500002811110000400655bd0a0000010a000002a0280017fffffffbfffffffe5010faf000a70000", "");
+        // a line and a FIN in one segment, as `printf ... | nc` sends them
+        says(tcp, bufs, inbox, 23, 102, "4500002f11110000400655b60a0000010a000002a0280017fffffffbfffffffe5019faf0b1b1000061626f75740d0a", "4500002800000000400666ce0a0000020a0000010017a028fffffffe0000000350100000fb900000");
+        test.assert_eq(inet.tcp_state(tcp, 0), 3);
+        test.assert_eq(inet.tcp_read(tcp, inbox, 0, got, 100), 7);
+        let m = set(want, "6f6b0d0a3e20");
+        test.assert_eq(inet.tcp_write(tcp, bufs, 0, want, 0, m), m);
+        flushes(tcp, bufs, 0, 103, "4500002e00000000400666c80a0000020a0000010017a028fffffffe000000035018000040ed00006f6b0d0a3e20");
+        // we finish too: our FIN goes after the answer, and no more can be written
+        test.assert_eq(inet.tcp_close(tcp, 0), 1);
+        test.assert_eq(inet.tcp_close(tcp, 0), 0);
+        test.assert_eq(inet.tcp_write(tcp, bufs, 0, want, 0, m), 0);
+        flushes(tcp, bufs, 0, 104, "4500002800000000400666ce0a0000020a0000010017a028000000040000000350110000fb8a0000");
+        flushes(tcp, bufs, 0, 105, "");
+        // the answer is acknowledged and the FIN is not yet: the connection is still there
+        says(tcp, bufs, inbox, 23, 106, "4500002811110000400655bd0a0000010a000002a028001700000003000000045010faf0009b0000", "");
+        test.assert_eq(inet.tcp_open(tcp, bufs, inbox), 1);
+        ticks(tcp, bufs, 0, 1106, "4500002800000000400666ce0a0000020a0000010017a028000000040000000350110000fb8a0000");
+        says(tcp, bufs, inbox, 23, 1107, "4500002811110000400655bd0a0000010a000002a028001700000003000000055010faf0009a0000", "");
+        test.assert_eq(inet.tcp_open(tcp, bufs, inbox), 0);
+    }
+    return 0;
+}
+
+fn test_an_answer_and_a_fin_not_yet_sent_go_in_one_segment() -> [] int {
+    region a {
+        let tcp = alloc_slice[a](4 * inet.tcp_conn(), 0);
+        let bufs = alloc_slice[a](4 * inet.tcp_segment_max(), byte_of(0));
+        let inbox = alloc_slice[a](4 * inet.tcp_inbox(), byte_of(0));
+        let got = alloc_slice[a](300, byte_of(0));
+        let want = alloc_slice[a](300, byte_of(0));
+        says(tcp, bufs, inbox, 23, 100, "4500002c11110000400655b90a0000010a000002a0280017fffffffa000000006002faf0e8f80000020405b4", "4500002c00000000400666ca0a0000020a0000010017a028fffffffdfffffffb60120100e4c80000020403c6");
+        says(tcp, bufs, inbox, 23, 101, "4500002811110000400655bd0a0000010a000002a0280017fffffffbfffffffe5010faf000a70000", "");
+        says(tcp, bufs, inbox, 23, 102, "4500002f11110000400655b60a0000010a000002a0280017fffffffbfffffffe5019faf0b1b1000061626f75740d0a", "4500002800000000400666ce0a0000020a0000010017a028fffffffe0000000350100000fb900000");
+        let m = set(want, "6f6b0d0a3e20");
+        test.assert_eq(inet.tcp_write(tcp, bufs, 0, want, 0, m), m);
+        test.assert_eq(inet.tcp_close(tcp, 0), 1);
+        // an acknowledgement before anything was sent ends nothing
+        says(tcp, bufs, inbox, 23, 103, "4500002811110000400655bd0a0000010a000002a0280017fffffffbfffffffe5010faf000a70000", "4500002800000000400666ce0a0000020a0000010017a028fffffffe0000000350100000fb900000");
+        test.assert_eq(inet.tcp_open(tcp, bufs, inbox), 1);
+        flushes(tcp, bufs, 0, 104, "4500002e00000000400666c80a0000020a0000010017a028fffffffe000000035019000040ec00006f6b0d0a3e20");
+        ticks(tcp, bufs, 0, 1104, "4500002e00000000400666c80a0000020a0000010017a028fffffffe000000035019000040ec00006f6b0d0a3e20");
+        says(tcp, bufs, inbox, 23, 1105, "4500002811110000400655bd0a0000010a000002a028001700000003000000055010faf0009a0000", "");
+        test.assert_eq(inet.tcp_open(tcp, bufs, inbox), 0);
     }
     return 0;
 }
@@ -316,6 +485,7 @@ fn test_a_connection_over_ethernet() -> [] int {
     region a {
         let tcp = alloc_slice[a](4 * inet.tcp_conn(), 0);
         let bufs = alloc_slice[a](4 * inet.tcp_segment_max(), byte_of(0));
+        let inbox = alloc_slice[a](4 * inet.tcp_inbox(), byte_of(0));
         let frame = alloc_slice[a](128, byte_of(0));
         let want = alloc_slice[a](128, byte_of(0));
         let out = alloc_slice[a](128, byte_of(0));
@@ -323,13 +493,13 @@ fn test_a_connection_over_ethernet() -> [] int {
         var m = set(want, "5255c0a8000152540012345608004500002c00000000400666ca0a0000020a00000100079c40fffffffdfffffffb601203c6e5fa0000020403c60000");
         // 58 bytes, padded to the 60 a frame must be
         test.assert_eq(m, 60);
-        test.assert_eq(inet.eth_serve(frame, n, mac(), ours(), tcp, bufs, 100, iss(), out), m);
+        test.assert_eq(inet.eth_serve(frame, n, mac(), ours(), tcp, bufs, inbox, 0, 100, iss(), out), m);
         test.assert(same(out, want, m));
         n = set(frame, "5254001234565255c0a8000108004500002811110000400655bd0a0000010a0000029c400007fffffffbfffffffe5010faf0049f0000000000000000");
-        test.assert_eq(inet.eth_serve(frame, n, mac(), ours(), tcp, bufs, 101, iss(), out), 0);
+        test.assert_eq(inet.eth_serve(frame, n, mac(), ours(), tcp, bufs, inbox, 0, 101, iss(), out), 0);
         n = set(frame, "5254001234565255c0a8000108004500002e11110000400655b70a0000010a0000029c400007fffffffbfffffffe5018faf0c0b4000068656c6c6f0a");
         m = set(want, "5255c0a8000152540012345608004500002e00000000400666c80a0000020a00000100079c40fffffffe00000001501803c0b7e0000068656c6c6f0a");
-        test.assert_eq(inet.eth_serve(frame, n, mac(), ours(), tcp, bufs, 102, iss(), out), m);
+        test.assert_eq(inet.eth_serve(frame, n, mac(), ours(), tcp, bufs, inbox, 0, 102, iss(), out), m);
         test.assert(same(out, want, m));
         // sent again, it goes to the card the connection came from
         test.assert_eq(inet.eth_tick(tcp, bufs, 0, 1102, mac(), ours(), out), m);
@@ -403,6 +573,7 @@ fn test_no_damage_to_a_segment_makes_serve_trap() -> [] int {
     region a {
         let tcp = alloc_slice[a](4 * inet.tcp_conn(), 0);
         let bufs = alloc_slice[a](4 * inet.tcp_segment_max(), byte_of(0));
+        let inbox = alloc_slice[a](4 * inet.tcp_inbox(), byte_of(0));
         let syn = alloc_slice[a](64, byte_of(0));
         let pkt = alloc_slice[a](64, byte_of(0));
         let out = alloc_slice[a](1100, byte_of(0));
@@ -418,15 +589,15 @@ fn test_no_damage_to_a_segment_makes_serve_trap() -> [] int {
                 var cut = 6;
                 while cut <= n {
                     var z = 0;
-                    while z < 16 {
+                    while z < 20 {
                         tcp[z] = 0;
                         z = z + 1;
                     }
-                    inet.serve(syn, s, ours(), tcp, bufs, 100, iss(), out);
+                    inet.serve(syn, s, ours(), tcp, bufs, inbox, 0, 100, iss(), out);
                     tcp[0] = 2;
                     tcp[4] = tcp[5];
                     tcp[8] = 0;
-                    let r = inet.serve(pkt, cut, ours(), tcp, bufs, 101, iss(), out);
+                    let r = inet.serve(pkt, cut, ours(), tcp, bufs, inbox, 23, 101, iss(), out);
                     test.assert(r <= 1006 && r >= inet.drop_not_our_frame());
                     tried = tried + 1;
                     cut = cut + 10;
@@ -446,6 +617,7 @@ fn test_no_damage_to_a_syn_makes_serve_trap() -> [] int {
     region a {
         let tcp = alloc_slice[a](4 * inet.tcp_conn(), 0);
         let bufs = alloc_slice[a](4 * inet.tcp_segment_max(), byte_of(0));
+        let inbox = alloc_slice[a](4 * inet.tcp_inbox(), byte_of(0));
         let pkt = alloc_slice[a](64, byte_of(0));
         let out = alloc_slice[a](1100, byte_of(0));
         let n = set(pkt, "4500003011110000400655b50a0000010a0000029c400007fffffffa000000007002faf0d8e20000020405b401030307");
@@ -457,11 +629,11 @@ fn test_no_damage_to_a_syn_makes_serve_trap() -> [] int {
             while v < 256 {
                 pkt[at] = byte_of(v);
                 var z = 0;
-                while z < 64 {
+                while z < 80 {
                     tcp[z] = 0;
                     z = z + 1;
                 }
-                let r = inet.serve(pkt, n, ours(), tcp, bufs, 100, iss(), out);
+                let r = inet.serve(pkt, n, ours(), tcp, bufs, inbox, 0, 100, iss(), out);
                 test.assert(r <= 1006 && r >= inet.drop_not_our_frame());
                 tried = tried + 1;
                 v = v + 1;

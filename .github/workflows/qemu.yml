@@ -81,6 +81,9 @@ jobs:
           grep -q "^tcp echo: 16384 bytes came back the same" ping.txt
           grep -qi "^tcp port 9: .*refused" ping.txt
           grep -q "^reply from 10.0.0.1 in " ping.txt
+          grep -qi "^tcp port 23, before: .*refused" ping.txt
+          grep -q "^remote: > cancho-os .* no Linux underneath" ping.txt
+          grep -q "^remote: .*r-x  kernel code" ping.txt
       - name: QEMU's virt machine, and its network card
         run: |
           # the same kernel linked for a board whose RAM starts at 1 GB: the shell, the timer, the MMU, a fault
@@ -102,6 +105,16 @@ jobs:
           grep -q "^tcp echo: 200000 bytes came back the same" tcp.txt
           grep -q "^reply from 10.0.0.1 in " tcp.txt
           grep -q "^tcp: 0 open" tcp.txt
+          # the shell over a connection: closed until the console opens it, then seven commands typed from this
+          # machine, among them one that must be refused from there
+          MACHINE=virt RSH='about\nticks\nnet\nnet shell on\nping 10.0.0.1\nmem\n' ./test.sh 'net up' 'net shell on' net > rsh.txt; cat rsh.txt
+          grep -q "^remote: > cancho-os .* no Linux underneath (QEMU virt)" rsh.txt
+          grep -Eq "^remote: > [1-9][0-9]* timer interrupts" rsh.txt
+          grep -q "^remote: shell on port 23: a session is open" rsh.txt
+          grep -q "^remote: > only from the serial console" rsh.txt
+          grep -q "^remote: > reply from 10.0.0.1 in " rsh.txt
+          grep -q "^remote:   0x40080000 - .*r-x  kernel code" rsh.txt
+          grep -q "^tcp: 0 open" rsh.txt
       - name: ping over Ethernet, from Linux's own stack
         # the card on a tap interface: Linux's ARP, the system's ping and nc, none of it ours
         run: |
@@ -114,3 +127,6 @@ jobs:
           grep -q "^tcp echo: 65536 bytes came back the same" eping.txt
           grep -qi "^tcp port 9: .*refused" eping.txt
           grep -q "^reply from 10.0.0.1 in " eping.txt
+          grep -qi "^tcp port 23, before: .*refused" eping.txt
+          grep -q "^remote: > cancho-os .* no Linux underneath" eping.txt
+          grep -q "^remote: .*r-x  kernel code" eping.txt

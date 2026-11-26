@@ -1,6 +1,7 @@
 # The network: IPv4 over a serial line first
 
-> **Status: built, three slices.** The kernel answers `ping`, a UDP echo and a TCP echo over two links:
+> **Status: built, four slices.** The kernel answers `ping`, a UDP echo and a TCP echo, and gives its
+> shell to a TCP connection when the console says so (section 8), over two links:
 > SLIP on the second serial port of a Pi 3 or Pi 4, and Ethernet through a virtio network card on QEMU's
 > `virt` machine (section 6). It can ping (section 7). All of it in QEMU. Every number below was produced
 > by the command next to it, at the commit that adds its section. Nothing here has run on a real board.
@@ -224,10 +225,72 @@ Limits of this slice, besides "What it will not do" above:
 - **The echo service is the only one.** Nothing useful listens yet.
 - **Not on a real board,** like everything here.
 
-## 8. Next
+## 8. The shell over a connection
+
+*(Fourth slice.)*
+
+### What is wanted
+
+The shell from another machine: `nc 10.0.0.2 23`, type `about`, read the answer. It is the step before
+SSH, and the part of SSH that is not cryptography: a service the kernel itself reads and writes, and a
+shell that does not assume it is talking to the serial port.
+
+### The shape
+
+- **`inet` gains one port that is the caller's.** Port 7 stays as it is, echoed inside `inet`. For the
+  other, what arrives waits in a third slice the caller owns (256 bytes for each connection), and the
+  caller takes it with `tcp_read`, answers with `tcp_write`, and `tcp_flush` makes the segment. The
+  window of such a connection is the room in those 256 bytes.
+- **Which port, and whether any, is an argument** (0: none, and a SYN to it is reset like any other).
+  So `inet` does not decide that a shell listens: the kernel does.
+- **The other end may finish first and still be answered.** `printf 'about\n' | nc ...` sends its FIN
+  with the line. The connection then stays half open until the kernel has written what it had to say,
+  and `tcp_close` ends it. The kernel cannot hang up on a connection that has not finished.
+- **In the kernel, output has one way out, `putc`.** While a line from the network is being run, what
+  `putc` is given goes to a queue in the kernel's state instead of the serial port, and from there to
+  the connection as it has room. No command had to change.
+- **One session.** A second connection is opened and waits, unread, until the first has gone.
+- **Off until asked for.** `net shell on`, typed at the serial console, opens port 23; `net shell off`
+  closes it. It cannot be turned on from the network.
+
+### What it is not
+
+- **Not encrypted and not authenticated.** Whoever can reach port 23 has the shell, and everything
+  typed is readable on the wire. That is tolerable only because this shell cannot move anything yet
+  (the servo commands read), and only on a cable you trust. It is here to be replaced by SSH, and it
+  must be gone, or behind SSH, before the kernel can move a servo.
+- **Not a terminal.** No echo, no line editing from the kernel's side, no telnet options: the client's
+  own line mode does that. A telnet client's option requests are skipped, unanswered.
+
+### What is built, and how it is checked
+
+`src/inet.cho`: `tcp_read`, `tcp_write`, `tcp_flush`, `tcp_close`, and a `port` argument to `serve`. Still no
+capability, still the empty row. `src/kernel.cho`: `session` (no hardware either) moves bytes between the
+connection, the line being typed and the output queue; `putc` writes to that queue while a line from
+the network runs. `net shell on` and `net shell off`. `./authority.sh` says "as recorded": the shell
+reached over the network can touch exactly what the shell at the console can.
+
+| | what | against |
+|---|---|---|
+| `cancho test tests/tcp_test.cho src/inet.cho --std` | 26 tests (21 before) | segments from the second implementation: a line read and an answer written; the port closed unless named; a full inbox, and the window said again after a read; the other end finishing first and still answered; an answer and a FIN in one segment |
+| `MACHINE=virt RSH='about\n...' ./test.sh 'net up' 'net shell on' net` | the kernel on `virt`, the connection from QEMU's own TCP | six commands typed from the host, each answered: `about`, `ticks`, `net` ("a session is open"), `net shell on` ("only from the serial console"), `ping 10.0.0.1`, `mem`; "tcp: 0 open" after it |
+| the same without `net shell on` | | no answer at all: the port is closed |
+| `sudo ./ping.sh`, `sudo MACHINE=virt ./ping.sh` (Linux, CI) | both links, Linux's TCP | `Connection refused` from port 23 before `net shell on`; after it, two commands a second apart answered while the connection is open, then closed from Linux's side |
+
+Limits of this slice, besides "What it is not" above:
+
+- **A command's output is kept whole before it is sent, up to 4,096 bytes;** more is cut, and says so.
+- **A second connection waits in silence** until the first has gone.
+- **The kernel cannot hang up.** A connection that never finishes holds the shell; only `net shell off`
+  followed by its own closing, or a reset, frees it.
+- **`crash` from the network halts the machine** as it does from the console, and the report goes to
+  the serial port.
+
+## 9. Next
 
 The order, the boards and what each driver is written from are in [`drivers.md`](drivers.md).
 
-1. Something worth connecting to: the shell over a connection. Then connections opened from the kernel.
+1. SSH, as its own package (the cryptography is in cancho's standard library; the kernel needs a source
+   of randomness first), to replace the open port 23. Then connections opened from the kernel.
 2. A link the console does not share pins with (another UART), so the serial line works on a real Pi 4.
 3. The Pi 4's Ethernet controller as a third link; only testable on the board.
