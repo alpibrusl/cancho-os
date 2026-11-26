@@ -1,0 +1,846 @@
+edition 14;
+
+module files;
+
+import base;
+import fat;
+import disk;
+import ledger;
+import ssh_sha256 as sha;
+
+// files.cho -- what the shell and the kernel do with files (docs/storage.md, permissions.md, update.md): the
+// commands, the files the kernel keeps for itself, and a file that came over SSH. Sectors, the table and the
+// directories are `disk`'s; the record is `ledger`'s.
+
+// ---- files the kernel keeps for itself (docs/permissions.md) ---------------------------------
+
+// The file `wanted` of the top directory, into `into`: as much of it as fits. How many bytes; -1 if there
+// is no disk, no volume or no such file.
+pub fn get[&mv, &md, &s, &m, &d](vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], wanted: &m [byte], into: &!d [byte]) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+    var got = -1;
+    region r {
+        let sec = alloc_slice[r](512, byte_of(0));
+        let tab = alloc_slice[r](512, byte_of(0));
+        let info = alloc_slice[r](fat.facts(), 0);
+        let name = alloc_slice[r](12, byte_of(0));
+        let out = alloc_slice[r](3, 0);
+        let o = alloc_slice[r](10, 0);
+        if disk.volume(vio, dma, k, sec, info) == 0 && disk.look(vio, dma, k, sec, tab, info, name, out, o, 0, wanted, 0, len(wanted)) == 0 && o[0] != 0 && o[8] == fat.entry_file() {
+            var size = o[4];
+            if size > len(into) {
+                size = len(into);
+            }
+            got = 0;
+            var cluster = o[3];
+            var steps = 0;
+            var bad = false;
+            while got < size && !bad && steps <= info[7] {
+                let at = fat.cluster_sector(info, cluster);
+                bad = at < 0;
+                var n = 0;
+                while n < info[1] && got < size && !bad {
+                    bad = disk.read(vio, dma, k, at + n, sec) != 0;
+                    var i = 0;
+                    while i < 512 && got < size && !bad {
+                        into[got] = sec[i];
+                        got = got + 1;
+                        i = i + 1;
+                    }
+                    n = n + 1;
+                }
+                if got < size && !bad {
+                    let fs = fat.fat_sector(info, cluster);
+                    bad = fs < 0 || disk.read(vio, dma, k, fs, tab) != 0;
+                    cluster = fat.next(info, tab, cluster);
+                    bad = bad || cluster < 0;
+                }
+                steps = steps + 1;
+            }
+            if bad {
+                got = -1;
+            }
+        }
+    }
+    return got;
+}
+
+// A new file `wanted` whose contents are `data[0..n]`, 512 bytes at most. 0 if it was made; 1 if not
+// (no disk, a file of that name already, no room), with the reason printed where there is one to give.
+pub fn keep[&mc, &mv, &md, &s, &m, &d](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], wanted: &m [byte], data: &d [byte], n: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+    var made = 1;
+    region r {
+        let sec = alloc_slice[r](512, byte_of(0));
+        let tab = alloc_slice[r](512, byte_of(0));
+        let info = alloc_slice[r](fat.facts(), 0);
+        let name = alloc_slice[r](12, byte_of(0));
+        let out = alloc_slice[r](3, 0);
+        let o = alloc_slice[r](10, 0);
+        let wt = alloc_slice[r](512, byte_of(0));
+        let w = alloc_slice[r](8, 0);
+        w[5] = -1;
+        if n >= 0 && n <= 512 && n <= len(data) && disk.volume(vio, dma, k, sec, info) == 0 {
+            if ledger.ready(con, vio, dma, k, sec, tab, wt, info, name, out, o, w, 3) == 0 && disk.place(con, vio, dma, k, sec, tab, wt, info, name, out, o, w, 0, wanted, 0, len(wanted)) == 0 {
+                var i = 0;
+                while i < 512 {
+                    sec[i] = byte_of(0);
+                    i = i + 1;
+                }
+                i = 0;
+                while i < n {
+                    sec[i] = data[i];
+                    i = i + 1;
+                }
+                // what it holds may be a secret: the record has its name and its length, not its hash
+                if disk.put(vio, dma, k, tab, info, w, sec) == 0 && disk.kept(vio, dma, k, tab, info, w) == 0 && ledger.record_add(vio, dma, k, info, w, 3, "keep", wanted, 0, len(wanted), wanted, 0, 0, 0, n, sec, false) == 0 && disk.name_it(vio, dma, k, sec, tab, info, o, w, wanted, 0, len(wanted), n) == 0 {
+                    disk.counted(vio, dma, k, sec, info, w);
+                    made = 0;
+                }
+            }
+        }
+    }
+    return made;
+}
+
+// Is `text[from..to]` the name of the SSH host key's file? The shell neither shows nor copies nor adds to it.
+fn secret[&r](text: &r [byte], from: int, to: int) -> [] bool {
+    return fat.named("HOSTKEY.BIN", 11, text, from, to);
+}
+
+fn begins[&r, &w](text: &r [byte], n: int, word: &w [byte]) -> [] bool {
+    if n < len(word) {
+        return false;
+    }
+    var i = 0;
+    while i < len(word) {
+        if int_of(text[i]) != int_of(word[i]) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// Where the first word of `text[from..n]` ends.
+fn word[&r](text: &r [byte], from: int, n: int) -> [] int {
+    var i = from;
+    while i < n && int_of(text[i]) != ' ' {
+        i = i + 1;
+    }
+    return i;
+}
+
+// The names the shell does not write, add to, copy onto or remove: the host key, the directory the versions
+// are kept in, and the record.
+fn kept_name[&r](text: &r [byte], from: int, to: int) -> [] bool {
+    return secret(text, from, to) || fat.named("OLD", 3, text, from, to) || fat.named("LOG.TXT", 7, text, from, to);
+}
+
+// Is `text[from..to]` a file the board starts from? The firmware reads these before any kernel runs, and a
+// wrong one stops the board until its card is mended on another machine. The kernel itself, the two files of
+// settings, and anything the firmware loads (`.ELF`, `.DAT`, `.DTB`, `.BIN`, `.IMG`).
+pub fn boot_name[&r](text: &r [byte], from: int, to: int) -> [] bool {
+    if fat.named("CONFIG.TXT", 10, text, from, to) || fat.named("CMDLINE.TXT", 11, text, from, to) {
+        return true;
+    }
+    if to - from < 5 || to > len(text) || from < 0 || int_of(text[to - 4]) != '.' {
+        return false;
+    }
+    let a = int_of(text[to - 3]) | 32;
+    let b = int_of(text[to - 2]) | 32;
+    let c = int_of(text[to - 1]) | 32;
+    return a == 'e' && b == 'l' && c == 'f' || a == 'd' && b == 'a' && c == 't' || a == 'd' && b == 't' && c == 'b' || a == 'b' && b == 'i' && c == 'n' || a == 'i' && b == 'm' && c == 'g';
+}
+
+// May `put` make or replace `text[from..to]`? A short name that is not one of the kernel's own.
+pub fn put_name[&r](text: &r [byte], from: int, to: int) -> [] bool {
+    var good = false;
+    region r {
+        let sec = alloc_slice[r](512, byte_of(0));
+        good = !kept_name(text, from, to) && fat.put_entry(sec, 0, text, from, to, 0, 0) == 0;
+    }
+    return good;
+}
+
+// Does `text[from..to]` begin with `OLD/`, the way a version is named?
+fn in_old[&r](text: &r [byte], from: int, to: int) -> [] bool {
+    if to - from < 5 {
+        return false;
+    }
+    return (int_of(text[from]) | 32) == 'o' && (int_of(text[from + 1]) | 32) == 'l' && (int_of(text[from + 2]) | 32) == 'd' && int_of(text[from + 3]) == '/';
+}
+
+// The file a command reads, `text[from..to]`: a name of the top directory, or `OLD/` and a version's.
+// 0 with `o[3]`, `o[4]` its first cluster and its length; else the reason is printed and 1 answered.
+fn source[&mc, &mv, &md, &s, &b, &t, &q, &i, &m, &n, &o, &u, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], sec: &!b [byte], tab: &!t [byte], wt: &!q [byte], info: &i [int], name: &!m [byte], out: &!n [int], o: &!o [int], w: &!u [int], text: &r [byte], from: int, to: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+    var dir = 0;
+    var at = from;
+    if in_old(text, from, to) {
+        dir = disk.old_dir(con, vio, dma, k, sec, tab, wt, info, name, out, o, w, false);
+        if dir < 0 {
+            return 1;
+        }
+        if dir == 0 {
+            base.puts(con, k, "no versions are kept on this disk yet\r\n");
+            return 1;
+        }
+        at = from + 4;
+    }
+    if disk.look(vio, dma, k, sec, wt, info, name, out, o, dir, text, at, to) != 0 {
+        base.puts(con, k, "the disk could not be read\r\n");
+        return 1;
+    }
+    if o[0] == 0 || o[8] != fat.entry_file() {
+        base.puts(con, k, "no such file (short names only; `ls` lists them, and `versions` what is kept)\r\n");
+        return 1;
+    }
+    return 0;
+}
+
+fn put_version[&mc, &s, &v](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), k: &!s [int], vname: &v [byte]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048")] int {
+    base.puts(con, k, "OLD/");
+    var i = 0;
+    while i < 10 {
+        base.putc(con, k, int_of(vname[i]));
+        i = i + 1;
+    }
+    return 0;
+}
+
+// `write <name> <text>`, `append <name> <text>`, `copy <from> <to>`, `remove <name>` and `purge <number>`.
+// What a file held is never lost by the first four: `write` over a file and `remove` leave it in `OLD`
+// under a number, and the name is changed last. `purge` is the one that gives clusters back.
+fn change[&mc, &mv, &md, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], text: &r [byte], n: int, what: int, who: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+    region r {
+        let sec = alloc_slice[r](512, byte_of(0));
+        let tab = alloc_slice[r](512, byte_of(0));
+        let rsec = alloc_slice[r](512, byte_of(0));
+        let rtab = alloc_slice[r](512, byte_of(0));
+        let info = alloc_slice[r](fat.facts(), 0);
+        let name = alloc_slice[r](12, byte_of(0));
+        let vname = alloc_slice[r](12, byte_of(0));
+        let hs = alloc_slice[r](sha.state_len(), 0);
+        let hd = alloc_slice[r](32, byte_of(0));
+        let out = alloc_slice[r](3, 0);
+        let o = alloc_slice[r](10, 0);
+        let w = alloc_slice[r](8, 0);
+        w[5] = -1;
+        // the words after the command
+        var first = 6;
+        if what == 2 || what == 4 {
+            first = 7;
+        } else if what == 3 {
+            first = 5;
+        }
+        var mid = word(text, first, n);
+        if what >= 4 {
+            mid = n;
+        }
+        let why = disk.volume(vio, dma, k, sec, info);
+        if why != 0 {
+            disk.put_why(con, k, why);
+        } else if what < 4 && (mid >= n - 1 || mid == first) {
+            base.puts(con, k, "usage: write <name> <text>, append <name> <text>, copy <from> <to>\r\n");
+        } else if ledger.ready(con, vio, dma, k, sec, tab, rtab, info, name, out, o, w, who) != 0 {
+            // `ready` said why
+        } else if what == 1 {
+            // a file whose contents are the text and a line feed: a new one, or a new version of one
+            if disk.look(vio, dma, k, sec, rtab, info, name, out, o, 0, text, first, mid) != 0 {
+                base.puts(con, k, "the disk could not be read\r\n");
+            } else if o[0] != 0 && o[8] != fat.entry_file() {
+                base.puts(con, k, "that is a directory\r\n");
+            } else {
+                let there = o[0] != 0;
+                let es = o[1];
+                let ei = o[2];
+                let oc = o[3];
+                let os = o[4];
+                var ok = true;
+                if !there {
+                    ok = disk.place(con, vio, dma, k, sec, tab, rtab, info, name, out, o, w, 0, text, first, mid) == 0;
+                }
+                var size = n - mid - 1;
+                if size > 500 {
+                    size = 500;
+                }
+                var i = 0;
+                while i < 512 {
+                    sec[i] = byte_of(0);
+                    i = i + 1;
+                }
+                i = 0;
+                while i < size {
+                    sec[i] = text[mid + 1 + i];
+                    i = i + 1;
+                }
+                sec[size] = byte_of(10);
+                size = size + 1;
+                sha.digest(sec[0..size], hd);
+                if !ok {
+                    // `place` said why
+                } else if disk.put(vio, dma, k, tab, info, w, sec) != 0 || disk.kept(vio, dma, k, tab, info, w) != 0 {
+                    base.puts(con, k, "the disk is full, or could not be written: nothing was changed\r\n");
+                } else if !there {
+                    if ledger.record_add(vio, dma, k, info, w, who, "write", text, first, mid, text, 0, 0, 0, size, hd, true) != 0 {
+                        base.puts(con, k, "the record could not be added to: nothing was changed\r\n");
+                    } else if disk.name_it(vio, dma, k, sec, tab, info, o, w, text, first, mid, size) != 0 {
+                        base.puts(con, k, "the disk could not be written: no file was made\r\n");
+                    } else {
+                        disk.counted(vio, dma, k, sec, info, w);
+                        base.puts(con, k, "written: ");
+                        base.put_dec(con, k, size);
+                        base.puts(con, k, " bytes\r\n");
+                    }
+                } else {
+                    // what the file held gets its name in OLD first; then the file's own entry is pointed
+                    // at the new contents, in one sector written once
+                    let first_new = w[0];
+                    let v = disk.version(con, vio, dma, k, sec, tab, rtab, info, name, out, o, w, vname, oc, os);
+                    var bad = v < 0;
+                    if !bad && ledger.record_add(vio, dma, k, info, w, who, "write", text, first, mid, text, 0, 0, v, size, hd, true) != 0 {
+                        base.puts(con, k, "the record could not be added to: nothing was changed\r\n");
+                        bad = true;
+                    }
+                    bad = bad || disk.read(vio, dma, k, es, sec) != 0;
+                    if !bad {
+                        fat.set_extent(sec, ei, first_new, size);
+                        bad = disk.write(vio, dma, k, es, sec) != 0;
+                    }
+                    if bad {
+                        base.puts(con, k, "the file is as it was\r\n");
+                    } else {
+                        disk.counted(vio, dma, k, sec, info, w);
+                        base.puts(con, k, "written: ");
+                        base.put_dec(con, k, size);
+                        base.puts(con, k, " bytes; what was there is ");
+                        put_version(con, k, vname);
+                        base.puts(con, k, "\r\n");
+                    }
+                }
+            }
+        } else if what == 4 {
+            // the file's contents get a name in OLD, and then its own name is taken away
+            if disk.look(vio, dma, k, sec, rtab, info, name, out, o, 0, text, first, mid) != 0 {
+                base.puts(con, k, "the disk could not be read\r\n");
+            } else if o[0] == 0 {
+                base.puts(con, k, "no such file to remove\r\n");
+            } else if o[8] != fat.entry_file() {
+                base.puts(con, k, "that is a directory\r\n");
+            } else {
+                let es = o[1];
+                let ei = o[2];
+                let v = disk.version(con, vio, dma, k, sec, tab, rtab, info, name, out, o, w, vname, o[3], o[4]);
+                var bad = v < 0;
+                if !bad && ledger.record_add(vio, dma, k, info, w, who, "remove", text, first, mid, text, 0, 0, v, -1, hd, false) != 0 {
+                    base.puts(con, k, "the record could not be added to: nothing was changed\r\n");
+                    bad = true;
+                }
+                bad = bad || disk.read(vio, dma, k, es, sec) != 0;
+                if !bad {
+                    fat.erase(sec, ei);
+                    bad = disk.write(vio, dma, k, es, sec) != 0;
+                }
+                if bad {
+                    base.puts(con, k, "the file is as it was\r\n");
+                } else {
+                    disk.counted(vio, dma, k, sec, info, w);
+                    base.puts(con, k, "removed; what it held is ");
+                    put_version(con, k, vname);
+                    base.puts(con, k, "\r\n");
+                }
+            }
+        } else if what == 5 {
+            // a version, given up for good: its name first, then its clusters
+            var number = 0;
+            var i = first;
+            var digits = i < n && n - i <= 8;
+            while i < n && digits {
+                let c = int_of(text[i]);
+                digits = c >= '0' && c <= '9';
+                number = number * 10 + c - '0';
+                i = i + 1;
+            }
+            var dir = 0;
+            if digits && number > 0 {
+                dir = disk.old_dir(con, vio, dma, k, sec, tab, rtab, info, name, out, o, w, false);
+            }
+            if !digits || number == 0 {
+                base.puts(con, k, "usage: purge <number>   (`versions` lists them)\r\n");
+            } else if dir < 0 {
+                // `old_dir` said why
+            } else if dir == 0 || fat.version_name(vname, number) < 0 || disk.look(vio, dma, k, sec, rtab, info, name, out, o, dir, vname, 0, 10) != 0 || o[0] == 0 {
+                base.puts(con, k, "no such version\r\n");
+            } else {
+                var cluster = o[3];
+                let es = o[1];
+                let ei = o[2];
+                var bad = ledger.record_add(vio, dma, k, info, w, who, "purge", vname, 0, 10, text, 0, 0, number, o[4], hd, false) != 0;
+                if bad {
+                    base.puts(con, k, "the record could not be added to: nothing was changed\r\n");
+                }
+                bad = bad || disk.read(vio, dma, k, es, sec) != 0;
+                if !bad {
+                    fat.erase(sec, ei);
+                    bad = disk.write(vio, dma, k, es, sec) != 0;
+                }
+                var freed = 0;
+                while cluster >= 2 && !bad && freed <= info[7] {
+                    bad = disk.table(vio, dma, k, tab, info, w, fat.fat_sector(info, cluster)) != 0;
+                    if !bad {
+                        let after = fat.next(info, tab, cluster);
+                        fat.set_free(info, tab, cluster);
+                        w[6] = 1;
+                        freed = freed + 1;
+                        cluster = after;
+                    }
+                }
+                bad = bad || disk.kept(vio, dma, k, tab, info, w) != 0;
+                if !bad && info[11] != 0 && freed > 0 {
+                    if disk.read(vio, dma, k, info[11], sec) == 0 && fat.summary_more(sec, freed) == 0 {
+                        disk.write(vio, dma, k, info[11], sec);
+                    }
+                }
+                if bad {
+                    base.puts(con, k, "the disk could not be read or written\r\n");
+                } else {
+                    base.puts(con, k, "purged: ");
+                    put_version(con, k, vname);
+                    base.puts(con, k, ", ");
+                    base.put_dec(con, k, freed);
+                    base.puts(con, k, " clusters given back\r\n");
+                }
+            }
+        } else if what == 3 {
+            // a new file with the contents of another, or of a version, read as `sum` reads it
+            if source(con, vio, dma, k, sec, tab, rtab, info, name, out, o, w, text, first, mid) == 0 {
+                let from_cluster = o[3];
+                let size = o[4];
+                if disk.place(con, vio, dma, k, sec, tab, rtab, info, name, out, o, w, 0, text, mid + 1, n) == 0 {
+                    var done = 0;
+                    var cluster = from_cluster;
+                    var held = -1;
+                    var bad = false;
+                    sha.init(hs);
+                    while done < size && !bad {
+                        let at = fat.cluster_sector(info, cluster);
+                        bad = at < 0;
+                        var s = 0;
+                        while s < info[1] && done < size && !bad {
+                            bad = disk.read(vio, dma, k, at + s, rsec) != 0;
+                            // what is past the file's end in its last sector is not copied
+                            var i = size - done;
+                            while i < 512 {
+                                rsec[i] = byte_of(0);
+                                i = i + 1;
+                            }
+                            var m = size - done;
+                            if m > 512 {
+                                m = 512;
+                            }
+                            sha.update(hs, rsec[0..m]);
+                            bad = bad || disk.put(vio, dma, k, tab, info, w, rsec) != 0;
+                            done = done + 512;
+                            s = s + 1;
+                        }
+                        if done < size && !bad {
+                            let fs = fat.fat_sector(info, cluster);
+                            if fs != held {
+                                bad = fs < 0 || disk.read(vio, dma, k, fs, rtab) != 0;
+                                held = fs;
+                            }
+                            cluster = fat.next(info, rtab, cluster);
+                            bad = bad || cluster < 0;
+                        }
+                    }
+                    bad = bad || disk.kept(vio, dma, k, tab, info, w) != 0;
+                    if !bad {
+                        sha.final(hs, hd);
+                        bad = ledger.record_add(vio, dma, k, info, w, who, "copy", text, mid + 1, n, text, first, mid, 0, size, hd, true) != 0;
+                    }
+                    if bad || disk.name_it(vio, dma, k, sec, tab, info, o, w, text, mid + 1, n, size) != 0 {
+                        base.puts(con, k, "the disk is full, or could not be read or written: no file was made\r\n");
+                    } else {
+                        disk.counted(vio, dma, k, sec, info, w);
+                        base.puts(con, k, "copied: ");
+                        base.put_dec(con, k, size);
+                        base.puts(con, k, " bytes\r\n");
+                    }
+                }
+            }
+        } else {
+            // more at the end of a file that is there: its text and a line feed
+            if disk.look(vio, dma, k, sec, rtab, info, name, out, o, 0, text, first, mid) != 0 || o[0] == 0 || o[8] != fat.entry_file() {
+                base.puts(con, k, "no such file to add to (`write` makes one)\r\n");
+            } else {
+                let size = o[4];
+                let es = o[1];
+                let ei = o[2];
+                var more = n - mid - 1;
+                if more > 500 {
+                    more = 500;
+                }
+                var i = 0;
+                while i < more {
+                    rsec[i] = text[mid + 1 + i];
+                    i = i + 1;
+                }
+                rsec[more] = byte_of(10);
+                more = more + 1;
+                sha.digest(rsec[0..more], hd);
+                var bad = disk.extend(vio, dma, k, sec, tab, rtab, info, w, o[3], size, rsec, more) != 0 || disk.kept(vio, dma, k, tab, info, w) != 0;
+                if !bad && ledger.record_add(vio, dma, k, info, w, who, "append", text, first, mid, text, 0, 0, 0, more, hd, true) != 0 {
+                    base.puts(con, k, "the record could not be added to: nothing was changed\r\n");
+                    bad = true;
+                }
+                // last, the directory's word for where the file starts and how long it is
+                bad = bad || disk.read(vio, dma, k, es, sec) != 0;
+                if !bad {
+                    fat.set_extent(sec, ei, w[0], size + more);
+                    bad = disk.write(vio, dma, k, es, sec) != 0;
+                }
+                if bad {
+                    base.puts(con, k, "the disk is full, or could not be read or written: the file is as it was\r\n");
+                } else {
+                    disk.counted(vio, dma, k, sec, info, w);
+                    base.puts(con, k, "added: ");
+                    base.put_dec(con, k, more);
+                    base.puts(con, k, " bytes, ");
+                    base.put_dec(con, k, size + more);
+                    base.puts(con, k, " in all\r\n");
+                }
+            }
+        }
+    }
+    return 1;
+}
+
+// `put`: a whole file that came over SSH and is waiting in memory (`size` bytes from `at`) becomes the file
+// `text[from..to]`, new or in place of the one of that name. `want` is the SHA-256 the sender gave, as 64 hex
+// digits: the bytes that came must have it, and so must the bytes the disk gives back once they are
+// written, before the name is pointed at them. Then as `write`: the old contents to OLD, the line, the name.
+// 0 if the file is now that; 1 if not, with the reason printed and the disk as it was.
+pub fn store[&mc, &mv, &md, &mg, &s, &r, &h](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), k: &!s [int], text: &r [byte], from: int, to: int, at: int, size: int, want: &h [byte], who: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x220000..0x420000,0x40220000..0x40420000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+    var done = 1;
+    region r {
+        let sec = alloc_slice[r](512, byte_of(0));
+        let tab = alloc_slice[r](512, byte_of(0));
+        let rtab = alloc_slice[r](512, byte_of(0));
+        let info = alloc_slice[r](fat.facts(), 0);
+        let name = alloc_slice[r](12, byte_of(0));
+        let vname = alloc_slice[r](12, byte_of(0));
+        let hs = alloc_slice[r](sha.state_len(), 0);
+        let hd = alloc_slice[r](32, byte_of(0));
+        let hx = alloc_slice[r](64, byte_of(0));
+        let out = alloc_slice[r](3, 0);
+        let o = alloc_slice[r](10, 0);
+        let w = alloc_slice[r](8, 0);
+        w[5] = -1;
+        // what came, against what was sent
+        sha.init(hs);
+        var i = 0;
+        while i < size {
+            sha.update_byte(hs, mmio_read8(stage, at + i));
+            i = i + 1;
+        }
+        sha.final(hs, hd);
+        var same = len(want) >= 64;
+        i = 0;
+        while i < 32 && same {
+            let hi = int_of(hd[i]) >> 4 & 15;
+            let lo = int_of(hd[i]) & 15;
+            hx[i * 2] = byte_of(hi + '0');
+            if hi > 9 {
+                hx[i * 2] = byte_of(hi - 10 + 'a');
+            }
+            hx[i * 2 + 1] = byte_of(lo + '0');
+            if lo > 9 {
+                hx[i * 2 + 1] = byte_of(lo - 10 + 'a');
+            }
+            same = int_of(hx[i * 2]) == (int_of(want[i * 2]) | 32) && int_of(hx[i * 2 + 1]) == (int_of(want[i * 2 + 1]) | 32) || int_of(hx[i * 2]) == int_of(want[i * 2]) && int_of(hx[i * 2 + 1]) == int_of(want[i * 2 + 1]);
+            i = i + 1;
+        }
+        let why = disk.volume(vio, dma, k, sec, info);
+        if !same {
+            base.puts(con, k, "what came does not have the SHA-256 that was given: nothing was written\r\n");
+        } else if why != 0 {
+            disk.put_why(con, k, why);
+        } else if ledger.ready(con, vio, dma, k, sec, tab, rtab, info, name, out, o, w, who) != 0 {
+            // `ready` said why
+        } else if disk.look(vio, dma, k, sec, rtab, info, name, out, o, 0, text, from, to) != 0 {
+            base.puts(con, k, "the disk could not be read\r\n");
+        } else if o[0] != 0 && o[8] != fat.entry_file() {
+            base.puts(con, k, "that is a directory\r\n");
+        } else {
+            let there = o[0] != 0;
+            let es = o[1];
+            let ei = o[2];
+            let oc = o[3];
+            let os = o[4];
+            var bad = false;
+            if !there {
+                bad = disk.place(con, vio, dma, k, sec, tab, rtab, info, name, out, o, w, 0, text, from, to) != 0;
+            }
+            let slot = o[5];
+            let slot_i = o[6];
+            // the contents, to clusters that were free
+            var sent = 0;
+            while sent < size && !bad {
+                i = 0;
+                while i < 512 {
+                    if sent + i < size {
+                        sec[i] = byte_of(mmio_read8(stage, at + sent + i));
+                    } else {
+                        sec[i] = byte_of(0);
+                    }
+                    i = i + 1;
+                }
+                bad = disk.put(vio, dma, k, tab, info, w, sec) != 0;
+                sent = sent + 512;
+            }
+            bad = bad || disk.kept(vio, dma, k, tab, info, w) != 0;
+            if bad {
+                base.puts(con, k, "the disk is full, or could not be written: nothing was changed\r\n");
+            }
+            // read back from the disk, before anything names them: they must be what was sent
+            let first_new = w[0];
+            sha.init(hs);
+            var got = 0;
+            var cluster = first_new;
+            var held = -1;
+            var wrong = false;
+            while got < size && !bad && !wrong {
+                let cs = fat.cluster_sector(info, cluster);
+                wrong = cs < 0;
+                var s = 0;
+                while s < info[1] && got < size && !wrong {
+                    wrong = disk.read(vio, dma, k, cs + s, sec) != 0;
+                    i = 0;
+                    while i < 512 && got < size && !wrong {
+                        sha.update_byte(hs, int_of(sec[i]));
+                        got = got + 1;
+                        i = i + 1;
+                    }
+                    s = s + 1;
+                }
+                if got < size && !wrong {
+                    let fs = fat.fat_sector(info, cluster);
+                    if fs != held {
+                        wrong = fs < 0 || disk.read(vio, dma, k, fs, rtab) != 0;
+                        held = fs;
+                    }
+                    cluster = fat.next(info, rtab, cluster);
+                    wrong = wrong || cluster < 0;
+                }
+            }
+            if !bad {
+                sha.final(hs, sec[0..32]);
+                i = 0;
+                while i < 32 {
+                    wrong = wrong || int_of(sec[i]) != int_of(hd[i]);
+                    i = i + 1;
+                }
+                if wrong {
+                    base.puts(con, k, "the disk did not give back what was written to it: nothing was changed\r\n");
+                    bad = true;
+                }
+            }
+            var v = 0;
+            if !bad && there {
+                v = disk.version(con, vio, dma, k, sec, tab, rtab, info, name, out, o, w, vname, oc, os);
+                bad = v < 0;
+            }
+            if !bad && ledger.record_add(vio, dma, k, info, w, who, "put", text, from, to, text, 0, 0, v, size, hd, true) != 0 {
+                base.puts(con, k, "the record could not be added to: nothing was changed\r\n");
+                bad = true;
+            }
+            // last, the one sector that makes the name mean the new contents
+            if !bad && there {
+                bad = disk.read(vio, dma, k, es, sec) != 0;
+                if !bad {
+                    fat.set_extent(sec, ei, first_new, size);
+                    bad = disk.write(vio, dma, k, es, sec) != 0;
+                }
+            } else if !bad {
+                bad = disk.read(vio, dma, k, slot, sec) != 0 || fat.put_entry(sec, slot_i, text, from, to, first_new, size) != 0 || disk.write(vio, dma, k, slot, sec) != 0;
+            }
+            if !bad {
+                disk.counted(vio, dma, k, sec, info, w);
+                base.puts(con, k, "kept: ");
+                base.put_dec(con, k, size);
+                base.puts(con, k, " bytes, read back from the disk with the SHA-256 that was given");
+                if there {
+                    base.puts(con, k, "; what was there is ");
+                    put_version(con, k, vname);
+                }
+                base.puts(con, k, "\r\n");
+                done = 0;
+            }
+        }
+    }
+    return done;
+}
+
+// The commands that use the disk, for the shell: `disk`, `ls`, `versions`, `record`, `cat <name>`, `sum <name>`, and the
+// five above. `console` says the line was typed at the serial console, where alone `purge` is taken.
+// 1 if `text[0..n]` was one of them and has been run, 0 if it is another command.
+pub fn command[&mc, &mv, &md, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], text: &r [byte], n: int, console: bool) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+    let is_disk = n == 4 && begins(text, n, "disk");
+    let is_ls = n == 2 && begins(text, n, "ls");
+    let is_versions = n == 8 && begins(text, n, "versions");
+    let is_record = n == 6 && begins(text, n, "record");
+    let is_cat = n > 4 && begins(text, n, "cat ");
+    let is_sum = n > 4 && begins(text, n, "sum ");
+    // what the shell will not touch: the host key as a source, and the kernel's own names as a place
+    var first = 0;
+    var what = 0;
+    if is_cat || is_sum {
+        first = 4;
+    } else if n > 6 && begins(text, n, "write ") {
+        first = 6;
+        what = 1;
+    } else if n > 7 && begins(text, n, "append ") {
+        first = 7;
+        what = 2;
+    } else if n > 5 && begins(text, n, "copy ") {
+        first = 5;
+        what = 3;
+    } else if n > 7 && begins(text, n, "remove ") {
+        first = 7;
+        what = 4;
+    } else if n > 6 && begins(text, n, "purge ") {
+        first = 6;
+        what = 5;
+    }
+    if first > 0 && what != 5 {
+        var mid = word(text, first, n);
+        if what == 4 {
+            mid = n;
+        }
+        if secret(text, first, mid) || what == 3 && mid < n && secret(text, mid + 1, n) {
+            base.puts(con, k, "the host key is kept by the kernel: the shell does not show it, copy it or change it\r\n");
+            return 1;
+        }
+        if what != 0 && what != 3 && kept_name(text, first, mid) || what == 3 && mid < n && kept_name(text, mid + 1, n) {
+            base.puts(con, k, "that name is the kernel's: OLD holds the versions and LOG.TXT the record\r\n");
+            return 1;
+        }
+    }
+    if what != 0 && what != 5 && !console {
+        var mid = word(text, first, n);
+        if what == 4 {
+            mid = n;
+        }
+        if what != 3 && boot_name(text, first, mid) || what == 3 && mid < n && boot_name(text, mid + 1, n) {
+            base.puts(con, k, "a file the board starts from: it is changed with `put`, which checks every byte, or at the console\r\n");
+            return 1;
+        }
+    }
+    if what == 5 && !console {
+        base.puts(con, k, "purge gives up a version for good, and is taken at the serial console only\r\n");
+        return 1;
+    }
+    if what != 0 {
+        // who is asking: the console, or a key over SSH
+        var who = 0;
+        if !console {
+            who = 1;
+        }
+        return change(con, vio, dma, k, text, n, what, who);
+    }
+    if !is_disk && !is_ls && !is_cat && !is_sum && !is_versions && !is_record {
+        return 0;
+    }
+    region r {
+        let sec = alloc_slice[r](512, byte_of(0));
+        let tab = alloc_slice[r](512, byte_of(0));
+        let wt = alloc_slice[r](512, byte_of(0));
+        let info = alloc_slice[r](fat.facts(), 0);
+        let name = alloc_slice[r](12, byte_of(0));
+        let out = alloc_slice[r](3, 0);
+        let o = alloc_slice[r](10, 0);
+        let w = alloc_slice[r](8, 0);
+        w[5] = -1;
+        let sum = alloc_slice[r](2, 0);
+        let why = disk.volume(vio, dma, k, sec, info);
+        if why != 0 {
+            disk.put_why(con, k, why);
+        } else if is_disk {
+            if k[4170] == 2 {
+                base.puts(con, k, "an SD card of ");
+            } else {
+                base.puts(con, k, "a disk of ");
+            }
+            base.put_dec(con, k, k[4171]);
+            base.puts(con, k, " sectors (");
+            base.put_dec(con, k, k[4171] / 2048);
+            base.puts(con, k, " MB); a FAT");
+            base.put_dec(con, k, info[0]);
+            base.puts(con, k, " volume at sector ");
+            base.put_dec(con, k, info[8]);
+            base.puts(con, k, ", ");
+            base.put_dec(con, k, info[7]);
+            base.puts(con, k, " clusters of ");
+            base.put_dec(con, k, info[1] * 512);
+            base.puts(con, k, " bytes; ");
+            base.put_dec(con, k, k[4175]);
+            base.puts(con, k, " sectors written since the start\r\n");
+        } else if is_ls {
+            let count = disk.top(con, vio, dma, k, sec, wt, info, name, out, 0, text, 0, 0);
+            if count < 0 {
+                base.puts(con, k, "the disk could not be read\r\n");
+            } else {
+                base.put_dec(con, k, count);
+                base.puts(con, k, " files\r\n");
+            }
+        } else if is_record {
+            let have = ledger.record_load(vio, dma, k, sec, wt, info, name, out, o);
+            if have < 0 {
+                base.puts(con, k, "the record could not be read\r\n");
+            } else if have == 1 {
+                base.puts(con, k, "no record on this disk yet: the first change makes LOG.TXT\r\n");
+            } else {
+                base.puts(con, k, "the record: ");
+                base.put_dec(con, k, k[4187]);
+                if k[4252] == 0 {
+                    base.puts(con, k, " lines, each following from the one before (`cat LOG.TXT` shows them)\r\n");
+                } else {
+                    base.puts(con, k, " lines, and line ");
+                    base.put_dec(con, k, k[4252]);
+                    base.puts(con, k, " does not follow from the one before it: it was changed, or lines were taken out\r\n");
+                }
+            }
+        } else if is_versions {
+            let dir = disk.old_dir(con, vio, dma, k, sec, tab, wt, info, name, out, o, w, false);
+            var count = 0;
+            if dir > 0 {
+                count = disk.top(con, vio, dma, k, sec, wt, info, name, out, dir, text, 0, 0);
+            }
+            if count < 0 {
+                base.puts(con, k, "the disk could not be read\r\n");
+            } else if dir >= 0 {
+                base.put_dec(con, k, count);
+                base.puts(con, k, " versions kept (`cat OLD/<name>` shows one, `copy OLD/<name> <new>` brings one back)\r\n");
+            }
+        } else if source(con, vio, dma, k, sec, tab, wt, info, name, out, o, w, text, 4, n) == 0 {
+            let size = o[4];
+            let got = disk.whole(con, vio, dma, k, sec, tab, info, o[3], size, is_cat, sum);
+            if got < 0 {
+                base.puts(con, k, "\r\nthe file could not be read to its end\r\n");
+            } else if is_sum {
+                base.put_dec(con, k, got);
+                base.puts(con, k, " bytes, adler32 ");
+                let v = sum[1] << 16 | sum[0];
+                var shift = 28;
+                while shift >= 0 {
+                    base.put_hex(con, k, v >> shift & 15);
+                    shift = shift - 4;
+                }
+                base.puts(con, k, "\r\n");
+            } else if size > 4096 {
+                base.puts(con, k, "\r\n[the first 4096 bytes of ");
+                base.put_dec(con, k, size);
+                base.puts(con, k, "]\r\n");
+            }
+        }
+    }
+    return 1;
+}

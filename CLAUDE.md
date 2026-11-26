@@ -40,7 +40,8 @@ Rules of the road
   The network's only way in is SSH: the open shell on port 23 was removed (docs/update.md) and stays out.
 - Storage (docs/storage.md): `src/fat.cho` is pure like `inet` (given a sector, says what it means; no trap
   on any bytes) and its tests use sectors of volumes other tools made, read by a second implementation.
-  `src/disk.cho` holds the driver and the commands. A change is tried against real images before it is
+  Three layers, each importing only the ones before it: `src/disk.cho` (the driver, the table, directories,
+  the writer), `src/ledger.cho` (LOG.TXT on the disk), `src/files.cho` (the commands, the kernel's own files, `put`). A change is tried against real images before it is
   believed: `MACHINE=virt DISK=img ./test.sh ... 'sum NAME'` and the checksum from another tool.
   Writing follows docs/permissions.md: the directory sector that names new data is written LAST, nothing
   that is on the disk is changed in place, and a write is believed only when another system's checker
@@ -53,7 +54,7 @@ Rules of the road
   command that changes the disk calls `record_add` after its data is on the disk and before the one
   sector that makes the change take effect, and stops if the line could not be added. The line format is
   what other tools read: do not change a field without changing `checklog.py` and the doc. `OLD`, `LOG.TXT`
-  and `HOSTKEY.BIN` are names the shell does not change (`kept_name` in disk.cho).
+  and `HOSTKEY.BIN` are names the shell does not change (`kept_name` in files.cho).
 - The SD card (docs/sdcard.md): `src/sdcard.cho` is standard SDHCI with 32-bit register access only, every
   wait a bounded count, and it is started the first time a disk is wanted, never at boot. QEMU's raspi4b has
   its card on the other controller: `-device sd-card,drive=...,bus=main-system-bus/generic-sdhci/sd-bus`
@@ -62,7 +63,7 @@ Rules of the road
   QEMU and a checker have passed it, and never write `KERNEL8.IMG` or the firmware's files in a test.
 - Who may do what (docs/permissions.md): a session's role is k[4179] (2 an owner's key, 1 a reader's); a
   new shell command must be put on the reader's list in `reading` (kernel.cho) only if it changes nothing
-  and reaches nowhere. `HOSTKEY.BIN` is never shown, copied or changed by the shell (`secret` in disk.cho).
+  and reaches nowhere. `HOSTKEY.BIN` is never shown, copied or changed by the shell (`secret` in files.cho).
   `./keys.sh` is the test, with OpenSSH and three keys.
 - SSH (docs/ssh.md) is cancho-ssh, pinned by `SSH_REF` in the workflow and taken from `../cancho-ssh` (or
   `SSH=`) by build.sh: change it there, never copy it here. `src/sshd.cho` is the loop and must keep its two
@@ -76,7 +77,7 @@ Rules of the road
   keep "measured in QEMU" on everything that was not seen on the board.
 - The Pi 5 (docs/pi5.md) is the one board whose code no test runs: QEMU has none. Do not describe it as
   working, and do not add a Pi 5 driver (RP1, the RNG200, USB) before the console has been seen on a real board.
-- Files, none near 2,000 lines (disk.cho is the one to watch): `src/kernel.cho` (boot, memory, shell, servo and arm), `src/base.cho`
+- Files, none near 2,000 lines (network.cho, at 1,560, is the one to watch): `src/kernel.cho` (boot, memory, shell, servo and arm), `src/base.cho`
   (console output, clock, bus bytes), `src/network.cho` (links, generator, session, network commands). A
   new network command goes in `network.net_command`, never in the shell's loop.
 - The kernel's address, mask, gateway and name server are k[4154..4157] (docs/addresses.md); nothing may
