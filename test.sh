@@ -3,6 +3,8 @@
 # and print what the UART said. Portable: no `timeout` (macOS has none).
 #   ./test.sh about 'echo ci'            QEMU raspi3b
 #   MACHINE=raspi4b ./test.sh about      the same image as a Pi 4 (QEMU >= 9)
+#   MACHINE=virt ./test.sh about         QEMU's virt machine (build/kernel-virt.elf), with a network card
+#   MACHINE=virt UDP=hello ./test.sh 'net up' net     and a datagram sent to the kernel's echo port from here
 #   SERVOS=1 ./test.sh 'servo scan'      with six simulated servos on the board's second serial
 #                                        port (build/servos, from sim/servos.cho: see build.sh)
 #   NET=1 ./test.sh 'net up' net         with the network peer on that port instead (build/netpeer, from
@@ -28,14 +30,29 @@ elif [ -n "${NET:-}" ]; then
     SIM=$!
     BUS="-serial pipe:build/bus"
 fi
-qemu-system-aarch64 -M "$MACHINE" -kernel build/kernel8.img -serial stdio $BUS -display none -monitor none \
+KERNEL=build/kernel8.img
+if [ "$MACHINE" = virt ]; then
+    # QEMU's own board: one serial port (no servo bus), RAM at 1 GB. A Cortex-A57 is how the kernel knows it.
+    # A network card on QEMU's own user-mode network: the host is 10.0.0.1, the kernel 10.0.0.2, and a
+    # datagram sent to this machine's port 5507 reaches the kernel's port 7.
+    MACHINE="virt -cpu cortex-a57 -m 1G -global virtio-mmio.force-legacy=false -netdev user,id=n0,net=10.0.0.0/24,host=10.0.0.1,hostfwd=udp:127.0.0.1:5507-10.0.0.2:7 -device virtio-net-device,netdev=n0"
+    KERNEL=build/kernel-virt.elf
+    BUS=
+fi
+qemu-system-aarch64 -M $MACHINE -kernel $KERNEL -serial stdio $BUS -display none -monitor none \
     < build/uart.in > build/uart.out 2>&1 &
 QEMU=$!
 exec 3> build/uart.in
 sleep 2
+first=1
 for line in "$@"; do
     printf '%s\r' "$line" >&3
     sleep 1
+    if [ -n "$first" ] && [ -n "${UDP:-}" ]; then
+        # after the first line (`net up`): a datagram from this machine to the kernel's echo port
+        printf "udp echo: '%s'\n" "$(printf '%s' "$UDP" | nc -u -w 1 127.0.0.1 5507)" > build/peer.txt
+    fi
+    first=
 done
 exec 3>&-
 kill $QEMU 2>/dev/null

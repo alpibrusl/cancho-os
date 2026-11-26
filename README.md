@@ -2,7 +2,8 @@
 
 Site: https://alpibrusl.github.io/cancho-os/
 
-Raspberry Pi first: that is the board it boots on today (Pi 3 and Pi 4 in QEMU; a Pi 5 is the
+Raspberry Pi first: that is the board it boots on today (Pi 3 and Pi 4 in QEMU, and QEMU's own
+`virt` machine, which is where the network card is; a Pi 5 is the
 robot's board and is next). Nothing in the design is tied to it: the shell, the servo
 protocol, the kinematics and the safety core are plain cancho, and what is specific to the
 board is the boot assembly, three drivers and the page-table format. A PC with UEFI is the
@@ -26,7 +27,7 @@ board/boot.S     boot (park cores 1-3, EL2 -> EL1, stack, zero .bss) and the exc
                  Nothing in it is called by cancho
 board/link.ld    load at 0x80000; code, constants and data on page boundaries; the
                  translation tables at 2 MB
-build.sh         cancho build --target aarch64-none-elf, assemble boot.S, link, objcopy
+build.sh         cancho build --target aarch64-none-elf, assemble boot.S, link twice (Pi, virt), objcopy
 authority.sh     what the kernel can touch is docs/authority.txt, and a function lent one
                  device cannot use another (what CI runs)
 run.sh           boot it in QEMU
@@ -127,13 +128,17 @@ UART); the protocol, and everything built on it, does not. Not verified in QEMU:
 
 ## The network
 
-The kernel answers `ping` and a UDP echo, over IPv4 on a serial line (SLIP) on its second serial
-port. No Ethernet and no TCP yet; [docs/network.md](docs/network.md) says why it starts there
-(QEMU's Pi 4 has no Ethernet controller) and what is checked.
+The kernel answers `ping` and a UDP echo over two links: a serial line (SLIP) on the second
+serial port of a Pi, and Ethernet, with ARP, through a virtio network card on QEMU's `virt`
+machine. No TCP yet, and no real network card: QEMU's Pi 4 has no Ethernet controller, so the
+Pi's own is for the day a board boots. [docs/network.md](docs/network.md) has the reasoning and
+what is checked; [docs/drivers.md](docs/drivers.md) the order of the drivers.
 
 ```
 NET=1 ./test.sh 'net up' 'echo wait' 'echo wait' net   # sim/netpeer.cho is the other end of the line
 sudo ./ping.sh                                          # Linux: the system's own ping, over a pty
+MACHINE=virt UDP=hello ./test.sh 'net up' net           # Ethernet: a datagram from this machine to the kernel
+sudo MACHINE=virt ./ping.sh                             # Linux: ping over a tap interface, ARP first
 ```
 
 ```

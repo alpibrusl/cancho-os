@@ -22,15 +22,19 @@ import inet;
 //   code   the kernel's own image, to read the instruction a fault stopped at
 //   probe  one byte of page 0 and one of the code, for `crash null` and `crash write`
 //   fault  the word where board/boot.S notes the vector of a fault (-1: none)
+//   vio    the virtio devices of QEMU's virt machine: the network card is one of them
+//   dma    64 KB of memory a device reads and writes on its own: the card's queues and packets
 // The link's two addresses the kernel needs (the end of the code and of the constants)
 // are the words at 0x80010 and 0x80018 of the image, read through `code`.
 // The kernel's state is one slice of ints, lent to whoever needs it (cancho has no
 // mutable globals, and does not need them here):
-//   k[0] UART base          k[1] board: 3 or 4 (0: not recognised)
+//   k[0] UART base          k[1] board: Pi 3 or 4, 1 for QEMU virt (0: not recognised)
 //   k[2] GIC CPU interface  k[3] GIC distributor (both 0 on the Pi 3)
 //   k[4] counter units per tick   k[5] ticks so far
 //   k[6] translation tables used  k[7] peripheral window start   k[8] its end
-//   k[9] servo bus UART base
+//   k[9] servo bus UART base (0: the board has no second serial port)
+//   k[15] the virtio network card's registers (0: none)   k[16] k[17] k[18] its queues' counters   k[19] its address
+//   k[14] where RAM starts: 0 on a Pi, 1 GB on QEMU's virt. The image, the tables and the fault note are at the same offsets from it
 //   k[10] the network link is up   k[11] packets answered   k[12] packets dropped   k[13] why the last one was
 // The system registers, by the numbers board_sys_read/board_sys_write take:
 //   0 cntfrq_el0  1 cntvct_el0  2 cntv_ctl_el0  3 cntv_cval_el0  4 cntv_tval_el0
@@ -56,18 +60,30 @@ fn detect[&f, &s](cpu: &!f Cpu, k: &!s [int]) -> [cpu("midr_el1")] int {
         k[3] = 0xff841000;
         k[7] = 0xfc000000;
         k[8] = 0x100000000;
+    } else if part == 0xd07 {
+        // Cortex-A57: no Pi has one. It is how QEMU's `virt` machine is run here (run.sh, test.sh):
+        // a PL011, a GIC and virtio devices, and RAM that starts at 1 GB instead of 0
+        k[1] = 1;
+        k[0] = 0x9000000;
+        k[2] = 0x8010000;
+        k[3] = 0x8000000;
+        k[7] = 0x8000000;
+        k[8] = 0xa200000;
+        k[14] = 0x40000000;
     }
     return k[1];
 }
 
 // ---- UART (PL011) -----------------------------------------------------------
-fn uart_init[&mc, &mp, &s](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), pins: &!mp Mmio("0x3f200004..0x3f200008,0xfe200004..0xfe200008"), k: &!s [int]) -> [mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f200004..0x3f200008,0xfe200004..0xfe200008")] int {
+fn uart_init[&mc, &mp, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), pins: &!mp Mmio("0x3f200004..0x3f200008,0xfe200004..0xfe200008"), k: &!s [int]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f200004..0x3f200008,0xfe200004..0xfe200008")] int {
     let uart = k[0];
     let gpio = uart - 0x1000;
     mmio_write32(con, uart + 0x30, 0);
-    // GPFSEL1: GPIO14/15 to ALT0 (TXD0/RXD0)
-    let sel = mmio_read32(pins, gpio + 4) & ~(7 << 12 | 7 << 15);
-    mmio_write32(pins, gpio + 4, sel | 4 << 12 | 4 << 15);
+    if k[1] >= 3 {
+        // GPFSEL1: GPIO14/15 to ALT0 (TXD0/RXD0). (QEMU's virt has no pins to route.)
+        let sel = mmio_read32(pins, gpio + 4) & ~(7 << 12 | 7 << 15);
+        mmio_write32(pins, gpio + 4, sel | 4 << 12 | 4 << 15);
+    }
     mmio_write32(con, uart + 0x44, 0x7ff);
     // 115200 baud from a 48 MHz UART clock; 8N1, FIFOs on; enable, TX, RX
     mmio_write32(con, uart + 0x24, 26);
@@ -76,14 +92,14 @@ fn uart_init[&mc, &mp, &s](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0x
     return mmio_write32(con, uart + 0x30, 1 | 1 << 8 | 1 << 9);
 }
 
-fn putc[&mc, &s](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], c: int) -> [mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
+fn putc[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], c: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
     let uart = k[0];
     while mmio_read32(con, uart + 0x18) & 32 != 0 {
     }
     return mmio_write32(con, uart, c);
 }
 
-fn puts[&mc, &s, &r](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], s: &r [byte]) -> [mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
+fn puts[&mc, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], s: &r [byte]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
     var i = 0;
     while i < len(s) {
         putc(con, k, int_of(s[i]));
@@ -92,21 +108,21 @@ fn puts[&mc, &s, &r](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe2010
     return 0;
 }
 
-fn put_dec[&mc, &s](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], v: int) -> [mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
+fn put_dec[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], v: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
     if v >= 10 {
         put_dec(con, k, v / 10);
     }
     return putc(con, k, 48 + v % 10);
 }
 
-fn put_digit[&mc, &s](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], d: int) -> [mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
+fn put_digit[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], d: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
     if d < 10 {
         return putc(con, k, 48 + d);
     }
     return putc(con, k, 87 + d);
 }
 
-fn put_hex[&mc, &s](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], v: int) -> [mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
+fn put_hex[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], v: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
     if v >= 16 {
         put_hex(con, k, v >> 4);
     }
@@ -114,7 +130,7 @@ fn put_hex[&mc, &s](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe20104
 }
 
 // All sixteen digits, for a register.
-fn put_reg[&mc, &s](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], v: int) -> [mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
+fn put_reg[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], v: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
     puts(con, k, "0x");
     var shift = 60;
     while shift >= 0 {
@@ -129,9 +145,9 @@ fn put_reg[&mc, &s](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe20104
 // board's interrupt controller, which is what wakes `wfi`; the kernel then asks
 // the controller what happened. No handler runs behind cancho's back, so there
 // is no state shared with one.
-fn tick_start[&f, &mi, &s](cpu: &!f Cpu, irq: &!mi Mmio("0x40000040..0x40000064,0xff841000..0xff842014"), k: &!s [int], hz: int) -> [cpu("cntfrq_el0"), cpu("cntv_ctl_el0"), cpu("cntv_tval_el0"), mmio("0x40000040..0x40000064,0xff841000..0xff842014")] int {
+fn tick_start[&f, &mi, &s](cpu: &!f Cpu, irq: &!mi Mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014"), k: &!s [int], hz: int) -> [cpu("cntfrq_el0"), cpu("cntv_ctl_el0"), cpu("cntv_tval_el0"), mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014")] int {
     k[4] = cpu_read(cpu, "cntfrq_el0") / hz;
-    if k[1] == 4 {
+    if k[2] != 0 {
         // GIC-400: virtual timer is private interrupt 27
         let gicd = k[3];
         mmio_write32(irq, gicd, 0);
@@ -157,11 +173,11 @@ fn tick[&f, &s](cpu: &!f Cpu, k: &!s [int]) -> [cpu("cntv_cval_el0")] int {
 }
 
 // What the interrupt controller has pending, handled here and now.
-fn poll[&f, &mi, &s](cpu: &!f Cpu, irq: &!mi Mmio("0x40000040..0x40000064,0xff841000..0xff842014"), k: &!s [int]) -> [cpu("cntv_cval_el0"), mmio("0x40000040..0x40000064,0xff841000..0xff842014")] int {
+fn poll[&f, &mi, &s](cpu: &!f Cpu, irq: &!mi Mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014"), k: &!s [int]) -> [cpu("cntv_cval_el0"), mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014")] int {
     if k[4] == 0 {
         return 0;
     }
-    if k[1] == 4 {
+    if k[2] != 0 {
         let iar = mmio_read32(irq, k[2] + 0xc);
         let id = iar & 0x3ff;
         if id == 27 {
@@ -185,10 +201,12 @@ fn uptime_ms[&f](cpu: &!f Cpu) -> [cpu("cntfrq_el0"), cpu("cntvct_el0")] int {
 // Sleep until a key arrives, handling whatever else wakes the core meanwhile. While the
 // network link is up the core does not sleep: nothing wakes it when a byte arrives on the
 // link (interrupts are polled, and the tick is every 10 ms), so it keeps looking.
-fn getc[&f, &mc, &mi, &mu, &s, &n, &a, &b, &w](cpu: &!f Cpu, con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), irq: &!mi Mmio("0x40000040..0x40000064,0xff841000..0xff842014"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte]) -> [cpu("cntv_cval_el0"), cpu("wfi"), mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x40000040..0x40000064,0xff841000..0xff842014")] int {
+fn getc[&f, &mc, &mi, &mu, &mv, &md, &s, &n, &a, &b, &w](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), irq: &!mi Mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte]) -> [cpu("cntv_cval_el0"), cpu("wfi"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
     let uart = k[0];
     while mmio_read32(con, uart + 0x18) & 16 != 0 {
-        if k[10] != 0 {
+        if k[10] == 2 {
+            vnet_poll(vio, dma, k, frame, reply);
+        } else if k[10] != 0 {
             net_poll(bus, k, ns, frame, reply, wire);
         } else if k[4] != 0 {
             cpu_do(cpu, "wfi");
@@ -322,9 +340,201 @@ fn net_poll[&mu, &s, &n, &a, &b, &w](bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe
     return 0;
 }
 
-fn put_net[&mc, &s](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int]) -> [mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
-    if k[10] == 0 {
+// ---- the network card: virtio-net ---------------------------------------------------
+// QEMU's virt machine has 32 places for a virtio device, 0x200 apart; a network card says
+// device 1 (VIRTIO 1.2, section 4.2 for the registers, 5.1 for the card, 2.7 for a queue).
+// The card and the driver share memory: two queues of eight entries, one to receive and
+// one to send. A queue is three tables: descriptors (where a buffer is, how long), the
+// ring of buffers offered to the card, and the ring of buffers it has finished with.
+// That memory is `dma`, and nothing else is in it:
+//     +0x0000 receive queue: descriptors, +0x100 offered, +0x200 finished
+//     +0x0400 send queue, the same three
+//     +0x1000 eight receive buffers of 2 KB     +0x5000 one send buffer
+// Every packet has 12 bytes of the card's own header in front, all zero here.
+// No interrupt is used: `vnet_poll` looks at the finished ring.
+
+fn put16le[&md](dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), at: int, v: int) -> [mmio("0x210000..0x220000,0x40210000..0x40220000")] int {
+    mmio_write8(dma, at, v & 255);
+    return mmio_write8(dma, at + 1, v >> 8 & 255);
+}
+
+fn get16le[&md](dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), at: int) -> [mmio("0x210000..0x220000,0x40210000..0x40220000")] int {
+    return mmio_read8(dma, at) | mmio_read8(dma, at + 1) << 8;
+}
+
+// Tell the card where queue `q`'s three tables are (they start at `at`), and that it is ready.
+fn vnet_queue[&mv](vio: &!mv Mmio("0xa000000..0xa004000"), base: int, q: int, at: int) -> [mmio("0xa000000..0xa004000")] int {
+    mmio_write32(vio, base + 0x30, q);
+    if mmio_read32(vio, base + 0x34) < 8 {
+        return 1;
+    }
+    mmio_write32(vio, base + 0x38, 8);
+    mmio_write32(vio, base + 0x80, at & 0xffffffff);
+    mmio_write32(vio, base + 0x84, at >> 32);
+    mmio_write32(vio, base + 0x90, at + 0x100 & 0xffffffff);
+    mmio_write32(vio, base + 0x94, at >> 32);
+    mmio_write32(vio, base + 0xa0, at + 0x200 & 0xffffffff);
+    mmio_write32(vio, base + 0xa4, at >> 32);
+    mmio_write32(vio, base + 0x44, 1);
+    return 0;
+}
+
+// Find the card and bring it up. k[15] is its registers afterwards, or 0 if there is none
+// or it refused; k[19] is its address.
+fn vnet_start[&mv, &md, &s](vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int]) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
+    var base = 0;
+    var slot = 0;
+    while slot < 32 && base == 0 {
+        let at = 0xa000000 + slot * 0x200;
+        // "virt", version 2 (not the legacy interface), device 1
+        if mmio_read32(vio, at) == 0x74726976 && mmio_read32(vio, at + 4) == 2 && mmio_read32(vio, at + 8) == 1 {
+            base = at;
+        }
+        slot = slot + 1;
+    }
+    if base == 0 {
+        return 1;
+    }
+    let d = k[14] + 0x210000;
+    var z = 0;
+    while z < 0x1000 {
+        mmio_write64(dma, d + z, 0);
+        z = z + 8;
+    }
+    // reset; then "I see you" (1), "I can drive you" (2)
+    mmio_write32(vio, base + 0x70, 0);
+    mmio_write32(vio, base + 0x70, 1);
+    mmio_write32(vio, base + 0x70, 3);
+    // of what the card offers, two things are taken: its address in its configuration
+    // (bit 5) and the current version of the interface (bit 32)
+    mmio_write32(vio, base + 0x14, 0);
+    let low = mmio_read32(vio, base + 0x10);
+    mmio_write32(vio, base + 0x14, 1);
+    let high = mmio_read32(vio, base + 0x10);
+    if low & 32 == 0 || high & 1 == 0 {
+        mmio_write32(vio, base + 0x70, 128);
+        return 1;
+    }
+    mmio_write32(vio, base + 0x24, 0);
+    mmio_write32(vio, base + 0x20, 32);
+    mmio_write32(vio, base + 0x24, 1);
+    mmio_write32(vio, base + 0x20, 1);
+    mmio_write32(vio, base + 0x70, 11);
+    if mmio_read32(vio, base + 0x70) & 8 == 0 {
+        mmio_write32(vio, base + 0x70, 128);
+        return 1;
+    }
+    // every receive buffer is offered: the card may write (2) 2 KB at each
+    var i = 0;
+    while i < 8 {
+        mmio_write64(dma, d + i * 16, d + 0x1000 + i * 0x800);
+        mmio_write32(dma, d + i * 16 + 8, 0x800);
+        put16le(dma, d + i * 16 + 12, 2);
+        put16le(dma, d + 0x104 + i * 2, i);
+        i = i + 1;
+    }
+    put16le(dma, d + 0x102, 8);
+    k[16] = 8;
+    k[17] = 0;
+    k[18] = 0;
+    if vnet_queue(vio, base, 0, d) != 0 || vnet_queue(vio, base, 1, d + 0x400) != 0 {
+        mmio_write32(vio, base + 0x70, 128);
+        return 1;
+    }
+    mmio_write32(vio, base + 0x70, 15);
+    mmio_write32(vio, base + 0x50, 0);
+    var mac = 0;
+    var b = 0;
+    while b < 6 {
+        mac = mac << 8 | mmio_read8(vio, base + 0x100 + b);
+        b = b + 1;
+    }
+    k[19] = mac;
+    k[15] = base;
+    return 0;
+}
+
+// Send `frame[0..n]`, and wait until the card has taken it.
+fn vnet_send[&mv, &md, &s, &b](vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], frame: &b [byte], n: int) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
+    let d = k[14] + 0x210000;
+    let buf = d + 0x5000;
+    mmio_write64(dma, buf, 0);
+    mmio_write32(dma, buf + 8, 0);
+    var i = 0;
+    while i < n {
+        mmio_write8(dma, buf + 12 + i, int_of(frame[i]));
+        i = i + 1;
+    }
+    mmio_write64(dma, d + 0x400, buf);
+    mmio_write32(dma, d + 0x408, 12 + n);
+    put16le(dma, d + 0x40c, 0);
+    put16le(dma, d + 0x504 + k[18] % 8 * 2, 0);
+    k[18] = (k[18] + 1) % 65536;
+    put16le(dma, d + 0x502, k[18]);
+    mmio_write32(vio, k[15] + 0x50, 1);
+    var spins = 0;
+    while get16le(dma, d + 0x602) != k[18] && spins < 1000000 {
+        spins = spins + 1;
+    }
+    return 0;
+}
+
+// Take the frames the card has finished with, at most eight, answer each, and offer its
+// buffer again.
+fn vnet_poll[&mv, &md, &s, &a, &b](vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], frame: &!a [byte], reply: &!b [byte]) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
+    let d = k[14] + 0x210000;
+    var budget = 8;
+    while budget > 0 && get16le(dma, d + 0x202) != k[17] {
+        budget = budget - 1;
+        let entry = d + 0x204 + k[17] % 8 * 8;
+        let id = mmio_read32(dma, entry) & 7;
+        let n = mmio_read32(dma, entry + 4) - 12;
+        if n > 0 && n <= len(frame) {
+            var i = 0;
+            while i < n {
+                frame[i] = byte_of(mmio_read8(dma, d + 0x1000 + id * 0x800 + 12 + i));
+                i = i + 1;
+            }
+            let m = inet.eth_answer(frame, n, k[19], net_address(), reply);
+            if m > 0 {
+                vnet_send(vio, dma, k, reply, m);
+                k[11] = k[11] + 1;
+            } else {
+                k[12] = k[12] + 1;
+                k[13] = m;
+            }
+        }
+        put16le(dma, d + 0x104 + k[16] % 8 * 2, id);
+        k[16] = (k[16] + 1) % 65536;
+        put16le(dma, d + 0x102, k[16]);
+        k[17] = (k[17] + 1) % 65536;
+        mmio_write32(vio, k[15] + 0x50, 0);
+    }
+    // the card raises its interrupt line for each; nobody listens, and this lowers it
+    let raised = mmio_read32(vio, k[15] + 0x60);
+    if raised != 0 {
+        mmio_write32(vio, k[15] + 0x64, raised);
+    }
+    return 0;
+}
+
+fn put_net[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
+    if k[10] == 0 && k[9] == 0 && k[15] == 0 {
+        puts(con, k, "no network card, and no second serial port");
+    } else if k[10] == 0 {
         puts(con, k, "link down");
+    } else if k[10] == 2 {
+        puts(con, k, "link up: virtio-net, card ");
+        var shift = 40;
+        while shift >= 0 {
+            put_hex(con, k, k[19] >> shift + 4 & 15);
+            put_hex(con, k, k[19] >> shift & 15);
+            if shift > 0 {
+                puts(con, k, ":");
+            }
+            shift = shift - 8;
+        }
+        puts(con, k, ", address 10.0.0.2");
     } else {
         puts(con, k, "link up: SLIP on the second serial port, address 10.0.0.2");
     }
@@ -347,6 +557,8 @@ fn put_net[&mc, &s](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe20104
             puts(con, k, "a fragment");
         } else if k[13] == inet.drop_bad_checksum() {
             puts(con, k, "checksum");
+        } else if k[13] == inet.drop_not_our_frame() {
+            puts(con, k, "a frame for another card");
         } else if k[13] == inet.drop_too_long() {
             puts(con, k, "too long");
         } else {
@@ -357,7 +569,7 @@ fn put_net[&mc, &s](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe20104
     return puts(con, k, "\r\n");
 }
 
-fn put_bus_error[&mc, &s](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], code: int) -> [mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
+fn put_bus_error[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], code: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
     if code == bus_timeout() {
         return puts(con, k, "no answer");
     }
@@ -369,7 +581,7 @@ fn put_bus_error[&mc, &s](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xf
 
 // `servo scan`: ping ids 1 to 8 and say who answered. Read-only: this kernel builds no
 // packet that can move a servo (src/feetech.cho has none).
-fn servo_scan[&f, &mc, &mu, &s](cpu: &!f Cpu, con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), k: &!s [int]) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c")] int {
+fn servo_scan[&f, &mc, &mu, &s](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), k: &!s [int]) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c")] int {
     var found = 0;
     region r {
         let pkt = alloc_slice[r](16, byte_of(0));
@@ -397,7 +609,7 @@ fn servo_scan[&f, &mc, &mu, &s](cpu: &!f Cpu, con: &!mc Mmio("0x3f201000..0x3f20
 }
 
 // `servo pos`: the present position (register 56, two bytes) of servos 1 to 6, in raw ticks.
-fn servo_pos[&f, &mc, &mu, &s](cpu: &!f Cpu, con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), k: &!s [int]) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c")] int {
+fn servo_pos[&f, &mc, &mu, &s](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), k: &!s [int]) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c")] int {
     region r {
         let pkt = alloc_slice[r](16, byte_of(0));
         let reply = alloc_slice[r](64, byte_of(0));
@@ -463,7 +675,7 @@ fn span_max(joint: int) -> [] int {
     return 4095;
 }
 
-fn put_int[&mc, &s](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], v: int) -> [mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
+fn put_int[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], v: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
     if v < 0 {
         putc(con, k, 45);
         return put_dec(con, k, 0 - v);
@@ -472,7 +684,7 @@ fn put_int[&mc, &s](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe20104
 }
 
 // Where the gripper frame is for five joint angles, in micrometres, in the base's frame.
-fn put_gripper[&mc, &s, &d](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], degrees: &d [float]) -> [mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
+fn put_gripper[&mc, &s, &d](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], degrees: &d [float]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
     region r {
         let pose = alloc_slice[r](16, 0.0);
         if kinematics.forward(degrees, pose) != 0 {
@@ -490,7 +702,7 @@ fn put_gripper[&mc, &s, &d](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0
 
 // `arm zero`: the pose with every joint at zero. No bus involved: placo puts it at
 // x 0.3913614702201581, y -9.212063114501261e-06, z 0.2264697102403328 metres.
-fn arm_zero[&mc, &s](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int]) -> [mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
+fn arm_zero[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
     region r {
         let degrees = alloc_slice[r](5, 0.0);
         put_gripper(con, k, degrees);
@@ -500,7 +712,7 @@ fn arm_zero[&mc, &s](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe2010
 
 // `arm pose`: read joints 1 to 5 from the bus, turn ticks into degrees, and say where
 // that puts the gripper. Read-only.
-fn arm_pose[&f, &mc, &mu, &s](cpu: &!f Cpu, con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), k: &!s [int]) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c")] int {
+fn arm_pose[&f, &mc, &mu, &s](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), k: &!s [int]) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c")] int {
     region r {
         let pkt = alloc_slice[r](16, byte_of(0));
         let reply = alloc_slice[r](64, byte_of(0));
@@ -608,7 +820,7 @@ fn read_joints[&f, &mu, &s, &d, &a](cpu: &!f Cpu, bus: &!mu Mmio("0x3f215004..0x
     return result;
 }
 
-fn arm_check[&f, &mc, &mu, &s, &l](cpu: &!f Cpu, con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), k: &!s [int], line: &l [byte], from: int, n: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c")] int {
+fn arm_check[&f, &mc, &mu, &s, &l](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), k: &!s [int], line: &l [byte], from: int, n: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c")] int {
     region r {
         let wanted = alloc_slice[r](5, 0);
         if numbers(line, from, n, wanted) != 5 {
@@ -698,7 +910,7 @@ fn attrs(perm: int) -> [] int {
 
 // The table a descriptor slot points to, made if the slot is empty. 0: none left,
 // or the slot already maps a block.
-fn next_table[&mt, &s](tab: &!mt Mmio("0x200000..0x208000"), k: &!s [int], slot: int) -> [mmio("0x200000..0x208000")] int {
+fn next_table[&mt, &s](tab: &!mt Mmio("0x200000..0x208000,0x40200000..0x40208000"), k: &!s [int], slot: int) -> [mmio("0x200000..0x208000,0x40200000..0x40208000")] int {
     let d = mmio_read64(tab, slot);
     if d & 1 != 0 {
         if d & 2 == 0 {
@@ -709,7 +921,7 @@ fn next_table[&mt, &s](tab: &!mt Mmio("0x200000..0x208000"), k: &!s [int], slot:
     if k[6] >= 8 {
         return 0;
     }
-    let table = 0x200000 + k[6] * 4096;
+    let table = k[14] + 0x200000 + k[6] * 4096;
     k[6] = k[6] + 1;
     mmio_write64(tab, slot, table | 3);
     return table;
@@ -717,12 +929,12 @@ fn next_table[&mt, &s](tab: &!mt Mmio("0x200000..0x208000"), k: &!s [int], slot:
 
 // Identity-map [start, end) with one permission: 1 GB and 2 MB blocks where the
 // range allows, 4 KB pages elsewhere. 0, or 1 when it cannot be done.
-fn map[&mt, &s](tab: &!mt Mmio("0x200000..0x208000"), k: &!s [int], start: int, end: int, perm: int) -> [mmio("0x200000..0x208000")] int {
+fn map[&mt, &s](tab: &!mt Mmio("0x200000..0x208000,0x40200000..0x40208000"), k: &!s [int], start: int, end: int, perm: int) -> [mmio("0x200000..0x208000,0x40200000..0x40208000")] int {
     if (start | end) & 0xfff != 0 || start > end || end > 1 << 39 {
         return 1;
     }
     let a = attrs(perm);
-    let top = 0x200000;
+    let top = k[14] + 0x200000;
     var va = start;
     var bad = 0;
     while va < end && bad == 0 {
@@ -755,7 +967,7 @@ fn map[&mt, &s](tab: &!mt Mmio("0x200000..0x208000"), k: &!s [int], start: int, 
 }
 
 // One line of the memory map: map the range (when `apply`) or print it.
-fn range[&mc, &mt, &s, &r](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), tab: &!mt Mmio("0x200000..0x208000"), k: &!s [int], apply: bool, name: &r [byte], start: int, end: int, perm: int) -> [mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x200000..0x208000")] int {
+fn range[&mc, &mt, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), tab: &!mt Mmio("0x200000..0x208000,0x40200000..0x40208000"), k: &!s [int], apply: bool, name: &r [byte], start: int, end: int, perm: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x200000..0x208000,0x40200000..0x40208000")] int {
     if apply {
         return map(tab, k, start, end, perm);
     }
@@ -779,27 +991,27 @@ fn range[&mc, &mt, &s, &r](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0x
 
 // The whole address space the kernel may touch. Everything else, page 0 included,
 // is unmapped: a null dereference is a fault, not a read of whatever is there.
-fn memory_map[&mc, &mt, &mx, &s](con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), tab: &!mt Mmio("0x200000..0x208000"), code: &mx Mmio("0x80001..0x200000"), k: &!s [int], apply: bool) -> [mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x200000..0x208000"), mmio("0x80001..0x200000")] int {
-    let image = 0x80000;
-    let code_end = mmio_read64(code, 0x80010);
-    let const_end = mmio_read64(code, 0x80018);
-    var bad = range(con, tab, k, apply, "stack", 4096, image, 2);
+fn memory_map[&mc, &mt, &mx, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), tab: &!mt Mmio("0x200000..0x208000,0x40200000..0x40208000"), code: &mx Mmio("0x80001..0x200000,0x40080001..0x40200000"), k: &!s [int], apply: bool) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x200000..0x208000,0x40200000..0x40208000"), mmio("0x80001..0x200000,0x40080001..0x40200000")] int {
+    let image = k[14] + 0x80000;
+    let code_end = mmio_read64(code, image + 0x10);
+    let const_end = mmio_read64(code, image + 0x18);
+    var bad = range(con, tab, k, apply, "stack", k[14] + 4096, image, 2);
     bad = bad + range(con, tab, k, apply, "kernel code", image, code_end, 0);
     bad = bad + range(con, tab, k, apply, "kernel constants", code_end, const_end, 1);
     // the first 960 MB: present on every board, below the GPU's share
-    bad = bad + range(con, tab, k, apply, "kernel data and heap", const_end, 0x3c000000, 2);
+    bad = bad + range(con, tab, k, apply, "kernel data and heap", const_end, k[14] + 0x3c000000, 2);
     bad = bad + range(con, tab, k, apply, "peripherals", k[7], k[8], 3);
     return bad;
 }
 
 // Translation and the caches on. From here an access outside the map is a fault,
 // and so is a write to code or constants, or a jump into data (WXN).
-fn mmu_on[&f](cpu: &!f Cpu) -> [cpu("mair_el1"), cpu("sctlr_el1"), cpu("tcr_el1"), cpu("tlbi_vmalle1"), cpu("ttbr0_el1")] int {
+fn mmu_on[&f](cpu: &!f Cpu, ram: int) -> [cpu("mair_el1"), cpu("sctlr_el1"), cpu("tcr_el1"), cpu("tlbi_vmalle1"), cpu("ttbr0_el1")] int {
     // attribute 0: normal memory, write-back; attribute 1: device
     cpu_write(cpu, "mair_el1", 0xff | 4 << 8);
     // 39-bit addresses; cacheable, inner-shareable table walks; no upper half yet; 40-bit physical
     cpu_write(cpu, "tcr_el1", 25 | 1 << 8 | 1 << 10 | 3 << 12 | 1 << 23 | 2 << 32);
-    cpu_write(cpu, "ttbr0_el1", 0x200000);
+    cpu_write(cpu, "ttbr0_el1", ram + 0x200000);
     cpu_do(cpu, "tlbi_vmalle1");
     // the bits that must be one, then MMU, data cache, instruction cache, WXN
     return cpu_write(cpu, "sctlr_el1", 0x30d00800 | 1 | 1 << 2 | 1 << 12 | 1 << 19);
@@ -807,8 +1019,8 @@ fn mmu_on[&f](cpu: &!f Cpu) -> [cpu("mair_el1"), cpu("sctlr_el1"), cpu("tcr_el1"
 
 // ---- faults -------------------------------------------------------------------
 // board/boot.S records an exception and calls main again; this is what main does then.
-fn report_fault[&f, &mc, &mx, &mq, &s](cpu: &!f Cpu, con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), code: &mx Mmio("0x80001..0x200000"), fault: &mq Mmio("0x208000..0x208008"), k: &!s [int]) -> [cpu("elr_el1"), cpu("esr_el1"), cpu("far_el1"), mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x80001..0x200000"), mmio("0x208000..0x208008")] int {
-    let kind = mmio_read64(fault, 0x208000);
+fn report_fault[&f, &mc, &mx, &mq, &s](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), code: &mx Mmio("0x80001..0x200000,0x40080001..0x40200000"), fault: &mq Mmio("0x208000..0x208008,0x40208000..0x40208008"), k: &!s [int]) -> [cpu("elr_el1"), cpu("esr_el1"), cpu("far_el1"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x80001..0x200000,0x40080001..0x40200000"), mmio("0x208000..0x208008,0x40208000..0x40208008")] int {
+    let kind = mmio_read64(fault, k[14] + 0x208000);
     let esr = cpu_read(cpu, "esr_el1");
     let elr = cpu_read(cpu, "elr_el1");
     let class = esr >> 26 & 63;
@@ -816,7 +1028,7 @@ fn report_fault[&f, &mc, &mx, &mq, &s](cpu: &!f Cpu, con: &!mc Mmio("0x3f201000.
     puts(con, k, "\r\n*** ");
     // (only an address inside the image is read: a jump into nowhere must not fault again here)
     var stopped_at = 0;
-    if elr >= 0x80004 && elr < 0x200000 - 3 && elr & 3 == 0 {
+    if elr >= k[14] + 0x80004 && elr < k[14] + 0x200000 - 3 && elr & 3 == 0 {
         stopped_at = mmio_read32(code, elr);
     }
     if sync && class == 0 && stopped_at == 0xc11f {
@@ -873,15 +1085,20 @@ fn same[&r, &s](line: &r [byte], n: int, word: &s [byte]) -> [] bool {
     return true;
 }
 
-fn run[&f, &mc, &mu, &mt, &mx, &mz, &s, &r](cpu: &!f Cpu, con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), tab: &!mt Mmio("0x200000..0x208000"), code: &mx Mmio("0x80001..0x200000"), probe: &!mz Mmio("0x0..0x1,0x80000..0x80001"), k: &!s [int], line: &r [byte], n: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x200000..0x208000"), mmio("0x80001..0x200000"), mmio("0x0..0x1,0x80000..0x80001")] int {
+fn run[&f, &mc, &mu, &mt, &mx, &mz, &s, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), tab: &!mt Mmio("0x200000..0x208000,0x40200000..0x40208000"), code: &mx Mmio("0x80001..0x200000,0x40080001..0x40200000"), probe: &!mz Mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001"), k: &!s [int], line: &r [byte], n: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x200000..0x208000,0x40200000..0x40208000"), mmio("0x80001..0x200000,0x40080001..0x40200000"), mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001")] int {
     if n == 0 {
         return 0;
     }
     if same(line, n, "help") {
         puts(con, k, "commands: help, about, echo <text>, uptime, ticks, mem, net [up|down], servo scan, servo pos, arm zero, arm pose, arm check <5 angles>, crash [null|write]\r\n");
     } else if same(line, n, "about") {
-        puts(con, k, "cancho-os 0.0.10: a kernel written in cancho, no Linux underneath (Raspberry Pi ");
-        put_dec(con, k, k[1]);
+        puts(con, k, "cancho-os 0.0.11: a kernel written in cancho, no Linux underneath (");
+        if k[1] >= 3 {
+            puts(con, k, "Raspberry Pi ");
+            put_dec(con, k, k[1]);
+        } else {
+            puts(con, k, "QEMU virt");
+        }
         puts(con, k, ")\r\n");
     } else if n > 5 && same(line, 5, "echo ") {
         var i = 5;
@@ -903,6 +1120,13 @@ fn run[&f, &mc, &mu, &mt, &mx, &mz, &s, &r](cpu: &!f Cpu, con: &!mc Mmio("0x3f20
         puts(con, k, " timer interrupts\r\n");
     } else if same(line, n, "mem") {
         memory_map(con, tab, code, k, false);
+    } else if k[9] == 0 && same(line, n, "net up") {
+        if k[15] != 0 {
+            k[10] = 2;
+        }
+        put_net(con, k);
+    } else if k[9] == 0 && (same(line, n, "servo scan") || same(line, n, "servo pos") || same(line, n, "arm pose") || n > 10 && same(line, 10, "arm check ")) {
+        puts(con, k, "this board has no second serial port\r\n");
     } else if same(line, n, "net up") {
         k[10] = 1;
         put_net(con, k);
@@ -928,7 +1152,7 @@ fn run[&f, &mc, &mu, &mt, &mx, &mz, &s, &r](cpu: &!f Cpu, con: &!mc Mmio("0x3f20
         mmio_read8(probe, 0);
     } else if same(line, n, "crash write") {
         // the kernel's own code is mapped read+execute
-        mmio_write8(probe, 0x80000, 0);
+        mmio_write8(probe, k[14] + 0x80000, 0);
     } else if same(line, n, "crash") {
         // Read past the end of the line buffer: cancho's bounds check traps, and
         // the exception vector reports it instead of the machine hanging silently.
@@ -939,19 +1163,19 @@ fn run[&f, &mc, &mu, &mt, &mx, &mz, &s, &r](cpu: &!f Cpu, con: &!mc Mmio("0x3f20
     return 0;
 }
 
-fn shell[&f, &mc, &mi, &mu, &mt, &mx, &mz, &s](cpu: &!f Cpu, con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), irq: &!mi Mmio("0x40000040..0x40000064,0xff841000..0xff842014"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), tab: &!mt Mmio("0x200000..0x208000"), code: &mx Mmio("0x80001..0x200000"), probe: &!mz Mmio("0x0..0x1,0x80000..0x80001"), k: &!s [int]) -> [cpu("cntfrq_el0"), cpu("cntv_cval_el0"), cpu("cntvct_el0"), cpu("wfi"), mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x40000040..0x40000064,0xff841000..0xff842014"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x200000..0x208000"), mmio("0x80001..0x200000"), mmio("0x0..0x1,0x80000..0x80001")] int {
+fn shell[&f, &mc, &mi, &mu, &mv, &md, &mt, &mx, &mz, &s](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), irq: &!mi Mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), tab: &!mt Mmio("0x200000..0x208000,0x40200000..0x40208000"), code: &mx Mmio("0x80001..0x200000,0x40080001..0x40200000"), probe: &!mz Mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001"), k: &!s [int]) -> [cpu("cntfrq_el0"), cpu("cntv_cval_el0"), cpu("cntvct_el0"), cpu("wfi"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x200000..0x208000,0x40200000..0x40208000"), mmio("0x80001..0x200000,0x40080001..0x40200000"), mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
     puts(con, k, "\r\ncancho-os booted. type `help`.\r\n");
     region r {
         let line = alloc_slice[r](128, byte_of(0));
         // the network link's: the SLIP decoder's state, a received packet, the reply, the reply framed
         let ns = alloc_slice[r](inet.slip_state(), 0);
-        let frame = alloc_slice[r](inet.mtu(), byte_of(0));
-        let reply = alloc_slice[r](inet.mtu(), byte_of(0));
+        let frame = alloc_slice[r](1600, byte_of(0));
+        let reply = alloc_slice[r](1600, byte_of(0));
         let wire = alloc_slice[r](2 * inet.mtu() + 2, byte_of(0));
         var n = 0;
         puts(con, k, "> ");
         while true {
-            let c = getc(cpu, con, irq, bus, k, ns, frame, reply, wire);
+            let c = getc(cpu, con, irq, bus, vio, dma, k, ns, frame, reply, wire);
             if c == 13 || c == 10 {
                 puts(con, k, "\r\n");
                 run(cpu, con, bus, tab, code, probe, k, line, n);
@@ -972,14 +1196,14 @@ fn shell[&f, &mc, &mi, &mu, &mt, &mx, &mz, &s](cpu: &!f Cpu, con: &!mc Mmio("0x3
     return 0;
 }
 
-fn kernel[&f, &mc, &mp, &mi, &mu, &mt, &mx, &mz, &mq](cpu: &!f Cpu, con: &!mc Mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), pins: &!mp Mmio("0x3f200004..0x3f200008,0xfe200004..0xfe200008"), irq: &!mi Mmio("0x40000040..0x40000064,0xff841000..0xff842014"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), tab: &!mt Mmio("0x200000..0x208000"), code: &mx Mmio("0x80001..0x200000"), probe: &!mz Mmio("0x0..0x1,0x80000..0x80001"), fault: &mq Mmio("0x208000..0x208008")) -> [cpu("cntfrq_el0"), cpu("cntv_ctl_el0"), cpu("cntv_cval_el0"), cpu("cntv_tval_el0"), cpu("cntvct_el0"), cpu("elr_el1"), cpu("esr_el1"), cpu("far_el1"), cpu("mair_el1"), cpu("midr_el1"), cpu("sctlr_el1"), cpu("tcr_el1"), cpu("tlbi_vmalle1"), cpu("ttbr0_el1"), cpu("wfi"), mmio("0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f200004..0x3f200008,0xfe200004..0xfe200008"), mmio("0x40000040..0x40000064,0xff841000..0xff842014"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x200000..0x208000"), mmio("0x80001..0x200000"), mmio("0x0..0x1,0x80000..0x80001"), mmio("0x208000..0x208008")] int {
+fn kernel[&f, &mc, &mp, &mi, &mu, &mv, &md, &mt, &mx, &mz, &mq](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), pins: &!mp Mmio("0x3f200004..0x3f200008,0xfe200004..0xfe200008"), irq: &!mi Mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), tab: &!mt Mmio("0x200000..0x208000,0x40200000..0x40208000"), code: &mx Mmio("0x80001..0x200000,0x40080001..0x40200000"), probe: &!mz Mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001"), fault: &mq Mmio("0x208000..0x208008,0x40208000..0x40208008")) -> [cpu("cntfrq_el0"), cpu("cntv_ctl_el0"), cpu("cntv_cval_el0"), cpu("cntv_tval_el0"), cpu("cntvct_el0"), cpu("elr_el1"), cpu("esr_el1"), cpu("far_el1"), cpu("mair_el1"), cpu("midr_el1"), cpu("sctlr_el1"), cpu("tcr_el1"), cpu("tlbi_vmalle1"), cpu("ttbr0_el1"), cpu("wfi"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f200004..0x3f200008,0xfe200004..0xfe200008"), mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x200000..0x208000,0x40200000..0x40208000"), mmio("0x80001..0x200000,0x40080001..0x40200000"), mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001"), mmio("0x208000..0x208008,0x40208000..0x40208008"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
     region r {
-        let k = alloc_slice[r](16, 0);
+        let k = alloc_slice[r](24, 0);
         if detect(cpu, k) == 0 {
             // a board this kernel has no addresses for: nothing can even be printed
             return 1;
         }
-        if mmio_read64(fault, 0x208000) >= 0 {
+        if mmio_read64(fault, k[14] + 0x208000) >= 0 {
             // entered again by the exception vector: say what happened, and stop
             return report_fault(cpu, con, code, fault, k);
         }
@@ -987,18 +1211,23 @@ fn kernel[&f, &mc, &mp, &mi, &mu, &mt, &mx, &mz, &mq](cpu: &!f Cpu, con: &!mc Mm
         // The tables start empty; table 0 of the pool is the top-level table.
         var slot = 0;
         while slot < 8 * 512 {
-            mmio_write64(tab, 0x200000 + slot * 8, 0);
+            mmio_write64(tab, k[14] + 0x200000 + slot * 8, 0);
             slot = slot + 1;
         }
         k[6] = 1;
         if memory_map(con, tab, code, k, true) != 0 {
             puts(con, k, "\r\nmemory map refused; running without the MMU\r\n");
         } else {
-            mmu_on(cpu);
+            mmu_on(cpu, k[14]);
         }
         tick_start(cpu, irq, k, 100);
-        bus_init(bus, k);
-        shell(cpu, con, irq, bus, tab, code, probe, k);
+        if k[9] != 0 {
+            bus_init(bus, k);
+        }
+        if k[1] == 1 {
+            vnet_start(vio, dma, k);
+        }
+        shell(cpu, con, irq, bus, vio, dma, tab, code, probe, k);
     }
     return 0;
 }
@@ -1020,7 +1249,9 @@ fn main(world: World) -> [] int {
     release(mic);
     release(speaker);
     // Every address, cut into what each driver holds. No two share one.
-    let (con, pins, irq, bus, tab, code, probe, fault) = narrow(mmio, "0x3f201000..0x3f201048,0xfe201000..0xfe201048", "0x3f200004..0x3f200008,0xfe200004..0xfe200008", "0x40000040..0x40000064,0xff841000..0xff842014", "0x3f215004..0x3f21506c,0xfe215004..0xfe21506c", "0x200000..0x208000", "0x80001..0x200000", "0x0..0x1,0x80000..0x80001", "0x208000..0x208008");
+    let (con, pins, irq, bus, tab, code, probe, rest) = narrow(mmio, "0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048", "0x3f200004..0x3f200008,0xfe200004..0xfe200008", "0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014", "0x3f215004..0x3f21506c,0xfe215004..0xfe21506c", "0x200000..0x208000,0x40200000..0x40208000", "0x80001..0x200000,0x40080001..0x40200000", "0x0..0x1,0x80000..0x80001,0x40080000..0x40080001", "0x208000..0x208008,0x210000..0x220000,0xa000000..0xa004000,0x40208000..0x40208008,0x40210000..0x40220000");
+    // (`narrow` cuts at most eight pieces: the last is cut again)
+    let (fault, dma, vio) = narrow(rest, "0x208000..0x208008,0x40208000..0x40208008", "0x210000..0x220000,0x40210000..0x40220000", "0xa000000..0xa004000");
     var status = 0;
     borrow mut cpu as &!r in {
         borrow mut con as &!c in {
@@ -1031,7 +1262,11 @@ fn main(world: World) -> [] int {
                             borrow code as &x in {
                                 borrow mut probe as &!z in {
                                     borrow fault as &q in {
-                                        status = kernel(r, c, p, i, u, t, x, z, q);
+                                        borrow mut vio as &!v in {
+                                            borrow mut dma as &!d in {
+                                                status = kernel(r, c, p, i, u, v, d, t, x, z, q);
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1050,5 +1285,7 @@ fn main(world: World) -> [] int {
     release(code);
     release(probe);
     release(fault);
+    release(vio);
+    release(dma);
     return status;
 }

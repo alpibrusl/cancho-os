@@ -12,8 +12,8 @@ module inet;
 //
 // What is here:   SLIP (RFC 1055); the IPv4 header (RFC 791), validated; ICMP echo (RFC 792); UDP (RFC 768)
 //                 with its checksum, for port 7 only (RFC 862).
-// What is not:    ARP and Ethernet (a serial line has two ends and no addresses), fragments, IP options in a
-//                 reply, ICMP errors, TCP, IPv6. A packet that needs one of them is dropped, and the verdict
+// Under it, two links: SLIP for a serial line, and Ethernet frames with ARP (RFC 826) for a network card.
+// What is not:    fragments, IP options in a reply, ICMP errors, TCP, IPv6. A packet that needs one of them is dropped, and the verdict
 //                 says which.
 
 // The largest packet taken or sent: SLIP's customary 1006 bytes (RFC 1055).
@@ -180,19 +180,19 @@ pub fn slip_encode[&p, &o](pkt: &p [byte], n: int, out: &!o [byte]) -> [] int {
 
 // ── IPv4 ────────────────────────────────────────────────────────────────────────────────────────────────
 
-// The header of a reply: 20 bytes, no options, identification 0, not fragmented, 64 hops.
-fn header[&o](out: &!o [byte], total: int, protocol: int, from: int, to: int) -> [] int {
-    out[0] = byte_of(69);
-    out[1] = byte_of(0);
-    put16(out, 2, total);
-    put16(out, 4, 0);
-    put16(out, 6, 0);
-    out[8] = byte_of(64);
-    out[9] = byte_of(protocol);
-    put16(out, 10, 0);
-    put32(out, 12, from);
-    put32(out, 16, to);
-    return put16(out, 10, complement(sum16(out, 0, 20, 0)));
+// The header of a reply at `out[o..]`: 20 bytes, no options, identification 0, not fragmented, 64 hops.
+fn header[&o](out: &!o [byte], o: int, total: int, protocol: int, from: int, to: int) -> [] int {
+    out[o] = byte_of(69);
+    out[o + 1] = byte_of(0);
+    put16(out, o + 2, total);
+    put16(out, o + 4, 0);
+    put16(out, o + 6, 0);
+    out[o + 8] = byte_of(64);
+    out[o + 9] = byte_of(protocol);
+    put16(out, o + 10, 0);
+    put32(out, o + 12, from);
+    put32(out, o + 16, to);
+    return put16(out, o + 10, complement(sum16(out, o, o + 20, 0)));
 }
 
 // The sum of UDP's pseudo-header: the two addresses, the protocol and the length.
@@ -211,32 +211,38 @@ fn pseudo(from: int, to: int, length: int) -> [] int {
 // length that fits what arrived, no fragment, addressed to `ours`. Then an echo request gets an echo reply with
 // the same identifier, sequence number and data, and a datagram to UDP port 7 gets its data back.
 pub fn answer[&p, &o](pkt: &p [byte], n: int, ours: int, out: &!o [byte]) -> [] int {
-    if n < 20 || n > len(pkt) {
+    return answer_at(pkt, 0, n, ours, out, 0);
+}
+
+// The same for a packet that sits inside a frame: it is `pkt[at..at + n]`, and the reply goes to `out[o..]`.
+pub fn answer_at[&p, &o](pkt: &p [byte], at: int, n: int, ours: int, out: &!o [byte], o: int) -> [] int {
+    if at < 0 || o < 0 || n < 20 || at + n > len(pkt) {
         return drop_short();
     }
-    let first = int_of(pkt[0]);
+    let first = int_of(pkt[at]);
     if first / 16 != 4 {
         return drop_not_ipv4();
     }
     let ihl = first % 16 * 4;
-    let total = get16(pkt, 2);
+    let total = get16(pkt, at + 2);
     if ihl < 20 || total < ihl || total > n {
         return drop_short();
     }
-    if sum16(pkt, 0, ihl, 0) != 65535 {
+    if sum16(pkt, at, at + ihl, 0) != 65535 {
         return drop_bad_header_checksum();
     }
-    if get32(pkt, 16) != ours {
+    if get32(pkt, at + 16) != ours {
         return drop_not_ours();
     }
     // more fragments, or an offset: bits 13 and 0..12 of the word at 6
-    if get16(pkt, 6) % 16384 != 0 {
+    if get16(pkt, at + 6) % 16384 != 0 {
         return drop_fragment();
     }
-    let peer = get32(pkt, 12);
-    let protocol = int_of(pkt[9]);
+    let peer = get32(pkt, at + 12);
+    let protocol = int_of(pkt[at + 9]);
     let body = total - ihl;
-    if 20 + body > len(out) || 20 + body > mtu() {
+    let from = at + ihl;
+    if o + 20 + body > len(out) || 20 + body > mtu() {
         return drop_too_long();
     }
     if protocol == 1 {
@@ -244,51 +250,127 @@ pub fn answer[&p, &o](pkt: &p [byte], n: int, ours: int, out: &!o [byte]) -> [] 
         if body < 8 {
             return drop_short();
         }
-        if sum16(pkt, ihl, total, 0) != 65535 {
+        if sum16(pkt, from, from + body, 0) != 65535 {
             return drop_bad_checksum();
         }
-        if int_of(pkt[ihl]) != 8 || int_of(pkt[ihl + 1]) != 0 {
+        if int_of(pkt[from]) != 8 || int_of(pkt[from + 1]) != 0 {
             return drop_unsupported();
         }
-        header(out, 20 + body, 1, ours, peer);
+        header(out, o, 20 + body, 1, ours, peer);
         var i = 0;
         while i < body {
-            out[20 + i] = pkt[ihl + i];
+            out[o + 20 + i] = pkt[from + i];
             i = i + 1;
         }
-        out[20] = byte_of(0);
-        put16(out, 22, 0);
-        put16(out, 22, complement(sum16(out, 20, 20 + body, 0)));
+        out[o + 20] = byte_of(0);
+        put16(out, o + 22, 0);
+        put16(out, o + 22, complement(sum16(out, o + 20, o + 20 + body, 0)));
         return 20 + body;
     }
     if protocol == 17 {
         // UDP: source port, destination port, length, checksum (0: the sender computed none)
-        if body < 8 || get16(pkt, ihl + 4) != body {
+        if body < 8 || get16(pkt, from + 4) != body {
             return drop_short();
         }
-        if get16(pkt, ihl + 6) != 0 && sum16(pkt, ihl, total, pseudo(peer, ours, body)) != 65535 {
+        if get16(pkt, from + 6) != 0 && sum16(pkt, from, from + body, pseudo(peer, ours, body)) != 65535 {
             return drop_bad_checksum();
         }
-        if get16(pkt, ihl + 2) != 7 {
+        if get16(pkt, from + 2) != 7 {
             return drop_unsupported();
         }
-        header(out, 20 + body, 17, ours, peer);
-        put16(out, 20, 7);
-        put16(out, 22, get16(pkt, ihl));
-        put16(out, 24, body);
-        put16(out, 26, 0);
+        header(out, o, 20 + body, 17, ours, peer);
+        put16(out, o + 20, 7);
+        put16(out, o + 22, get16(pkt, from));
+        put16(out, o + 24, body);
+        put16(out, o + 26, 0);
         var j = 8;
         while j < body {
-            out[20 + j] = pkt[ihl + j];
+            out[o + 20 + j] = pkt[from + j];
             j = j + 1;
         }
-        var sum = complement(sum16(out, 20, 20 + body, pseudo(ours, peer, body)));
+        var sum = complement(sum16(out, o + 20, o + 20 + body, pseudo(ours, peer, body)));
         if sum == 0 {
             // zero means "no checksum": the same value is sent as all ones
             sum = 65535;
         }
-        put16(out, 26, sum);
+        put16(out, o + 26, sum);
         return 20 + body;
     }
     return drop_unsupported();
+}
+
+// ── Ethernet and ARP ────────────────────────────────────────────────────────────────────────────────────
+// A frame is the destination's address, the sender's (six bytes each, here one number), a type, and the
+// packet. The four bytes of the frame check are the card's, not here. A frame is at least 60 bytes: a short
+// one is padded with zeros.
+
+pub fn drop_not_our_frame() -> [] int {
+    return -9;
+}
+
+pub fn get48[&b](buf: &b [byte], at: int) -> [] int {
+    return get16(buf, at) * 4294967296 + get32(buf, at + 2);
+}
+
+fn put48[&b](buf: &!b [byte], at: int, v: int) -> [] int {
+    put16(buf, at, v / 4294967296 % 65536);
+    return put32(buf, at + 2, v % 4294967296);
+}
+
+// The received frame `frame[0..n]`, on a card whose address is `mac` and a machine whose address is `ours`.
+// Answers the length of the reply frame, written to `out`, or one of the `drop_*`.
+//
+// Two things are answered. An ARP request for `ours` ("who has this address?", RFC 826) gets `mac`. An IPv4
+// packet sent to `mac` gets what `answer` gives it, sent back to the card it came from: the kernel only ever
+// replies, so it needs no table of who is where.
+pub fn eth_answer[&p, &o](frame: &p [byte], n: int, mac: int, ours: int, out: &!o [byte]) -> [] int {
+    if n < 14 || n > len(frame) || len(out) < 60 {
+        return drop_short();
+    }
+    let to = get48(frame, 0);
+    let sender = get48(frame, 6);
+    let kind = get16(frame, 12);
+    var length = 0;
+    if kind == 2054 {
+        // ARP for Ethernet and IPv4: hardware 1, protocol 0x0800, sizes 6 and 4, operation 1 (request),
+        // then the sender's two addresses and the target's two
+        if n < 42 {
+            return drop_short();
+        }
+        if get16(frame, 14) != 1 || get16(frame, 16) != 2048 || int_of(frame[18]) != 6 || int_of(frame[19]) != 4 || get16(frame, 20) != 1 {
+            return drop_unsupported();
+        }
+        if get32(frame, 38) != ours {
+            return drop_not_ours();
+        }
+        put16(out, 14, 1);
+        put16(out, 16, 2048);
+        out[18] = byte_of(6);
+        out[19] = byte_of(4);
+        put16(out, 20, 2);
+        put48(out, 22, mac);
+        put32(out, 28, ours);
+        put48(out, 32, get48(frame, 22));
+        put32(out, 38, get32(frame, 28));
+        length = 42;
+    } else if kind == 2048 {
+        if to != mac {
+            return drop_not_our_frame();
+        }
+        let m = answer_at(frame, 14, n - 14, ours, out, 14);
+        if m < 0 {
+            return m;
+        }
+        length = 14 + m;
+    } else {
+        return drop_unsupported();
+    }
+    put48(out, 0, sender);
+    put48(out, 6, mac);
+    put16(out, 12, kind);
+    while length < 60 {
+        out[length] = byte_of(0);
+        length = length + 1;
+    }
+    return length;
 }
