@@ -15,6 +15,7 @@
 #   MACHINE=virt SSHKEY=key SSHCMD=about ./test.sh 'net up' 'net ssh on' net
 #                                        OpenSSH's client logs in with that key and runs the command
 #                                        (SSHIN='about\nexit\n' types into a shell session instead)
+#   MACHINE=virt DISKRW=image SSHKEY=key SSHPUT=file:NAME SSHAFTER='sum NAME' ./test.sh 'net up' 'net ssh on'
 #   MACHINE=virt RSH='about\nticks\n' ./test.sh 'net up' 'net shell on' net
 #                                        those lines typed into the kernel's shell over a connection to port 23
 #                                        (after the second line given here), and what it answered
@@ -72,6 +73,15 @@ for line in "$@"; do
             code=$?
             tr -d '\r' < build/ssh.out | sed 's/^/ssh: /' >> build/peer.txt
             echo "ssh: exit status $code" >> build/peer.txt
+        fi
+        if [ -n "${SSHPUT:-}" ]; then
+            # SSHPUT=file[:NAME] sends a file with board/put.sh; then SSHAFTER, if set, is run as a command
+            putname=""
+            if [ "${SSHPUT#*:}" != "$SSHPUT" ]; then putname=${SSHPUT#*:}; fi
+            board/put.sh $opts cancho@127.0.0.1 "${SSHPUT%%:*}" $putname 2>&1 | tr -d '\r' | sed 's/^/ssh: /' >> build/peer.txt
+            if [ -n "${SSHAFTER:-}" ]; then
+                ssh $opts cancho@127.0.0.1 "$SSHAFTER" < /dev/null 2>&1 | tr -d '\r' | sed 's/^/ssh: /' >> build/peer.txt
+            fi
         fi
         if [ -n "${SSHIN:-}" ]; then
             printf "$SSHIN" | ssh -T $opts cancho@127.0.0.1 2>&1 | tr -d '\r' | sed 's/^/ssh: /' >> build/peer.txt

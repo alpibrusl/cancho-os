@@ -21,6 +21,8 @@ import ssh_sha256 as sha;
 //    k[4152] the session is to end when its output has gone
 //    k[4177] which of the keys are owners' (a bit each; the others may only read)
 //    k[4179] what the key that logged in may do: 2 an owner's, 1 a reader's
+//    k[4258] bytes of a file still to come (`put`; 0: none is being received)   k[4259] bytes of it that came
+//    k[4260] how many of them `step` has just left in `rline` (it then answers 4)
 //    k[4184] k[4185] the first eight bytes of that key's SHA-256 fingerprint, as two 32-bit numbers
 
 pub fn ints() -> [] int {
@@ -205,6 +207,7 @@ pub fn step[&s, &t, &g, &h, &l, &w, &i, &b, &x](k: &!s [int], tcp: &!t [int], bu
             k[31] = 0;
             k[32] = 0;
             k[4152] = 0;
+            k[4258] = 0;
             if ssh.session(si) == ssh.session_command() {
                 // `ssh host command`: the one line, and the session ends with it
                 var n = 0;
@@ -245,6 +248,25 @@ pub fn step[&s, &t, &g, &h, &l, &w, &i, &b, &x](k: &!s [int], tcp: &!t [int], bu
             while have < len(ssh.received(si, sb)) && have < len(wire) {
                 wire[have] = ssh.received(si, sb)[have];
                 have = have + 1;
+            }
+            if k[4163] != 0 && k[4258] > 0 && have > 0 {
+                // a file is being received (`put`): the bytes are the file's, not typing. As many as the
+                // file still lacks are handed to the kernel in `rline`, which holds no line meanwhile.
+                var take = have;
+                if take > k[4258] {
+                    take = k[4258];
+                }
+                if take > len(rline) {
+                    take = len(rline);
+                }
+                var q = 0;
+                while q < take {
+                    rline[q] = wire[q];
+                    q = q + 1;
+                }
+                k[4260] = take;
+                ssh.consume(si, sb, take);
+                return 4;
             }
             var used = have;
             var whole = false;

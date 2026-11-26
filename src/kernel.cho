@@ -209,7 +209,7 @@ fn getc[&f, &mc, &mi, &mu, &mr, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l, &s
             let ready = network.net_poll(bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, rline, si, sb, sx, base.uptime_ms(cpu), cpu_read(cpu, "cntvct_el0"));
             if ready != 0 {
                 // not a key: -2 a line from the network is ready, -3 a connection is to be greeted, -4 the
-                // SSH host key has just been made
+                // SSH host key has just been made, -5 bytes of a file being received are in `rline`
                 return -1 - ready;
             }
         } else if k[4] != 0 {
@@ -810,9 +810,9 @@ fn run[&f, &mc, &mu, &mt, &mx, &mz, &s, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000
         return 0;
     }
     if same(line, n, "help") {
-        base.puts(con, k, "commands: help, about, echo <text>, uptime, ticks, mem, board, random, disk, ls, cat <name>, sum <name>, write <name> <text>, append <name> <text>, copy <from> <to>, remove <name>, versions, purge <number>, record, net [up|down|eth|dhcp], net shell [on|off], net ssh [on|off], lookup <name>, ping <address or name>, http <address or name> <port>, servo scan, servo pos, arm zero, arm pose, arm check <5 angles>, crash [null|write], load <bytes>\r\n");
+        base.puts(con, k, "commands: help, about, echo <text>, uptime, ticks, mem, board, random, disk, ls, cat <name>, sum <name>, write <name> <text>, append <name> <text>, copy <from> <to>, remove <name>, versions, purge <number>, record, put <name> <bytes> <sha256> (over SSH), net [up|down|eth|dhcp], net shell [on|off], net ssh [on|off], lookup <name>, ping <address or name>, http <address or name> <port>, servo scan, servo pos, arm zero, arm pose, arm check <5 angles>, crash [null|write], load <bytes>\r\n");
     } else if same(line, n, "about") {
-        base.puts(con, k, "cancho-os 0.0.27: a kernel written in cancho (");
+        base.puts(con, k, "cancho-os 0.0.28: a kernel written in cancho (");
         if k[1] >= 3 {
             base.puts(con, k, "Raspberry Pi ");
             base.put_dec(con, k, k[1]);
@@ -935,6 +935,56 @@ fn reading[&r](line: &r [byte], n: int) -> [] bool {
         return true;
     }
     return n > 4 && (same(line, 4, "cat ") || same(line, 4, "sum ")) || n > 5 && same(line, 5, "echo ");
+}
+
+// `put <name> <bytes> <sha256>`, over SSH: the file's bytes follow on the same session. Here the line is
+// read and, if it is one, the session is turned to receiving (k[4258] bytes to come) and stays open.
+fn put_begin[&mc, &s, &r, &p](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), k: &!s [int], line: &r [byte], n: int, pend: &!p [byte]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048")] int {
+    var a = 4;
+    while a < n && int_of(line[a]) != ' ' {
+        a = a + 1;
+    }
+    var size = 0;
+    var b = a + 1;
+    while b < n && int_of(line[b]) >= '0' && int_of(line[b]) <= '9' && size < 100000000 {
+        size = size * 10 + int_of(line[b]) - '0';
+        b = b + 1;
+    }
+    var hex = 0;
+    while b + 1 + hex < n && hex < 64 {
+        let c = int_of(line[b + 1 + hex]) | 32;
+        if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+            hex = 100;
+        }
+        hex = hex + 1;
+    }
+    if k[4153] != 1 || a == 4 || a - 4 > 12 || b == a + 1 || b >= n || int_of(line[b]) != ' ' || hex != 64 || b + 65 != n {
+        base.puts(con, k, "usage, over SSH: put <name> <bytes> <sha256>, and then the file's bytes (board/put.sh does it)\r\n");
+        return 1;
+    }
+    if !disk.put_name(line, 4, a) {
+        base.puts(con, k, "not a name `put` may use: a short name, and not OLD, LOG.TXT or HOSTKEY.BIN\r\n");
+        return 1;
+    }
+    if size == 0 || size > 0x200000 - 16 {
+        base.puts(con, k, "a file of 1 to 2097136 bytes: that is the memory it waits in\r\n");
+        return 1;
+    }
+    pend[0] = byte_of(a - 4);
+    var i = 0;
+    while i < a - 4 {
+        pend[1 + i] = line[4 + i];
+        i = i + 1;
+    }
+    i = 0;
+    while i < 64 {
+        pend[16 + i] = line[b + 1 + i];
+        i = i + 1;
+    }
+    k[4259] = 0;
+    k[4258] = size;
+    k[4152] = 0;
+    return 0;
 }
 
 // The host key as OpenSSH writes one: base64 of "ssh-ed25519" and the 32 bytes, each after its length.
@@ -1113,8 +1163,10 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s](cpu: &!f
         let bufs = alloc_slice[r](4 * inet.tcp_segment_max(), byte_of(0));
         // what has arrived for the shell's port and not been read, and the line being typed there
         let inbox = alloc_slice[r](4 * inet.tcp_inbox(), byte_of(0));
-        let rline = alloc_slice[r](128, byte_of(0));
-        let cmd = alloc_slice[r](128, byte_of(0));
+        let rline = alloc_slice[r](1024, byte_of(0));
+        let cmd = alloc_slice[r](1024, byte_of(0));
+        // a file on its way in (`put`): [0] how long its name is, [1..13] the name, [16..80] its SHA-256 in hex
+        let pend = alloc_slice[r](80, byte_of(0));
         // SSH (src/sshd.cho): cancho-ssh's state for one connection, and the keys
         let si = alloc_slice[r](sshd.ints(), 0);
         let sb = alloc_slice[r](sshd.bytes(), byte_of(0));
@@ -1153,6 +1205,24 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s](cpu: &!f
                     base.puts(con, k, "cancho-os: the kernel's shell. One session, not encrypted. Type `help`.\r\n> ");
                 }
                 k[26] = 0;
+            } else if c == -5 {
+                // bytes of a file that is being received: into memory, and when the last has come, to the disk
+                var j = 0;
+                while j < k[4260] {
+                    mmio_write8(stage, k[14] + 0x220000 + 16 + k[4259] + j, int_of(rline[j]));
+                    j = j + 1;
+                }
+                k[4259] = k[4259] + k[4260];
+                k[4258] = k[4258] - k[4260];
+                k[4260] = 0;
+                if k[4258] == 0 {
+                    k[26] = 1;
+                    let pn = int_of(pend[0]);
+                    disk.store(con, vio, dma, stage, k, pend, 1, 1 + pn, k[14] + 0x220000 + 16, k[4259], pend[16..80], 1);
+                    load_keys(vio, dma, k, sx);
+                    k[4152] = 1;
+                    k[26] = 0;
+                }
             } else if c == -2 {
                 // a line from the network: the same commands, and what they print goes back there
                 k[26] = 1;
@@ -1167,6 +1237,8 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s](cpu: &!f
                     k[4152] = 1;
                 } else if k[4153] == 1 && k[4179] != 2 && !reading(cmd, k[31]) {
                     base.puts(con, k, "this key may only read: that needs an owner's key\r\n");
+                } else if k[31] > 4 && same(cmd, 4, "put ") {
+                    put_begin(con, k, cmd, k[31], pend);
                 } else if same(cmd, k[31], "random") {
                     network.put_random(con, rng, vio, dma, k);
                 } else if disk.command(con, vio, dma, k, cmd, k[31], false) != 0 {
@@ -1182,7 +1254,7 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s](cpu: &!f
                     k[27] = 4000;
                     base.puts(con, k, "\r\n[more was printed than is kept: cut]\r\n");
                 }
-                if k[4152] == 0 {
+                if k[4152] == 0 && k[4258] == 0 {
                     base.puts(con, k, "> ");
                 }
                 k[26] = 0;
