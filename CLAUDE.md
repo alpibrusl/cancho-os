@@ -31,8 +31,8 @@ Rules of the road
   TCP's state is the caller's (two slices the shell allocates) and its clock an argument: keep it so.
   A new vector comes from the second implementation, never from `inet`'s own output (tests/tcp_test.cho).
   A change to TCP is tried against a real stack before it is believed: `MACHINE=virt TCPFILE=... ./test.sh`
-  (QEMU's own TCP) here, `sudo ./ping.sh` (Linux's) in CI. The first version passed 16 tests and still
-  waited a second on every close.
+  (QEMU's own TCP) here, `sudo ./ping.sh` (Linux's) in CI. Twice every test passed and a real stack
+  showed the code wrong (docs/network.md, section 7): never take back window that was offered.
 - Three boards, two links. `MACHINE=virt` is QEMU's own board (RAM at 1 GB: every RAM address in the kernel
   is `k[14] +` an offset, and each capability's bound lists the Pi's addresses and virt's). build.sh links
   `build/kernel-virt.elf` for it. The virtio card's memory is the `dma` capability, 64 KB the link script

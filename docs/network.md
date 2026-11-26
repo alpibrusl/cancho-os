@@ -58,7 +58,7 @@ part uses the capability the servo bus already had. `docs/authority.txt` is unch
 
 | | what | against |
 |---|---|---|
-| `cancho test tests/inet_test.cho src/inet.cho --std` | 20 tests | two published checksum vectors (RFC 1071 section 3; a worked IPv4 header); requests and replies built by a second implementation in another language (Python's `struct`, its own checksum); RFC 1055's escape bytes |
+| `cancho test tests/inet_test.cho src/inet.cho --std` | 21 tests | two published checksum vectors (RFC 1071 section 3; a worked IPv4 header); requests and replies built by a second implementation in another language (Python's `struct`, its own checksum); RFC 1055's escape bytes |
 | the same, one test | 56,320 calls of `inet.answer` | every value of every byte of a good datagram, cut at five lengths: none traps, each is answered or dropped |
 | `NET=1 ./test.sh 'net up' 'echo wait' 'echo wait' net` | the kernel in QEMU, `sim/netpeer.cho` on the port | three replies the peer insists on byte for byte, and one corrupted packet that must get none: "3 packets answered, 1 dropped (the last: checksum)" |
 | `sudo ./ping.sh` (Linux, CI) | the kernel in QEMU, the port as a pty | Linux's SLIP driver and the system's `ping` and `nc`: not our packets and not our framing |
@@ -153,14 +153,16 @@ the kernel starting an exchange instead of only answering one, which so far it c
   builds it, a whole conversation at a time, with the time made up.
 - **Passive only, one service.** The kernel listens on port 7 and sends back what it is sent (RFC 862).
   It opens no connection of its own. Four connections at once.
-- **One segment in flight, each way.** A connection holds at most one segment of its own that the other
-  end has not acknowledged, and keeps it to send again. While it holds one it advertises a window of
-  zero, so the other end waits; when the acknowledgement comes it says the window is open again. That is
-  the whole of flow control here: correct, and slow.
+- **One small buffer for each connection, and the window is its room.** What a connection has sent
+  and not had acknowledged it keeps, in a buffer of one segment's size (966 bytes), to send again. What
+  arrives is echoed from the same buffer, so the window it advertises is the room left: it never takes
+  what it could not send back, and never takes back room it has offered. (The first design held one
+  segment and advertised zero while it was out. Linux showed why not: see below.)
 - **Sent again on a timer.** 1 s, then 2, 4, 8, 16; after that the connection is dropped. No round-trip
-  measurement, no congestion window: with one segment in flight there is nothing to congest.
+  measurement and no congestion window: at most 966 bytes are ever in flight.
 - **Only the next byte is taken.** A segment that does not start where the last one ended gets an
-  acknowledgement saying what is expected, and is otherwise dropped: no reassembly queue.
+  acknowledgement saying what is expected, and its data is dropped: no reassembly queue. What it
+  acknowledges still counts.
 - **A segment to anything else gets a reset** (RFC 9293 section 3.10.7.1), so the other end hears "no"
   at once instead of waiting.
 
@@ -190,24 +192,32 @@ state is two slices the shell allocates. No new register is touched: `./authorit
 
 | | what | against |
 |---|---|---|
-| `cancho test tests/tcp_test.cho src/inet.cho --std` | 20 tests | segments built by the second implementation (Python's `struct`, its own checksum), a conversation at a time: open, echo, close; data and FIN together; a segment from further on; a segment seen before; resets; a fifth connection; the timer, with the time made up, to the second it gives up. Both first sequence numbers are just under 2^32, so every conversation wraps |
+| `cancho test tests/tcp_test.cho src/inet.cho --std` | 21 tests | segments built by the second implementation (Python's `struct`, its own checksum), a conversation at a time: open, echo, close; data and FIN together; a segment from further on; a segment seen before; a second echo while the first is out, and half of it acknowledged; a full buffer; resets; a fifth connection; the timer, with the time made up, to the second it gives up. Both first sequence numbers are just under 2^32, so every conversation wraps |
 | the same, two tests | 58,880 damaged data segments and 12,288 damaged SYNs | none traps: each is answered, taken or dropped |
 | `MACHINE=virt TCP=... TCPFILE=big.bin ./test.sh 'net up' 'ping 10.0.0.1' net` | the kernel on `virt`, the connection opened by QEMU's own TCP (libslirp) | a line back unchanged, then 200,000 random bytes back unchanged over one connection; "tcp: 0 open ... 0 sent again" after it; "reply from 10.0.0.1" to the kernel's ping, which had to ask who has that address first |
 | `NET=1 ./test.sh 'net up' ... 'ping 10.0.0.1' net` | the kernel as a Pi 3, the serial peer | the kernel's ping answered over SLIP |
-| `sudo ./ping.sh`, `sudo MACHINE=virt ./ping.sh` (Linux, CI) | both links against Linux's own TCP | LINUX_ROWS |
+| `sudo ./ping.sh`, `sudo MACHINE=virt ./ping.sh` (Linux, CI) | both links against Linux's own TCP | a line back unchanged; random bytes back unchanged over one connection (16,384 over SLIP in 1 to 2 s, 65,536 over Ethernet in under 1 s, on GitHub's `ubuntu-24.04` runner, two runs each); `Connection refused` from port 9; the kernel's ping answered by Linux (2 to 4 ms over SLIP, 0.4 ms over Ethernet); "tcp: 0 open ... 0 sent again" after each |
 
-**What the first real stack found.** All the vectors passed, and the first connection from QEMU's TCP
-still took a second too long to close. The other end sent its FIN before our echo had reached it, then
-sent the FIN again with the acknowledgement of the echo. A FIN seen before was "not the next byte", so
-the segment was dropped whole, acknowledgement and all, and the kernel sent its data again after the
-timer. A segment seen before is now not taken twice but its acknowledgement counts; two tests hold that
-exchange. The vectors could not have found it: they were written from the same reading of the
-specification as the code.
+**What real stacks found that the vectors did not.** Twice all the tests passed and the code was wrong.
+
+1. *QEMU's TCP.* The first connection took a second too long to close. The other end sent its FIN before
+   our echo had reached it, then sent the FIN again with the acknowledgement of the echo. A FIN seen
+   before was "not the next byte", so the segment was dropped whole, acknowledgement and all, and the
+   kernel sent its data again on the timer.
+2. *Linux's TCP.* A line came back, and 16 KB stalled after 4,347 bytes. Linux sends segments of half
+   the largest window it has seen, so two fitted in the 966 bytes offered. The kernel took the first,
+   had its one segment out, and advertised zero: the room it had offered for the second was gone.
+   Linux treats a window taken back as a fault and backs off, longer each time. The design was wrong,
+   not a line of it, and it was replaced by the buffer described above; partial acknowledgements and
+   the acknowledgement of a segment that has overtaken another count now too.
+
+Tests hold both exchanges. They could not have found either: the vectors were written from the same
+reading of the specification as the code. That is what the last row of the table is for.
 
 Limits of this slice, besides "What it will not do" above:
 
-- **Slow by construction.** One segment each way, and the other end's acknowledgement of our echo may
-  be delayed by its own timer before the window reopens. The times in the table are the measure.
+- **Small by construction.** At most 966 bytes are unacknowledged at once, so the other end sends a
+  little and waits. The times in the table are QEMU on a CI runner, and say nothing of a real line.
 - **`ping` goes only to a machine on the same network**: there is no route and no gateway. On the card
   it asks for the address itself and gives up after a second.
 - **While `ping` waits, the shell does not read keys** (packets are still answered).
