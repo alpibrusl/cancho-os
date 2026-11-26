@@ -1,0 +1,324 @@
+import std.test;
+import fat;
+
+// `fat` with no disk under it. The sectors are real ones: from three volumes made by macOS's own tools
+// (`hdiutil create -fs "MS-DOS FAT32"` and `FAT16`, one of them behind a partition table), with five files
+// copied in by the system. What each sector must mean was read by a second implementation in another
+// language (Python's `struct`), and is written here as numbers.
+
+fn digit(c: int) -> [] int {
+    if c >= '0' && c <= '9' {
+        return c - '0';
+    }
+    return c - 'a' + 10;
+}
+
+fn set[&b, &s](buf: &!b [byte], hex: &s [byte]) -> [] int {
+    var i = 0;
+    while i * 2 + 1 < len(hex) {
+        buf[i] = byte_of(digit(int_of(hex[i * 2])) * 16 + digit(int_of(hex[i * 2 + 1])));
+        i = i + 1;
+    }
+    return i;
+}
+
+fn boot32() -> [] &static [byte] {
+    return "eb58904253442020342e3400020120000200000000f000002000100000000000feff0100f003000000000000020000000100060000000000000000000000000000002911168cb643414e43484f33322020204641543332202020fa31c08ed0bc007cfb8ed8e800005e83c619bb0700fcac84c07406b40ecd10ebf530e4cd16cd190d0a4e6f6e2d73797374656d206469736b0d0a507265737320616e79206b657920746f207265626f6f740d0a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000055aa";
+}
+
+fn boot16() -> [] &static [byte] {
+    return "eb3c904253442020342e3400020401000200020080f020002000100000000000000000000000291116a4c143414e43484f31362020204641543136202020fa31c08ed0bc007cfb8ed8e800005e83c619bb0700fcac84c07406b40ecd10ebf530e4cd16cd190d0a4e6f6e2d73797374656d206469736b0d0a507265737320616e79206b657920746f207265626f6f740d0a000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000055aa";
+}
+
+fn table32() -> [] &static [byte] {
+    return "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000feffff0bfeffff01000000ffff010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000055aa";
+}
+
+fn root32() -> [] &static [byte] {
+    return "43414e43484f33322020202800000000000000000000f6747a5d00000000000048454c4c4f202020545854201821f6747a5d7a5d0000f6747a5d0b0020000000412e005f00680065006c000f00aa6c006f002e0074007800740000000000ffff5f48454c4c7e3220545854220026f6747a5d7a5d0000f6747a5d0c0000100000424947202020202042494e201827f6747a5d7a5d0000f6747a5d1c00e0930400412e005f006200690067000f00872e00620069006e000000ffff0000ffffffff5f42497e3420202042494e220028f6747a5d7a5d0000f6747a5d660200100000454d505459202020545854201828f6747a5d7a5d0000f6747a5d000000000000412e005f0065006d0070000f00a0740079002e0074007800740000000000ffff5f454d50547e3620545854220029f6747a5d7a5d0000f6747a5d760200100000455841435420202042494e201829f6747a5d7a5d0000f6747a5d860200100000412e005f006500780061000f00e0630074002e00620069006e0000000000ffff5f455841437e382042494e220029f6747a5d7a5d0000f6747a5d8e02001000004261006d0065002e0074000f00e26500780074000000ffffffff0000ffffffff0161002d006c006f006e000f00e267002d00660069006c00650000002d006e00412d4c4f4e477e3954455820002af6747a5d7a5d0000f6747a5d9e0220000000";
+}
+
+fn root16() -> [] &static [byte] {
+    return "43414e43484f31362020202800000000000000000000fc747a5d00000000000048454c4c4f202020545854201833fc747a5d7a5d0000fc747a5d040020000000412e005f00680065006c000f00aa6c006f002e0074007800740000000000ffff5f48454c4c7e3220545854220037fc747a5d7a5d0000fc747a5d050000100000424947202020202042494e201838fc747a5d7a5d0000fc747a5d0900e0930400412e005f006200690067000f00872e00620069006e000000ffff0000ffffffff5f42497e3420202042494e220039fc747a5d7a5d0000fc747a5d9c0000100000454d50545920202054585420183afc747a5d7a5d0000fc747a5d000000000000412e005f0065006d0070000f00a0740079002e0074007800740000000000ffff5f454d50547e362054585422003bfc747a5d7a5d0000fc747a5da00000100000455841435420202042494e20183bfc747a5d7a5d0000fc747a5da40000100000412e005f006500780061000f00e0630074002e00620069006e0000000000ffff5f455841437e382042494e22003cfc747a5d7a5d0000fc747a5da600001000004261006d0065002e0074000f00e26500780074000000ffffffff0000ffffffff0161002d006c006f006e000f00e267002d00660069006c00650000002d006e00412d4c4f4e477e3954455820003cfc747a5d7a5d0000fc747a5daa0020000000";
+}
+
+// ── where the volume is ──
+
+fn test_a_disk_that_is_one_volume_starts_at_zero() -> [] int {
+    region a {
+        let s = alloc_slice[a](512, byte_of(0));
+        set(s, boot32());
+        test.assert_eq(fat.partition(s), 0);
+        set(s, boot16());
+        test.assert_eq(fat.partition(s), 0);
+    }
+    return 0;
+}
+
+fn test_a_partition_table_says_where_the_volume_starts() -> [] int {
+    region a {
+        let s = alloc_slice[a](512, byte_of(0));
+        set(s, table32());
+        test.assert_eq(fat.partition(s), 1);
+        // a table with no FAT partition in it; and a sector that is neither
+        s[446 + 4] = byte_of(131);
+        test.assert_eq(fat.partition(s), -1);
+        s[510] = byte_of(0);
+        test.assert_eq(fat.partition(s), -1);
+    }
+    return 0;
+}
+
+// ── the volume's shape ──
+
+fn test_a_fat32_volume_is_read_as_the_second_implementation_reads_it() -> [] int {
+    region a {
+        let s = alloc_slice[a](512, byte_of(0));
+        let info = alloc_slice[a](fat.facts(), 0);
+        set(s, boot32());
+        test.assert_eq(fat.mount(s, 0, info), 0);
+        test.assert_eq(info[0], 32);
+        test.assert_eq(info[1], 1);
+        test.assert_eq(info[2], 32);
+        test.assert_eq(info[3], 1008);
+        test.assert_eq(info[4], 2);
+        test.assert_eq(info[5], 0);
+        test.assert_eq(info[6], 2048);
+        test.assert_eq(info[7], 129022);
+        test.assert_eq(info[8], 0);
+        test.assert_eq(info[9], 131070);
+    }
+    return 0;
+}
+
+fn test_a_fat16_volume_is_read_as_the_second_implementation_reads_it() -> [] int {
+    region a {
+        let s = alloc_slice[a](512, byte_of(0));
+        let info = alloc_slice[a](fat.facts(), 0);
+        set(s, boot16());
+        test.assert_eq(fat.mount(s, 0, info), 0);
+        test.assert_eq(info[0], 16);
+        test.assert_eq(info[1], 4);
+        test.assert_eq(info[2], 1);
+        test.assert_eq(info[3], 32);
+        test.assert_eq(info[4], 65);
+        test.assert_eq(info[5], 32);
+        test.assert_eq(info[6], 97);
+        test.assert_eq(info[7], 8167);
+        test.assert_eq(info[8], 0);
+        test.assert_eq(info[9], 32768);
+    }
+    return 0;
+}
+
+fn test_a_volume_behind_a_partition_table_is_counted_from_its_start() -> [] int {
+    region a {
+        let s = alloc_slice[a](512, byte_of(0));
+        let info = alloc_slice[a](fat.facts(), 0);
+        set(s, boot32());
+        test.assert_eq(fat.mount(s, 1, info), 0);
+        test.assert_eq(info[0], 32);
+        test.assert_eq(info[1], 1);
+        test.assert_eq(info[2], 33);
+        test.assert_eq(info[3], 1008);
+        test.assert_eq(info[4], 2);
+        test.assert_eq(info[5], 0);
+        test.assert_eq(info[6], 2049);
+        test.assert_eq(info[7], 129022);
+        test.assert_eq(info[8], 1);
+        test.assert_eq(info[9], 131070);
+    }
+    return 0;
+}
+
+fn test_what_is_not_a_volume_this_reads_is_refused_and_says_why() -> [] int {
+    region a {
+        let s = alloc_slice[a](512, byte_of(0));
+        let info = alloc_slice[a](fat.facts(), 0);
+        test.assert_eq(fat.mount(s, 0, info), fat.not_a_volume());
+        set(s, boot16());
+        // sectors of 1024 bytes
+        s[12] = byte_of(4);
+        test.assert_eq(fat.mount(s, 0, info), fat.not_512());
+        set(s, boot16());
+        // few enough sectors that it would be FAT12: 4000 in all
+        s[19] = byte_of(160);
+        s[20] = byte_of(15);
+        test.assert_eq(fat.mount(s, 0, info), fat.fat12());
+        set(s, boot16());
+        // a cluster of three sectors is no volume's
+        s[13] = byte_of(3);
+        test.assert_eq(fat.mount(s, 0, info), fat.not_a_volume());
+    }
+    return 0;
+}
+
+// ── directories ──
+
+// Entry `i` of `sector` is a file with this name, first cluster and length.
+fn is_file[&s, &m](sector: &s [byte], i: int, name: &m [byte], cluster: int, size: int) -> [] int {
+    region a {
+        let got = alloc_slice[a](12, byte_of(0));
+        let out = alloc_slice[a](3, 0);
+        test.assert_eq(fat.entry(sector, i, got, out), fat.entry_file());
+        test.assert(fat.named(got, out[0], name, 0, len(name)));
+        test.assert_eq(out[0], len(name));
+        test.assert_eq(out[1], cluster);
+        test.assert_eq(out[2], size);
+    }
+    return 0;
+}
+
+fn test_the_files_macos_wrote_are_the_files_read() -> [] int {
+    region a {
+        let s = alloc_slice[a](512, byte_of(0));
+        let got = alloc_slice[a](12, byte_of(0));
+        let out = alloc_slice[a](3, 0);
+        set(s, root32());
+        // entry 0 is the volume's label; the pieces of long names are skipped too
+        test.assert_eq(fat.entry(s, 0, got, out), fat.entry_skip());
+        is_file(s, 1, "HELLO.TXT", 11, 32);
+        is_file(s, 4, "BIG.BIN", 28, 300000);
+        is_file(s, 7, "EMPTY.TXT", 0, 0);
+        is_file(s, 10, "EXACT.BIN", 646, 4096);
+        // a file with a long name is seen under its short one
+        is_file(s, 15, "A-LONG~9.TEX", 670, 32);
+        test.assert_eq(fat.entry(s, 2, got, out), fat.entry_skip());
+        set(s, root16());
+        is_file(s, 4, "BIG.BIN", 9, 300000);
+        // out of the sector; and a sector of zeros is the end of a directory
+        test.assert_eq(fat.entry(s, 16, got, out), fat.entry_end());
+        test.assert_eq(fat.entry(s, -1, got, out), fat.entry_end());
+        var z = 0;
+        while z < 512 {
+            s[z] = byte_of(0);
+            z = z + 1;
+        }
+        test.assert_eq(fat.entry(s, 0, got, out), fat.entry_end());
+    }
+    return 0;
+}
+
+fn test_a_name_is_the_same_in_either_case_and_no_other() -> [] int {
+    test.assert(fat.named("KERNEL8.IMG", 11, "kernel8.img", 0, 11));
+    test.assert(fat.named("KERNEL8.IMG", 11, "cat Kernel8.Img", 4, 15));
+    test.assert(!fat.named("KERNEL8.IMG", 11, "kernel8.im", 0, 10));
+    test.assert(!fat.named("KERNEL8.IMG", 11, "kernel9.img", 0, 11));
+    test.assert(!fat.named("KERNEL8.IMG", 12, "kernel8.img", 0, 11));
+    test.assert(!fat.named("KERNEL8.IMG", 11, "kernel8.img", 0, 12));
+    return 0;
+}
+
+// ── clusters ──
+
+fn test_a_file_is_followed_cluster_by_cluster_to_its_end() -> [] int {
+    region a {
+        let s = alloc_slice[a](512, byte_of(0));
+        let info = alloc_slice[a](fat.facts(), 0);
+        set(s, boot32());
+        fat.mount(s, 0, info);
+        // BIG.BIN starts at cluster 28: where that is, and where its entry in the table is
+        test.assert_eq(fat.cluster_sector(info, 28), 2074);
+        test.assert_eq(fat.fat_sector(info, 28), 32);
+        set(s, "f0ffff0fffffff0f03000000ffffff0f00000000000000000000000000000000000000000000000000000000ffffff0f0d0000000e0000000f00000010000000110000001200000013000000ffffff0f00000000000000000000000000000000000000000000000000000000000000001d0000001e0000001f000000200000002100000022000000230000002400000025000000260000002700000028000000290000002a0000002b0000002c0000002d0000002e0000002f000000300000003100000032000000330000003400000035000000360000003700000038000000390000003a0000003b0000003c0000003d0000003e0000003f000000400000004100000042000000430000004400000045000000460000004700000048000000490000004a0000004b0000004c0000004d0000004e0000004f000000500000005100000052000000530000005400000055000000560000005700000058000000590000005a0000005b0000005c0000005d0000005e0000005f000000600000006100000062000000630000006400000065000000660000006700000068000000690000006a0000006b0000006c0000006d0000006e0000006f000000700000007100000072000000730000007400000075000000760000007700000078000000790000007a0000007b0000007c0000007d0000007e0000007f00000080000000");
+        test.assert_eq(fat.next(info, s, 28), 29);
+        // its 586 clusters end at 613
+        set(s, "0102000002020000030200000402000005020000060200000702000008020000090200000a0200000b0200000c0200000d0200000e0200000f020000100200001102000012020000130200001402000015020000160200001702000018020000190200001a0200001b0200001c0200001d0200001e0200001f020000200200002102000022020000230200002402000025020000260200002702000028020000290200002a0200002b0200002c0200002d0200002e0200002f020000300200003102000032020000330200003402000035020000360200003702000038020000390200003a0200003b0200003c0200003d0200003e0200003f020000400200004102000042020000430200004402000045020000460200004702000048020000490200004a0200004b0200004c0200004d0200004e0200004f020000500200005102000052020000530200005402000055020000560200005702000058020000590200005a0200005b0200005c0200005d0200005e0200005f020000600200006102000062020000630200006402000065020000ffffff0f6702000068020000690200006a0200006b0200006c0200006d020000ffffff0f00000000000000000000000000000000000000000000000000000000000000007702000078020000790200007a0200007b0200007c0200007d020000ffffff0f0000000000000000");
+        test.assert_eq(fat.next(info, s, 613), fat.chain_end());
+        // no such cluster: before the first, and after the last
+        test.assert_eq(fat.cluster_sector(info, 1), -1);
+        test.assert_eq(fat.cluster_sector(info, info[7] + 2), -1);
+        test.assert_eq(fat.cluster_sector(info, info[7] + 1), info[6] + (info[7] - 1) * info[1]);
+        test.assert_eq(fat.fat_sector(info, 0), -1);
+        test.assert_eq(fat.next(info, s, 0), fat.chain_broken());
+        set(s, boot16());
+        fat.mount(s, 0, info);
+        test.assert_eq(fat.cluster_sector(info, 9), 125);
+        test.assert_eq(fat.fat_sector(info, 9), 1);
+        set(s, "f0ffffff00000000ffff0600ffff000000000a000b000c000d000e000f0010001100120013001400150016001700180019001a001b001c001d001e001f0020002100220023002400250026002700280029002a002b002c002d002e002f0030003100320033003400350036003700380039003a003b003c003d003e003f0040004100420043004400450046004700480049004a004b004c004d004e004f0050005100520053005400550056005700580059005a005b005c005d005e005f0060006100620063006400650066006700680069006a006b006c006d006e006f0070007100720073007400750076007700780079007a007b007c007d007e007f0080008100820083008400850086008700880089008a008b008c008d008e008f0090009100920093009400950096009700980099009a009b00ffff9d00ffff00000000a100ffff00000000a500ffffa700ffff00000000ffffac00ffff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+        test.assert_eq(fat.next(info, s, 9), 10);
+        test.assert_eq(fat.next(info, s, 155), fat.chain_end());
+        // an entry that says "free" or "bad" breaks a chain
+        s[9 * 2] = byte_of(0);
+        s[9 * 2 + 1] = byte_of(0);
+        test.assert_eq(fat.next(info, s, 9), fat.chain_broken());
+        s[9 * 2] = byte_of(247);
+        s[9 * 2 + 1] = byte_of(255);
+        test.assert_eq(fat.next(info, s, 9), fat.chain_broken());
+    }
+    return 0;
+}
+
+// ── nothing traps ──
+
+fn test_no_damage_to_a_first_sector_makes_mount_or_partition_trap() -> [] int {
+    region a {
+        let s = alloc_slice[a](512, byte_of(0));
+        let info = alloc_slice[a](fat.facts(), 0);
+        set(s, boot16());
+        var at = 0;
+        var tried = 0;
+        // every value of every byte of the part that describes the volume, and of the two that end it
+        while at < 512 {
+            let kept = s[at];
+            var v = 0;
+            while v < 256 {
+                s[at] = byte_of(v);
+                let m = fat.mount(s, 3, info);
+                test.assert(m <= 0 && m >= fat.fat12());
+                let p = fat.partition(s);
+                test.assert(p >= -1);
+                tried = tried + 1;
+                v = v + 1;
+            }
+            s[at] = kept;
+            at = at + 1;
+            if at == 64 {
+                at = 446;
+            }
+        }
+        test.assert_eq(tried, (64 + 66) * 256);
+    }
+    return 0;
+}
+
+fn test_no_damage_to_a_directory_or_a_table_makes_reading_trap() -> [] int {
+    region a {
+        let s = alloc_slice[a](512, byte_of(0));
+        let b = alloc_slice[a](512, byte_of(0));
+        let info = alloc_slice[a](fat.facts(), 0);
+        let got = alloc_slice[a](12, byte_of(0));
+        let out = alloc_slice[a](3, 0);
+        set(b, boot32());
+        fat.mount(b, 0, info);
+        set(s, root32());
+        var at = 0;
+        var tried = 0;
+        // the first three entries, every byte, every value: each of the sixteen is still read
+        while at < 96 {
+            let kept = s[at];
+            var v = 0;
+            while v < 256 {
+                s[at] = byte_of(v);
+                var i = 0;
+                while i < 16 {
+                    let kind = fat.entry(s, i, got, out);
+                    test.assert(kind >= 0 && kind <= 3);
+                    if kind >= 2 {
+                        test.assert(out[0] >= 0 && out[0] <= 12);
+                    }
+                    i = i + 1;
+                }
+                // and the same bytes read as a sector of the table
+                let n = fat.next(info, s, 2 + at / 4);
+                test.assert(n >= fat.chain_broken() && n < info[7] + 2);
+                tried = tried + 1;
+                v = v + 1;
+            }
+            s[at] = kept;
+            at = at + 1;
+        }
+        test.assert_eq(tried, 96 * 256);
+    }
+    return 0;
+}
