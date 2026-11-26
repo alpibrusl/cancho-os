@@ -326,6 +326,17 @@ jobs:
           grep -q "^ssh: a file the board starts from" boot2.txt
           grep -q "^echo the board is up" boot2.txt
           fsck.fat -n b.img
+      - name: a system lent to a program written for one
+        # cancho docs/bare-system.md. `tell` takes an Io and an Args and nothing of the kernel; what it writes and
+        # the arguments it reads are answered by src/ksys.cho. At the console and over SSH.
+        run: |
+          ./test.sh 'tell one two three' tell 'echo still here' > tell.txt; cat tell.txt
+          grep -q "^argument 1: one" tell.txt
+          grep -q "^argument 3: three" tell.txt
+          test "$(grep -c "^that was a program written for a system, answered by the kernel" tell.txt)" = 2
+          grep -q "^still here" tell.txt
+          MACHINE=virt SSHKEY=/tmp/sshkey SSHCMD='tell over ssh' ./test.sh 'net up' 'net ssh on' > tell-ssh.txt; cat tell-ssh.txt
+          grep -q "^ssh: argument 2: ssh" tell-ssh.txt
       - name: the heap
         # cancho docs/freestanding.md, section 8: a JSON object made on the heap and printed, growing buffers read
         # back, and a block made and given back so many times that it must have been used again.

@@ -1,0 +1,78 @@
+edition 14;
+
+module ksys;
+
+import base;
+
+// ksys.cho -- the system the kernel lends to a program that was written for one (cancho docs/bare-system.md).
+// A program's standard output and its error stream are the shell's output (`putc`, so the console or the SSH
+// session); it has no input; and its arguments are the words of the line that was typed, `line[0..k[4266]]`.
+// Each function is called by the compiler's own code, with the console, the kernel's state and the line before
+// the operation's own arguments: what is lent in `system ksys(con, k, line) in { .. }`.
+
+pub fn out[&mc, &s, &l, &p](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), k: &!s [int], line: &!l [byte], p: &p [byte]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048")] int {
+    var i = 0;
+    while i < len(p) {
+        if int_of(p[i]) == 10 {
+            base.putc(con, k, 13);
+        }
+        base.putc(con, k, int_of(p[i]));
+        i = i + 1;
+    }
+    return i;
+}
+
+pub fn err[&mc, &s, &l, &p](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), k: &!s [int], line: &!l [byte], p: &p [byte]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048")] int {
+    return out(con, k, line, p);
+}
+
+// There is nothing to read: the end of the input.
+pub fn key[&mc, &s, &l](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), k: &!s [int], line: &!l [byte]) -> [] int {
+    return 0 - 1;
+}
+
+// What is written has already gone to `putc`.
+pub fn flush[&mc, &s, &l](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), k: &!s [int], line: &!l [byte]) -> [] int {
+    return 0;
+}
+
+// Where word `n` of the line begins; -1 if it has fewer. Words have spaces between them.
+fn word_at[&s, &l](k: &!s [int], line: &!l [byte], n: int) -> [] int {
+    var at = 0;
+    var seen = 0;
+    let size = k[4266];
+    while at < size && at < len(line) {
+        while at < size && at < len(line) && int_of(line[at]) == 32 {
+            at = at + 1;
+        }
+        if at < size && at < len(line) {
+            if seen == n {
+                return at;
+            }
+            seen = seen + 1;
+            while at < size && at < len(line) && int_of(line[at]) != 32 {
+                at = at + 1;
+            }
+        }
+    }
+    return 0 - 1;
+}
+
+pub fn arguments[&mc, &s, &l](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), k: &!s [int], line: &!l [byte]) -> [] int {
+    var n = 0;
+    while word_at(k, line, n) >= 0 {
+        n = n + 1;
+    }
+    return n;
+}
+
+// Word `n` of the line into `into`: how many bytes it is.
+pub fn argument[&mc, &s, &l, &t](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), k: &!s [int], line: &!l [byte], n: int, into: &!t [byte]) -> [] int {
+    let from = word_at(k, line, n);
+    var i = 0;
+    while from >= 0 && from + i < k[4266] && from + i < len(line) && int_of(line[from + i]) != 32 && i < len(into) {
+        into[i] = line[from + i];
+        i = i + 1;
+    }
+    return i;
+}

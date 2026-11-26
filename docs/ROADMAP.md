@@ -66,6 +66,9 @@
   for a wider one (cancho `docs/mmio.md` 3), not fixed yet.
 - `load` (docs/load.md): a kernel sent over the serial console replaces the running one. A tool for bringing up
   hardware on the real boards without moving the SD card for every build; `board/send.py` is the sender.
+- A lent system (2026-11-27, cancho docs/bare-system.md): `tell`, a function written against `Io` and `Args` with
+  nothing of the kernel in it, runs inside the kernel, answered by `src/ksys.cho`. The first step towards the tools
+  of cancho-tools: streams and arguments. Files and directories are next. In QEMU.
 - Long names (2026-11-26, docs/storage.md): read, written, replaced and removed; the pieces made here are the
   pieces macOS makes. With directories, a source tree can live on the card.
 - Directories (2026-11-26, docs/storage.md): a name may be a path; `mkdir`, `ls <path>`.
