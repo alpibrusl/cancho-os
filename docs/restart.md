@@ -1,7 +1,6 @@
 # Restart
 
-> **Status: built**, in QEMU as a Pi 3 and a Pi 4. 0.0.29. The real board is in "Measured" when it has
-> been tried there.
+> **Status: built**, in QEMU as a Pi 3 and a Pi 4, and used on the real Pi 4 (one board, one time). 0.0.29.
 
 `restart` starts the whole board again, as at power-on: the firmware runs, reads the card, and loads
 `KERNEL8.IMG`. After [`put`](update.md) that is the kernel that was sent, so the two together are an
@@ -30,6 +29,15 @@ each taken only with `0x5a` in its top byte, which is the block's guard against 
 | QEMU `raspi3b`, and `raspi4b` | `restart`, then `about` | "cancho-os booted" a second time, and the shell answers |
 | `raspi3b` with an SD card | `write A.TXT x`, `restart`, `cat LOG.TXT` | after the restart the record has line 2, `console console restart board`, and both lines follow |
 | `virt`, at the console and over SSH | `restart` | "this machine has no such watchdog here" |
+
+On the real Pi 4, from a Mac on the same network, with nobody at the board:
+
+| what | result |
+|---|---|
+| `board/put.sh ... KERNEL8.IMG` with this kernel (377,728 bytes) | kept; the kernel it replaced is `OLD/00000003.V` |
+| `uptime`, then `restart`, both over SSH | "867.963 s"; "restarting: the firmware starts the board again, and loads the kernel from the card" |
+| the console, twelve seconds later | "cancho-os booted"; `about` says 0.0.29; `uptime` says 6.119 s |
+| `disk`, `record` | the card; 8 lines, each following, the last `owner restart board` with the key that asked |
 
 ## What it does not do
 
