@@ -1,6 +1,7 @@
-// The only assembly in cancho-os. Two jobs:
+// The only assembly in cancho-os. Three jobs:
 //   1. boot: park secondary cores, leave EL2, enable FP/SIMD, set a stack, zero .bss, call main
 //   2. exceptions: note which vector was taken and enter main again, which reports it (see kernel.cho)
+//   3. start a kernel that was loaded over the serial line, in place of this one (docs/load.md)
 // Nothing here is called by cancho: the kernel has no foreign function. What it needs from the link
 // it reads as memory, at two addresses fixed here and named in its capabilities:
 //   image + 0x10   two words, the end of the code and the end of the constants (inside `code`)
@@ -60,6 +61,52 @@ park:
     wfe
     b       park
 
+// ---- a kernel loaded over the serial line (docs/load.md) --------------------
+// x4 is where it waits: the mark, its length, the image. The image goes where this one is, and is started
+// as the firmware would start it, except that it is entered at EL1.
+chain:
+    str     xzr, [x4]                 // the mark is used once
+    ldr     x7, [x4, #8]              // how many bytes
+    // What this kernel wrote is partly still in the data cache: write it out, and empty the cache, so
+    // that the next kernel does not find this one's data when it turns the cache on again.
+    ldr     x0, =__mapped_start
+    ldr     x1, =__stage_end
+1:  dc      civac, x0
+    add     x0, x0, #64
+    cmp     x0, x1
+    b.lo    1b
+    dsb     sy
+    // Translation and both caches off: the image about to be replaced is mapped read-only.
+    mrs     x0, sctlr_el1
+    bic     x0, x0, #(1 << 0)
+    bic     x0, x0, #(1 << 2)
+    bic     x0, x0, #(1 << 12)
+    msr     sctlr_el1, x0
+    isb
+    ic      iallu
+    dsb     sy
+    isb
+    // The loop that copies cannot run from the image it overwrites: it is moved below the stack first.
+    adr     x0, copier
+    adr     x1, copier_end
+    ldr     x2, =__copier
+    mov     x3, x2
+2:  ldr     w8, [x0], #4
+    str     w8, [x3], #4
+    cmp     x0, x1
+    b.lo    2b
+    add     x0, x4, #16               // from
+    ldr     x1, =_start               // to
+    mov     x9, x1                    // and where to start it
+    br      x2
+copier:
+3:  ldrb    w8, [x0], #1
+    strb    w8, [x1], #1
+    subs    x7, x7, #1
+    b.ne    3b
+    br      x9
+copier_end:
+
 // ---- exceptions ------------------------------------------------------------
 // Nothing is ever taken on purpose: interrupts are masked and polled. So every
 // vector is a fault. The stub notes which vector, throws the stack away and calls
@@ -94,6 +141,12 @@ vectors:
     .balign 0x80
 
 fault_entry:
+    // A kernel loaded over the serial line (docs/load.md)? The kernel marks it and faults on purpose.
+    ldr     x4, =__stage
+    ldr     x5, [x4]
+    ldr     x6, =0x6f6863616e6163     // "canacho", the mark
+    cmp     x5, x6
+    b.eq    chain
     ldr     x4, =__fault_note
     ldr     x5, [x4]
     cmn     x5, #1

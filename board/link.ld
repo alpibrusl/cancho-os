@@ -28,6 +28,13 @@ SECTIONS {
     /* 64 KB a device reads and writes on its own (`dma` in src/kernel.cho): a network card's queues and packets */
     . = RAM_BASE + 0x210000;
     . += 0x10000;
+    /* 2 MB where a kernel sent over the serial line waits (`stage` in src/kernel.cho, docs/load.md): a mark,
+       its length, then the image. board/boot.S copies it from here. */
+    __stage = .;
+    . += 0x200000;
+    __stage_end = .;
+    __mapped_start = RAM_BASE + 0x1000;
+    __copier = RAM_BASE + 0x2000;
     __cancho_heap_start = ALIGN(4096);
     __cancho_heap_end = RAM_BASE + 0x3c000000;
     /DISCARD/ : { *(.comment) *(.note*) *(.eh_frame*) }

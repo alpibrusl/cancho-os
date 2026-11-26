@@ -257,6 +257,18 @@ A Pi 5 tries the SD card before its other disks by default (`BOOT_ORDER=0xf461`:
 `rpi-eeprom-config`). So what is installed on an NVMe drive is not touched, and boots again when the
 card is taken out.
 
+## A new kernel without moving the card
+
+`load <bytes>`, at the serial console, takes a kernel over that line and starts it in place of the
+running one, if the sender confirms its checksum: [docs/load.md](docs/load.md). From the machine wired
+to the console:
+
+```
+python3 board/send.py /dev/ttyAMA0 build/kernel8.img
+```
+
+It does not write the card: a power cycle brings back the card's kernel. `./load.sh` does the same in QEMU.
+
 ## How it is built, and what is left to remove
 
 - `cancho build --target aarch64-none-elf --emit obj` writes an ELF object with no libc in
