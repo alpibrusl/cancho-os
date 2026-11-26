@@ -128,8 +128,8 @@ if [ -n "$ready" ]; then
         dnsmasq --keep-in-foreground --user=root --conf-file=/dev/null --interface=tap0 --bind-interfaces \
             --dhcp-range=172.31.77.50,172.31.77.60,255.255.255.0,1h --dhcp-option=3,172.31.77.1 \
             --dhcp-option=6,172.31.77.1 --address=/www.cancho-os.test/172.31.77.1 --local=/cancho-os.test/ \
-            --no-resolv --no-hosts --dhcp-leasefile=build/leases --log-dhcp --log-queries \
-            --log-facility=build/dnsmasq.log &
+            --no-resolv --no-hosts --dhcp-leasefile="$PWD/build/leases" --log-dhcp --log-queries \
+            --log-facility="$PWD/build/dnsmasq.log" &
         DNSMASQ=$!
         (cd build/www && exec python3 -m http.server 8099 --bind 172.31.77.1) > /dev/null 2>&1 &
         WWW=$!
