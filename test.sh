@@ -58,6 +58,9 @@ for line in "$@"; do
     if [ "$typed" = 2 ] && [ -n "${RSH:-}" ]; then
         # the kernel's shell from this machine: the lines go in, the connection is closed, the answers come back
         printf "$RSH" | nc -w 5 127.0.0.1 5523 | tr -d '\r' | sed 's/^/remote: /' >> build/peer.txt
+        # the last acknowledgement of the closing is still on its way when nc returns: the kernel looks at
+        # the network only between keys, so the next line is not typed at once
+        sleep 1
     fi
     if [ -n "$first" ] && [ -n "${UDP:-}" ]; then
         # after the first line (`net up`): a datagram from this machine to the kernel's echo port
