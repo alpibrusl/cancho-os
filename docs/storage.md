@@ -61,6 +61,12 @@ through capabilities the network card already used.
 A file with a long name was there too: it is listed as `A-LONG~9.TEX` and reads correctly under that
 name. macOS also left its own `._` files beside each, which `ls` shows as it finds them.
 
+## What writing will be
+
+Not "write a sector". [`permissions.md`](permissions.md) is the design: who may change what (keys and
+grants, not users), every write a new version, a record that is only added to, and an order of writes in
+which a power cut never leaves a file half changed. It is written before any code that writes.
+
 ## What it does not do, yet
 
 - **Writing.** Nothing here changes a disk.

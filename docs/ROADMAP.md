@@ -66,6 +66,9 @@
   for a wider one (cancho `docs/mmio.md` 3), not fixed yet.
 - `load` (docs/load.md): a kernel sent over the serial console replaces the running one. A tool for bringing up
   hardware on the real boards without moving the SD card for every build; `board/send.py` is the sender.
+- Who may do what (docs/permissions.md, 2026-11-26, design only): keys instead of users, grants instead of
+  permissions, every write a version, a record nobody can rewrite, approval for what cannot be undone. Decided
+  with the first reading slice, so that writing is built to it.
 - Storage (docs/storage.md, 2026-11-26), first slice: `src/fat.cho` (pure) reads FAT16 and FAT32, through
   virtio-blk on QEMU's virt: `disk`, `ls`, `cat`, `sum`, checked against volumes made by macOS's and Linux's
   tools. Next: writing; the Pi 4's SD controller on the real board; then the host key, the allowed keys and
