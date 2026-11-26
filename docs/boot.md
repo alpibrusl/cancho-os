@@ -1,6 +1,6 @@
 # What the board does at its start: BOOT.TXT
 
-> **Status: built**, in QEMU. 0.0.32. The real board is in "Measured" when it has been tried there.
+> **Status: built**, in QEMU, and used on the real Pi 4 (one board, one time). 0.0.32.
 
 After a restart the kernel knows nothing: no link, no address, no SSH, no word of where the servo bus
 is. Somebody had to type four lines at the serial console every time. `restart` over SSH
@@ -47,6 +47,15 @@ QEMU's `virt`, a FAT16 volume:
 | the same disk started again, nothing typed | "BOOT.TXT: 3 lines to run, 1 not run ..."; then `net up`, `net ssh on` and the `echo`, each with its answer; the host key made and kept |
 | OpenSSH then logs in and asks `write BOOT.TXT from ssh` | "a file the board starts from", and the file unchanged |
 | keys pressed during the first second | "BOOT.TXT: stopped by a key", and the link is down |
+
+On the real Pi 4, the card holding a BOOT.TXT of `net eth`, `net dhcp`, `net ssh on` and `servo via ...`,
+written at its console:
+
+| what | result |
+|---|---|
+| over SSH: this kernel sent with `board/put.sh`, `write BOOT.TXT from ssh`, then `restart` | kept; "a file the board starts from"; "restarting ..." |
+| nothing typed at the console; 28 seconds later, over SSH | `about`: 0.0.32; `uptime`: 21.280 s; `servo pos`: the arm's six positions; `record`: 19 lines, each following |
+| the console's own log of that start | "BOOT.TXT: 4 lines to run", then the four lines and their answers: the link, an address from the other board, SSH on, the servo bus |
 
 and 5 tests of `boot.cho` on its own (what is allowed; seventeen lines that are not, among them
 `net ssh on; restart`; a file made into the lines to type; no more than sixteen; every byte of a file as
