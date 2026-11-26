@@ -58,11 +58,11 @@ for line in "$@"; do
         printf "tcp echo: '%s'\n" "$(printf '%s' "$TCP" | nc -w 5 127.0.0.1 5507)" >> build/peer.txt
     fi
     if [ -n "$first" ] && [ -n "${TCPFILE:-}" ]; then
-        nc -w 20 127.0.0.1 5507 < "$TCPFILE" > build/tcp.back
-        if cmp -s "$TCPFILE" build/tcp.back; then
-            echo "tcp echo: $(wc -c < build/tcp.back | tr -d ' ') bytes came back the same" >> build/peer.txt
+        nc -w 20 127.0.0.1 5507 < "$TCPFILE" > build/tcp.echo
+        if cmp -s "$TCPFILE" build/tcp.echo; then
+            echo "tcp echo: $(wc -c < build/tcp.echo | tr -d ' ') bytes came back the same" >> build/peer.txt
         else
-            echo "tcp echo: $(wc -c < build/tcp.back | tr -d ' ') bytes came back, NOT what was sent" >> build/peer.txt
+            echo "tcp echo: $(wc -c < build/tcp.echo | tr -d ' ') bytes came back, NOT what was sent" >> build/peer.txt
         fi
     fi
     first=
