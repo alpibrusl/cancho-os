@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>cancho-os: an operating system written in cancho</title>
-<meta name="description" content="A bare-metal kernel for the Raspberry Pi written in cancho, with no Linux and no C. The compiler lists every address and register it can touch. Boots in QEMU; not yet run on a real board.">
+<meta name="description" content="A bare-metal kernel for the Raspberry Pi written in cancho. The compiler lists every address and register it can touch. Runs on a real Raspberry Pi 4, and boots in QEMU on every change.">
 <meta property="og:title" content="cancho-os: an operating system written in cancho">
-<meta property="og:description" content="No Linux, no C. Hardware is a capability, and the compiler lists what the kernel can touch. Research: boots in QEMU.">
+<meta property="og:description" content="Hardware is a capability, and the compiler lists what the kernel can touch. Research: runs on a real Raspberry Pi 4.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://alpibrusl.github.io/cancho-os/">
 <meta name="color-scheme" content="light dark">
@@ -149,9 +149,9 @@ ul.why span { color: var(--muted); font-size: .95rem; }
 <section class="hero" style="padding-top:3.5rem">
   <div>
     <p class="badge"><i></i>Research &middot; runs on a real Raspberry Pi 4 &middot; every change booted in QEMU</p>
-    <h1>An operating system written in cancho, with no Linux and no C.</h1>
+    <h1>An operating system written in cancho, where the compiler lists everything the kernel can touch.</h1>
     <p class="lead">A kernel for the Raspberry Pi: the firmware loads one image, a page of assembly calls <code>main</code>, and everything after that is cancho, drivers included.</p>
-    <p class="sub">The question it exists to answer: can the compiler say, before the kernel runs, every address and every processor register it is able to touch, and which function holds which device?</p>
+    <p class="sub">Before the kernel runs, the compiler says every address and every processor register it is able to touch, and which function holds which device. That list is checked on every change.</p>
     <div class="cta"><a class="btn primary" href="#video">Watch it on a real Pi 4 (37 s)</a><a class="btn ghost" href="#pi4">Put it on yours</a><a class="btn ghost" href="https://github.com/alpibrusl/cancho-os">Source</a></div>
   </div>
   <div class="term" role="img" aria-label="A session over SSH on a real Raspberry Pi 4"><div class="bar"><i></i><i></i><i></i></div>
@@ -159,11 +159,11 @@ ul.why span { color: var(--muted); font-size: .95rem; }
 $ ssh cancho@192.168.1.24
 cancho-os: the kernel's shell, over SSH. `help` lists the commands, `exit` leaves.
 &gt; about
-cancho-os 0.0.22: a kernel written in cancho, no Linux underneath (Raspberry Pi 4)
+cancho-os 0.0.23: a kernel written in cancho (Raspberry Pi 4)
 &gt; random
-random (the RNG200): a3cecc93f141bf4bf2425ab65f24a3f6
+random (the RNG200): cfa092c0310e2998940d7c0659f4d42c
 &gt; ping example.com
-reply from 104.20.23.154 in 2060 us
+reply from 172.66.147.243 in 2025 us
 &gt; arm zero
 gripper at x 391361 y -9 z 226469 um
 &gt; disk
@@ -197,7 +197,7 @@ bye</pre></div>
   <p class="sub">The first job is small and concrete: the safety controller of a robot arm (<a href="https://alpibrusl.github.io/cancho-robot/">cancho-robot</a>). A controller like that is only worth trusting if nothing under it can go around it.</p>
   <div class="grid">
     <div><h3>Hardware is a capability</h3><p>A device register is reached through an <code>Mmio</code> value whose type names the addresses it covers. A function that was lent the console cannot write to the servo bus: it is a type error.</p></div>
-    <div><h3>Nothing underneath</h3><p>No Linux, no libc, no C. What is not cancho is one page of assembly that boots and catches faults, and it exports nothing the kernel can call.</p></div>
+    <div><h3>Nothing underneath</h3><p>No Linux, no libc, and no C in this repository. What is not cancho is one page of assembly that boots and catches faults, which exports nothing the kernel can call, and the board's own firmware, which loads the image and is asked three questions.</p></div>
     <div><h3>No code behind its back</h3><p>Interrupts stay masked and are polled after <code>wfi</code>; a fault re-enters <code>main</code>, which reports it. So there is no handler running between two statements.</p></div>
     <div><h3>Checked in CI</h3><p>Every change boots in QEMU with a scripted shell session, and the list of what the kernel can touch is a file in the repository that CI compares.</p></div>
   </div>

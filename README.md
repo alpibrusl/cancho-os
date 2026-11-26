@@ -20,9 +20,10 @@ protocol, the kinematics and the safety core are plain cancho, and what is speci
 board is the boot assembly, the drivers and the page-table format. A PC with UEFI is the
 planned second target (docs/ROADMAP.md).
 
-No Linux and no C: the firmware loads `kernel8.img`, a page of assembly
-drops to EL1 and calls `main`, and everything after that is cancho — the PL011 UART
-driver, the timer and interrupt controller, the page tables, the fault report, the shell.
+The firmware loads `kernel8.img`, a page of assembly drops to EL1 and calls `main`, and
+everything after that is cancho: the drivers, the page tables, the network stack, the shell.
+There is no Linux or libc under it and no C in this repository; what is not cancho is that
+page of assembly and the board's own firmware.
 
 ```
 src/kernel.cho   the kernel: boot, memory, the shell, the servo and arm commands (cancho)

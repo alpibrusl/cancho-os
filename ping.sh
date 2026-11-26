@@ -91,7 +91,7 @@ if [ -n "$ready" ]; then
     # Linux finishes and the kernel does
     (printf 'about\n'; sleep 1; printf 'mem\n'; sleep 1) | timeout 15 nc -N -w 5 10.0.0.2 23 | tr -d '\r' | sed 's/^/remote: /' > build/remote.txt
     cat build/remote.txt
-    grep -q "^remote: > cancho-os .* no Linux underneath" build/remote.txt || status=1
+    grep -q "^remote: > cancho-os .* a kernel written in cancho" build/remote.txt || status=1
     grep -q "r-x  kernel code" build/remote.txt || status=1
     # `exit` there: the kernel hangs up while Linux's end is still open (its input stays open six seconds)
     (printf 'about\nexit\n'; sleep 6) | timeout 12 nc -N -w 10 10.0.0.2 23 | tr -d '\r' > build/exit.txt &
@@ -129,7 +129,7 @@ if [ -n "$ready" ]; then
         sshopts="-o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=40"
         said=$(timeout 90 ssh -i "$SSHKEY" $sshopts cancho@10.0.0.2 about < /dev/null 2>&1 | tr -d '\r')
         echo "ssh: $said"
-        echo "$said" | grep -q "no Linux underneath" || status=1
+        echo "$said" | grep -q "a kernel written in cancho" || status=1
         ssh-keygen -q -t ed25519 -N "" -f build/strangerkey < /dev/null > /dev/null 2>&1
         refused=$(timeout 90 ssh -i build/strangerkey $sshopts cancho@10.0.0.2 about < /dev/null 2>&1 | tr -d '\r' | tail -1)
         echo "ssh, another key: $refused"

@@ -44,12 +44,12 @@ jobs:
         run: |
           ./test.sh about 'echo ci' ticks crash about > out.txt
           cat out.txt
-          grep -q "no Linux underneath (Raspberry Pi 3)" out.txt
+          grep -q "a kernel written in cancho (Raspberry Pi 3)" out.txt
           grep -q "^ci" out.txt
           # milestone 2: the timer interrupt fires, and a cancho trap is reported, then the core halts
           grep -Eq "^[1-9][0-9]* timer interrupts" out.txt
           grep -q "cancho trap" out.txt
-          test "$(grep -c "no Linux underneath" out.txt)" = 1
+          test "$(grep -c "a kernel written in cancho" out.txt)" = 1
           # milestone 3: the MMU is on: page 0 is unmapped and kernel code is read-only
           ./test.sh mem 'crash null' > null.txt; cat null.txt
           grep -q "r-x  kernel code" null.txt
@@ -118,7 +118,7 @@ jobs:
           # (as a Pi 3 and on virt: this runner's QEMU has no Pi 4)
           for m in raspi3b virt; do
             MACHINE=$m ./load.sh > load-$m.txt 2>&1 || { cat load-$m.txt; exit 1; }
-            grep -E "Linux underneath|forgotten|starting it|data abort" load-$m.txt
+            grep -E "written in cancho|forgotten|starting it|data abort" load-$m.txt
           done
           # and it is not offered over the network shell
           MACHINE=virt RSH='load 2000\n' ./test.sh 'net up' 'net shell on' net > noload.txt; cat noload.txt
@@ -146,9 +146,9 @@ jobs:
           grep -qi "^tcp port 9: .*refused" ping.txt
           grep -q "^reply from 10.0.0.1 in " ping.txt
           grep -qi "^tcp port 23, before: .*refused" ping.txt
-          grep -q "^remote: > cancho-os .* no Linux underneath" ping.txt
+          grep -q "^remote: > cancho-os .* a kernel written in cancho" ping.txt
           grep -q "^remote: .*r-x  kernel code" ping.txt
-          grep -q "^ssh: cancho-os .* no Linux underneath" ping.txt
+          grep -q "^ssh: cancho-os .* a kernel written in cancho" ping.txt
           grep -q "^ssh, another key: .*Permission denied" ping.txt
           grep -q "^exit: shell on port 23: nobody connected" ping.txt
           grep -q "^exit: the kernel said bye" ping.txt
@@ -158,7 +158,7 @@ jobs:
         run: |
           # the same kernel linked for a board whose RAM starts at 1 GB: the shell, the timer, the MMU, a fault
           MACHINE=virt ./test.sh about ticks mem 'crash null' > virt.txt; cat virt.txt
-          grep -q "no Linux underneath (QEMU virt)" virt.txt
+          grep -q "a kernel written in cancho (QEMU virt)" virt.txt
           grep -Eq "^[1-9][0-9]* timer interrupts" virt.txt
           grep -q "0x40080000 - .*r-x  kernel code" virt.txt
           grep -q "data abort: address not mapped" virt.txt
@@ -185,7 +185,7 @@ jobs:
           grep -q "^no connection to 10.0.0.1 port 8098: refused, or no answer" http.txt
           grep -q "^remote: a page from the host, for cancho-os" http.txt
           grep -q "^remote: > bye" http.txt
-          ! grep -q "^remote: .*no Linux underneath" http.txt
+          ! grep -q "^remote: .*a kernel written in cancho" http.txt
           grep -q "^tcp: 0 open" http.txt
           # an address from QEMU's own DHCP server, and the page again from that address; a name asked of
           # QEMU's name server is not insisted on (it needs the runner's resolver), a name that is none is
@@ -204,17 +204,17 @@ jobs:
           MACHINE=virt SSHKEY=/tmp/sshkey SSHCMD=about SSHIN='ticks\nmem\nexit\nabout\n' ./test.sh 'net up' 'net ssh on' net > ssh.txt; cat ssh.txt
           grep -q "^ssh is on port 22; keys built into this image that may log in: 1" ssh.txt
           grep -q "^ssh host key (it is another after every restart): ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI" ssh.txt
-          grep -q "^ssh: cancho-os .* no Linux underneath (QEMU virt)" ssh.txt
+          grep -q "^ssh: cancho-os .* a kernel written in cancho (QEMU virt)" ssh.txt
           grep -q "^ssh: exit status 0" ssh.txt
           grep -Eq "^ssh: > [1-9][0-9]* timer interrupts" ssh.txt
           grep -q "^ssh:   0x40080000 - .*r-x  kernel code" ssh.txt
           grep -q "^ssh: > bye" ssh.txt
-          test "$(grep -c "no Linux underneath" ssh.txt)" = 1
+          test "$(grep -c "a kernel written in cancho" ssh.txt)" = 1
           grep -q "^tcp: 0 open" ssh.txt
           ssh-keygen -q -t ed25519 -N "" -f /tmp/stranger
           MACHINE=virt SSHKEY=/tmp/stranger SSHCMD=about ./test.sh 'net up' 'net ssh on' net > nossh.txt; cat nossh.txt
           grep -q "^ssh: .*Permission denied" nossh.txt
-          ! grep -q "no Linux underneath" nossh.txt
+          ! grep -q "a kernel written in cancho" nossh.txt
           # and without a generator the port stays closed
           NORNG=' ' MACHINE=virt ./test.sh 'net up' 'net ssh on' > norngssh.txt; cat norngssh.txt
           grep -q "^not without random numbers" norngssh.txt
@@ -233,7 +233,7 @@ jobs:
           # the shell over a connection: closed until the console opens it, then seven commands typed from this
           # machine, among them one that must be refused from there
           MACHINE=virt RSH='about\nticks\nnet\nnet shell on\nping 10.0.0.1\nmem\n' ./test.sh 'net up' 'net shell on' net > rsh.txt; cat rsh.txt
-          grep -q "^remote: > cancho-os .* no Linux underneath (QEMU virt)" rsh.txt
+          grep -q "^remote: > cancho-os .* a kernel written in cancho (QEMU virt)" rsh.txt
           grep -Eq "^remote: > [1-9][0-9]* timer interrupts" rsh.txt
           grep -q "^remote: shell on port 23: a session is open" rsh.txt
           grep -q "^remote: > only from the serial console" rsh.txt
@@ -259,9 +259,9 @@ jobs:
           grep -qi "^tcp port 9: .*refused" eping.txt
           grep -q "^reply from 10.0.0.1 in " eping.txt
           grep -qi "^tcp port 23, before: .*refused" eping.txt
-          grep -q "^remote: > cancho-os .* no Linux underneath" eping.txt
+          grep -q "^remote: > cancho-os .* a kernel written in cancho" eping.txt
           grep -q "^remote: .*r-x  kernel code" eping.txt
-          grep -q "^ssh: cancho-os .* no Linux underneath" eping.txt
+          grep -q "^ssh: cancho-os .* a kernel written in cancho" eping.txt
           grep -q "^ssh, another key: .*Permission denied" eping.txt
           grep -q "^exit: shell on port 23: nobody connected" eping.txt
           grep -q "^exit: the kernel said bye" eping.txt
