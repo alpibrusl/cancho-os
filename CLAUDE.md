@@ -4,8 +4,9 @@ Goal: an OS written in cancho (https://github.com/alpibrusl/cancho), no Linux un
 Read README.md (build, layout) and docs/ROADMAP.md (decisions, tracks, milestones) first.
 
 Rules of the road
-- Everything is cancho (`src/`), drivers included. `board/boot.S` holds only boot and the exception
-  stub, and exports nothing to cancho: never add logic or a callable symbol there. The kernel has no
+- Everything is cancho (`src/`), drivers included. `board/boot.S` holds only boot, the exception
+  stub and the start of a kernel loaded over the serial line (docs/load.md; it is reached by a fault, not
+  called), and exports nothing to cancho: never add logic or a callable symbol there. The kernel has no
   `extern fn` and no `Ffi`; `cancho authority` must keep saying it never touches foreign code. There is no C in this repository: do not add any.
 - Hardware is a capability. A register is reached through an `Mmio` whose bound is exactly the
   registers the driver uses (cancho docs/mmio.md, edition 13); `main` cuts the eight and is the only

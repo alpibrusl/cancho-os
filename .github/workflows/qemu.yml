@@ -61,6 +61,18 @@ jobs:
           ./build/expect > expect.txt
           test "$(wc -l < arm-kernel.txt)" -eq 16 && diff arm-kernel.txt expect.txt
           grep -q "^refused: limit.joint (joint 5)" arm-kernel.txt
+      - name: a kernel loaded over the serial console
+        # the running kernel takes another (this build, renamed 0.0.99) and starts it: a wrong checksum
+        # must forget it, the right one must run it, and the fault report must still work afterwards
+        run: |
+          # (as a Pi 3 and on virt: this runner's QEMU has no Pi 4)
+          for m in raspi3b virt; do
+            MACHINE=$m ./load.sh > load-$m.txt 2>&1 || { cat load-$m.txt; exit 1; }
+            grep -E "Linux underneath|forgotten|starting it|data abort" load-$m.txt
+          done
+          # and it is not offered over the network shell
+          MACHINE=virt RSH='load 2000\n' ./test.sh 'net up' 'net shell on' net > noload.txt; cat noload.txt
+          grep -q "^remote: > unknown command" noload.txt
       - name: the network link
         run: |
           # sim/netpeer.cho on the second serial port: three replies it insists on byte for byte, and one
