@@ -334,6 +334,12 @@ shell for ever. And it could not open a connection, so it could ask nothing of a
 | `exit` with the client's input held open 8 s (by hand) | | the console's `net` says "nobody connected" and "0 open" while the client is still there |
 | `sudo ./ping.sh`, `sudo MACHINE=virt ./ping.sh` (Linux, CI) | both links, Linux's TCP and Python's `http.server` on Linux | the page fetched; a port with no server refused; after `exit`, "nobody connected" while Linux's end is still open |
 
+**A third thing a real stack found.** The first version passed its tests and QEMU's TCP, and against
+Linux the connection the kernel hung up on never ended. While waiting for the other end's FIN the
+kernel advertised a window of zero (it takes nothing more), and Linux does not send a FIN into a window
+of zero: it probes, for ever. The window in that state is now what the kernel is in fact willing to
+receive and throw away, and the Linux check ends by insisting that no connection is left open.
+
 ## 10. Next
 
 The order, the boards and what each driver is written from are in [`drivers.md`](drivers.md).

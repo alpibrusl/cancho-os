@@ -492,14 +492,15 @@ fn test_we_may_finish_first_and_wait_for_the_other_end() -> [] int {
         says(tcp, bufs, inbox, 23, 101, "4500002811110000400655bd0a0000010a000002a0280017fffffffbfffffffe5010faf000a70000", "");
         test.assert_eq(inet.tcp_close(tcp, 0), 1);
         test.assert_eq(inet.tcp_state(tcp, 0), 5);
-        flushes(tcp, bufs, 0, 102, "4500002800000000400666ce0a0000020a0000010017a028fffffffefffffffb50110000fb960000");
+        flushes(tcp, bufs, 0, 102, "4500002800000000400666ce0a0000020a0000010017a028fffffffefffffffb50110100fa960000");
         says(tcp, bufs, inbox, 23, 103, "4500002811110000400655bd0a0000010a000002a0280017fffffffbffffffff5010faf000a60000", "");
         test.assert_eq(inet.tcp_state(tcp, 0), 5);
-        // what it still sends is acknowledged, and not kept
-        says(tcp, bufs, inbox, 23, 104, "4500002f11110000400655b60a0000010a000002a0280017fffffffbffffffff5018faf0b1b1000061626f75740d0a", "4500002800000000400666ce0a0000020a0000010017a028ffffffff0000000250100000fb900000");
+        // what it still sends is acknowledged, and not kept. The window is not zero while we wait: a real
+        // stack will not send its FIN into a window of zero
+        says(tcp, bufs, inbox, 23, 104, "4500002f11110000400655b60a0000010a000002a0280017fffffffbffffffff5018faf0b1b1000061626f75740d0a", "4500002800000000400666ce0a0000020a0000010017a028ffffffff0000000250100100fa900000");
         test.assert_eq(inet.tcp_read(tcp, inbox, 0, got, 100), 0);
         // its FIN: acknowledged, and the connection is over
-        says(tcp, bufs, inbox, 23, 105, "4500002811110000400655bd0a0000010a000002a028001700000002ffffffff5011faf0009f0000", "4500002800000000400666ce0a0000020a0000010017a028ffffffff0000000350100000fb8f0000");
+        says(tcp, bufs, inbox, 23, 105, "4500002811110000400655bd0a0000010a000002a028001700000002ffffffff5011faf0009f0000", "4500002800000000400666ce0a0000020a0000010017a028ffffffff0000000350100100fa8f0000");
         test.assert_eq(inet.tcp_open(tcp, bufs, inbox), 0);
     }
     return 0;
@@ -518,7 +519,7 @@ fn test_what_was_written_goes_out_with_our_fin() -> [] int {
         test.assert_eq(inet.tcp_write(tcp, bufs, 0, want, 0, m), m);
         test.assert_eq(inet.tcp_close(tcp, 0), 1);
         test.assert_eq(inet.tcp_write(tcp, bufs, 0, want, 0, m), 0);
-        flushes(tcp, bufs, 0, 102, "4500002d00000000400666c90a0000020a0000010017a028fffffffefffffffb501900002a0300006279650d0a");
+        flushes(tcp, bufs, 0, 102, "4500002d00000000400666c90a0000020a0000010017a028fffffffefffffffb50190100290300006279650d0a");
     }
     return 0;
 }
@@ -533,9 +534,9 @@ fn test_both_ends_may_finish_at_once() -> [] int {
         says(tcp, bufs, inbox, 23, 100, "4500002c11110000400655b90a0000010a000002a0280017fffffffa000000006002faf0e8f80000020405b4", "4500002c00000000400666ca0a0000020a0000010017a028fffffffdfffffffb60120100e4c80000020403c6");
         says(tcp, bufs, inbox, 23, 101, "4500002811110000400655bd0a0000010a000002a0280017fffffffbfffffffe5010faf000a70000", "");
         test.assert_eq(inet.tcp_close(tcp, 0), 1);
-        flushes(tcp, bufs, 0, 102, "4500002800000000400666ce0a0000020a0000010017a028fffffffefffffffb50110000fb960000");
+        flushes(tcp, bufs, 0, 102, "4500002800000000400666ce0a0000020a0000010017a028fffffffefffffffb50110100fa960000");
         // its FIN left before ours arrived: acknowledged, and ours is still out
-        says(tcp, bufs, inbox, 23, 103, "4500002811110000400655bd0a0000010a000002a0280017fffffffbfffffffe5011faf000a60000", "4500002800000000400666ce0a0000020a0000010017a028fffffffffffffffc50100000fb950000");
+        says(tcp, bufs, inbox, 23, 103, "4500002811110000400655bd0a0000010a000002a0280017fffffffbfffffffe5011faf000a60000", "4500002800000000400666ce0a0000020a0000010017a028fffffffffffffffc50100100fa950000");
         test.assert_eq(inet.tcp_state(tcp, 0), 4);
         says(tcp, bufs, inbox, 23, 104, "4500002811110000400655bd0a0000010a000002a0280017fffffffcffffffff5010faf000a50000", "");
         test.assert_eq(inet.tcp_open(tcp, bufs, inbox), 0);
@@ -553,7 +554,7 @@ fn test_an_end_that_never_finishes_is_dropped_after_a_minute() -> [] int {
         says(tcp, bufs, inbox, 23, 100, "4500002c11110000400655b90a0000010a000002a0280017fffffffa000000006002faf0e8f80000020405b4", "4500002c00000000400666ca0a0000020a0000010017a028fffffffdfffffffb60120100e4c80000020403c6");
         says(tcp, bufs, inbox, 23, 101, "4500002811110000400655bd0a0000010a000002a0280017fffffffbfffffffe5010faf000a70000", "");
         test.assert_eq(inet.tcp_close(tcp, 0), 1);
-        flushes(tcp, bufs, 0, 102, "4500002800000000400666ce0a0000020a0000010017a028fffffffefffffffb50110000fb960000");
+        flushes(tcp, bufs, 0, 102, "4500002800000000400666ce0a0000020a0000010017a028fffffffefffffffb50110100fa960000");
         says(tcp, bufs, inbox, 23, 103, "4500002811110000400655bd0a0000010a000002a0280017fffffffbffffffff5010faf000a60000", "");
         test.assert_eq(inet.tcp_quiet(tcp, 0, 5103), 5000);
         ticks(tcp, bufs, 0, 60103, "");

@@ -546,6 +546,11 @@ fn tcp_say[&t, &b, &o](tcp: &!t [int], bufs: &!b [byte], c: int, ours: int, from
             tcp[b + 16] = 1;
         }
     }
+    if tcp[b] == 5 {
+        // we have finished, and what still arrives is thrown away: there is always room for that. A
+        // window of zero here would keep the other end's FIN from ever being sent
+        window = tcp_inbox();
+    }
     if from < 0 || from > tcp[b + 7] {
         return segment(out, o, ours, tcp[b + 1], tcp[b + 3], tcp[b + 2], tcp[b + 5], tcp[b + 6], 16, window, 0, bufs, 0, 0);
     }

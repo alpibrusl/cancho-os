@@ -99,6 +99,7 @@ if [ -n "$ready" ]; then
     sleep 1
     printf 'net\r' >&3
     sleep 1
+    echo
     tr -d '\r' < build/ping-uart.out | awk '/^after exit/ { f = 1 } f && /^shell on port 23/ { print "exit: " $0; exit }'
     wait $NC
     grep -q "bye" build/exit.txt && echo "exit: the kernel said bye" || status=1
@@ -123,6 +124,8 @@ if [ -n "$ready" ]; then
     sleep 2
     printf 'net\r' >&3
     sleep 1
+    # every connection of this run has ended, the one the kernel hung up on included
+    tr -d '\r' < build/ping-uart.out | grep "^tcp: " | tail -1 | grep -q "^tcp: 0 open" || { echo "a connection was left open"; status=1; }
     grep -q "reply from 10.0.0.1 in" build/ping-uart.out || status=1
     [ -n "$SLIP" ] && kill $SLIP 2>/dev/null
 fi
