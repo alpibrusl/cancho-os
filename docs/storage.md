@@ -68,9 +68,11 @@ Not "write a sector". [`permissions.md`](permissions.md) is the design: who may 
 grants, not users), every write a new version, a record that is only added to, and an order of writes in
 which a power cut never leaves a file half changed. It was written before any code that writes.
 
-**Its first slice is built**: `write <name> <text>` makes a new file, `append <name> <text>` adds a line
-to one, `copy <from> <to>` makes a new file with another's contents. Nothing replaces or removes a file:
-`write` to a name that exists is refused, because replacing waits for versions.
+**Three slices are built**: `write <name> <text>` makes a file, `append <name> <text>` adds a line
+to one, `copy <from> <to>` makes a new file with another's contents. Since the third slice `write` to a
+name that exists replaces it and `remove <name>` takes it away, and both keep what the file held, in the
+directory `OLD`; every change has a line in `LOG.TXT`. [`permissions.md`](permissions.md) has the order
+of writes and what was measured.
 
 - **`fat.cho` still writes nothing.** It changes the bytes of a sector it is handed (a free cluster
   found, an entry of the table set, a directory entry made) and is still pure. `disk.cho` decides what

@@ -3,9 +3,10 @@
 #   ./keys.sh <disk image> <owner key> <reader key> <a key that is in neither place>
 # The image is written to. The kernel must have been built with AUTHORIZED=<owner key>.pub.
 # The first start: KEYS.TXT is made at the console with the reader's key in it, SSH is turned on, and
-#   the owner writes a file; the reader lists files, and is refused when it writes or asks for the host key;
+#   the owner writes a file (and the record must say which key did); the reader lists files, and is refused when it writes or asks for the host key;
 #   the stranger is not let in.
-# The second start, of the same disk: the host key must be the one the first start made.
+# The second start, of the same disk: the host key must be the one the first start made. Then the owner
+#   removes KEYS.TXT, and the reader is no longer let in.
 # Exit 0 if all of that held.
 set -u
 cd "$(dirname "$0")"
@@ -55,6 +56,10 @@ say 'net up'
 say 'net ssh on' 4
 as "$OWNER" 'cat O.TXT' >> build/keys-ssh.out
 as "$OWNER" ls > build/keys-ls.out
+{
+    as "$OWNER" 'remove KEYS.TXT'
+    as "$READER" ls
+} > build/keys-gone.out
 stop
 tr -d '\r' < build/keys1.out | grep -E "^written|^ssh is on|^ssh host key|^ssh on port"
 cat build/keys-ssh.out
@@ -76,4 +81,8 @@ grep -q "Permission denied" build/keys-ssh.out || ok=1
 cat build/keys-ls.out
 grep -q "^    O.TXT " build/keys-ls.out || ok=1
 grep -q "^    R.TXT \|^    STOLEN.BIN " build/keys-ls.out && ok=1
+# a key is taken away by removing the file that gave it (what the file held is kept as a version)
+cat build/keys-gone.out
+grep -q "^    removed; what it held is OLD/00000001.V" build/keys-gone.out || ok=1
+grep -q "Permission denied" build/keys-gone.out || ok=1
 exit $ok

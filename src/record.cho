@@ -1,0 +1,211 @@
+edition 7;
+
+module record;
+
+import ssh_sha256 as sha;
+
+// `record` -- the lines of LOG.TXT (docs/permissions.md), with no disk under them.
+//
+// A line is text, fields with one space between them, and ends with a line feed:
+//
+//     <number> <ticks> <who> <role> <action> <target> <from> <version> <bytes> <contents> <chain>
+//
+// `contents` is the SHA-256 of what was written, in hex, or `-`. `chain` is the SHA-256, in hex, of the
+// chain of the line before (64 zeros before the first) followed by this line up to and including the
+// space before `chain`. So a line changed, removed or put in afterwards breaks the chain of every line
+// after it, and anything that has SHA-256 can check the file.
+//
+// Nothing here traps on any bytes: a line is never indexed past what was counted.
+
+// The longest line that is taken; a longer one breaks the chain where it stands.
+pub fn longest() -> [] int {
+    return 500;
+}
+
+// What a walk over the file keeps: 0 lines seen   1 the first line that does not follow (0: none)
+// 2 bytes of the line being read   3 whether that line is already too long
+pub fn walk_len() -> [] int {
+    return 4;
+}
+
+fn hex_digit(v: int) -> [] int {
+    if v < 10 {
+        return '0' + v;
+    }
+    return 'a' + v - 10;
+}
+
+// The chain before the first line, into `prev[0..64]`, and a walk at its start.
+pub fn start[&s, &p](st: &!s [int], prev: &!p [byte]) -> [] int {
+    st[0] = 0;
+    st[1] = 0;
+    st[2] = 0;
+    st[3] = 0;
+    var i = 0;
+    while i < 64 {
+        prev[i] = byte_of('0');
+        i = i + 1;
+    }
+    return 0;
+}
+
+// The chain of the line `ln[0..n]` (which ends with its space) after `prev`, as hex into `into[0..64]`.
+fn chain[&l, &p, &h, &d, &o](ln: &l [byte], n: int, prev: &p [byte], state: &!h [int], dig: &!d [byte], into: &!o [byte]) -> [] int {
+    sha.init(state);
+    var i = 0;
+    while i < 64 {
+        sha.update_byte(state, int_of(prev[i]));
+        i = i + 1;
+    }
+    i = 0;
+    while i < n {
+        sha.update_byte(state, int_of(ln[i]));
+        i = i + 1;
+    }
+    sha.final(state, dig);
+    i = 0;
+    while i < 32 {
+        into[i * 2] = byte_of(hex_digit(int_of(dig[i]) >> 4 & 15));
+        into[i * 2 + 1] = byte_of(hex_digit(int_of(dig[i]) & 15));
+        i = i + 1;
+    }
+    return 0;
+}
+
+// One more byte of the file. `ln` is 512 bytes of room for the line, `prev` the chain so far (64), `state`
+// a SHA-256 state, `dig` 32 bytes and `hex` 64 of room.
+pub fn feed[&s, &p, &l, &h, &d, &x](st: &!s [int], prev: &!p [byte], ln: &!l [byte], state: &!h [int], dig: &!d [byte], hex: &!x [byte], c: int) -> [] int {
+    if c != 10 {
+        if st[2] < longest() {
+            ln[st[2]] = byte_of(c);
+            st[2] = st[2] + 1;
+        } else {
+            st[3] = 1;
+        }
+        return 0;
+    }
+    let n = st[2];
+    st[0] = st[0] + 1;
+    var follows = st[3] == 0 && n >= 66 && int_of(ln[n - 65]) == ' ';
+    if follows {
+        chain(ln, n - 64, prev, state, dig, hex);
+        var i = 0;
+        while i < 64 {
+            if int_of(hex[i]) != int_of(ln[n - 64 + i]) {
+                follows = false;
+            }
+            i = i + 1;
+        }
+    }
+    if !follows && st[1] == 0 {
+        st[1] = st[0];
+    }
+    // what the next line is held to is what this one says, so that one bad line is reported once
+    if n >= 64 {
+        var i = 0;
+        while i < 64 {
+            prev[i] = ln[n - 64 + i];
+            i = i + 1;
+        }
+    }
+    st[2] = 0;
+    st[3] = 0;
+    return 0;
+}
+
+// The end of the file: bytes after the last line feed are a line that was never finished.
+pub fn end[&s](st: &!s [int]) -> [] int {
+    if (st[2] != 0 || st[3] != 0) && st[1] == 0 {
+        st[1] = st[0] + 1;
+    }
+    return 0;
+}
+
+// ---- making a line ---------------------------------------------------------------------------
+// Each of these adds at `at` and answers where the line now ends. A line that would grow past what is
+// taken stops growing: the caller sees it has, by `sealed` answering -1.
+
+// `text[from..to]`, and a space. A field that is empty, or has a space or a byte that is not print in it,
+// is written as `?`, so that a line always has its eleven fields.
+pub fn word[&l, &t](ln: &!l [byte], at: int, text: &t [byte], from: int, to: int) -> [] int {
+    var good = from >= 0 && to > from && to <= len(text) && at >= 0 && at + (to - from) + 1 <= longest() - 66;
+    var i = from;
+    while good && i < to {
+        let c = int_of(text[i]);
+        good = c > 32 && c < 127;
+        i = i + 1;
+    }
+    if at < 0 || at + 2 > longest() - 66 {
+        return -1;
+    }
+    if !good {
+        ln[at] = byte_of('?');
+        ln[at + 1] = byte_of(' ');
+        return at + 2;
+    }
+    i = from;
+    var p = at;
+    while i < to {
+        ln[p] = text[i];
+        p = p + 1;
+        i = i + 1;
+    }
+    ln[p] = byte_of(' ');
+    return p + 1;
+}
+
+// `v` in decimal, and a space; a negative `v` is written `-`.
+pub fn number[&l](ln: &!l [byte], at: int, v: int) -> [] int {
+    if at < 0 || at + 21 > longest() - 66 {
+        return -1;
+    }
+    var p = at;
+    if v < 0 {
+        ln[p] = byte_of('-');
+        ln[p + 1] = byte_of(' ');
+        return p + 2;
+    }
+    var div = 1;
+    while v / div >= 10 {
+        div = div * 10;
+    }
+    while div > 0 {
+        ln[p] = byte_of('0' + v / div % 10);
+        p = p + 1;
+        div = div / 10;
+    }
+    ln[p] = byte_of(' ');
+    return p + 1;
+}
+
+// `bytes[0..n]` in hex, and a space.
+pub fn hexes[&l, &b](ln: &!l [byte], at: int, bytes: &b [byte], n: int) -> [] int {
+    if at < 0 || n < 0 || n > len(bytes) || at + n * 2 + 1 > longest() - 66 {
+        return -1;
+    }
+    var i = 0;
+    while i < n {
+        ln[at + i * 2] = byte_of(hex_digit(int_of(bytes[i]) >> 4 & 15));
+        ln[at + i * 2 + 1] = byte_of(hex_digit(int_of(bytes[i]) & 15));
+        i = i + 1;
+    }
+    ln[at + n * 2] = byte_of(' ');
+    return at + n * 2 + 1;
+}
+
+// The line `ln[0..at]`, which ends with a space, closed: its chain after `prev` and a line feed are added,
+// and `prev` becomes that chain. The length of the whole line; -1 if a field did not fit.
+pub fn sealed[&l, &p, &h, &d, &x](ln: &!l [byte], at: int, prev: &!p [byte], state: &!h [int], dig: &!d [byte], hex: &!x [byte]) -> [] int {
+    if at < 1 || at > longest() - 66 {
+        return -1;
+    }
+    chain(ln, at, prev, state, dig, hex);
+    var i = 0;
+    while i < 64 {
+        ln[at + i] = hex[i];
+        prev[i] = hex[i];
+        i = i + 1;
+    }
+    ln[at + 64] = byte_of(10);
+    return at + 65;
+}
