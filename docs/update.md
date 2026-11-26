@@ -1,7 +1,7 @@
 # A file sent over SSH, and a new kernel without a cable
 
 > **Status: built**, in QEMU, and used once on the real Pi 4 to replace the kernel on its own card
-> (below). 0.0.28. The board has not yet been turned off and on to start from the kernel that was sent.
+> (below), which it then started from after its power was cut and restored. 0.0.28.
 
 ## What it is
 
@@ -63,6 +63,7 @@ On the real Pi 4, from a Mac on the same network, to the card the board boots fr
 | `versions` | the kernel that was there, 368,832 bytes, kept |
 | `remove KERNEL8.IMG`, `write CONFIG.TXT x` | "a file the board starts from", twice; `CONFIG.TXT` unchanged |
 | `record` | 6 lines, each following |
+| the board turned off and on | `about` says 0.0.28: the firmware loaded the kernel that came over SSH; the host key and the record as before |
 
 ## What it does not do
 
