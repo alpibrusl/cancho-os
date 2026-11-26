@@ -7,7 +7,8 @@
 #   sudo MACHINE=virt ./ping.sh   the same over Ethernet: QEMU's virt machine, its network card on a tap interface
 # Exit 0 if every ping was answered, a UDP datagram to port 7 came back, a TCP connection to it echoed a line
 # and then 64 KB (BYTES=n for another size), port 9 refused one, and the kernel's own ping of this machine
-# was answered; and port 23 refused a connection before `net shell on` and gave the kernel's shell after it.
+# was answered; the kernel fetched a page from a web server here and was refused by a port with none; `exit`
+# over the shell's connection made the kernel hang up; and port 23 refused a connection before `net shell on` and gave the kernel's shell after it.
 set -u
 cd "$(dirname "$0")"
 MACHINE=${MACHINE:-raspi3b}
@@ -90,6 +91,29 @@ if [ -n "$ready" ]; then
     cat build/remote.txt
     grep -q "^remote: > cancho-os .* no Linux underneath" build/remote.txt || status=1
     grep -q "r-x  kernel code" build/remote.txt || status=1
+    # `exit` there: the kernel hangs up while Linux's end is still open (its input stays open six seconds)
+    (printf 'about\nexit\n'; sleep 6) | timeout 12 nc -N -w 10 10.0.0.2 23 | tr -d '\r' > build/exit.txt &
+    NC=$!
+    sleep 3
+    printf 'echo after exit\r' >&3
+    sleep 1
+    printf 'net\r' >&3
+    sleep 1
+    tr -d '\r' < build/ping-uart.out | awk '/^after exit/ { f = 1 } f && /^shell on port 23/ { print "exit: " $0; exit }'
+    wait $NC
+    grep -q "bye" build/exit.txt && echo "exit: the kernel said bye" || status=1
+    # the kernel opens a connection: a web server on this machine, asked for its page; and a port with none
+    mkdir -p build/www && echo "a page from linux, for cancho-os" > build/www/index.html
+    (cd build/www && exec python3 -m http.server 8099 --bind 10.0.0.1) > /dev/null 2>&1 &
+    WWW=$!
+    sleep 1
+    printf 'http 10.0.0.1 8099\r' >&3
+    sleep 3
+    printf 'http 10.0.0.1 8098\r' >&3
+    sleep 3
+    kill $WWW 2>/dev/null
+    grep -q "a page from linux, for cancho-os" build/ping-uart.out || status=1
+    grep -q "no connection to 10.0.0.1 port 8098" build/ping-uart.out || status=1
     if [ "$MACHINE" = virt ]; then
         # what this machine's own ARP table learned from the kernel's answer
         ip neigh show dev tap0

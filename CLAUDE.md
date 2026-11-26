@@ -33,6 +33,8 @@ Rules of the road
   A change to TCP is tried against a real stack before it is believed: `MACHINE=virt TCPFILE=... ./test.sh`
   (QEMU's own TCP) here, `sudo ./ping.sh` (Linux's) in CI. Twice every test passed and a real stack
   showed the code wrong (docs/network.md, section 7): never take back window that was offered.
+- `tcp_connect` is a name of cancho's prelude, and `where` a keyword: `inet` says `tcp_dial`.
+  A command that waits on the network (`http`) sets k[39] so `session` leaves the shell's connection alone.
 - Randomness (docs/random.md): `rng_word` reads the generator, the pool at k[4136..] is what other code takes
   from. QEMU's raspi4b has no RNG200 and reading 0xfe104000 there faults: do not add the Pi 4 driver without
   a real board to try it on. Never print or reuse a word taken from the pool.

@@ -1,7 +1,8 @@
 # The network: IPv4 over a serial line first
 
-> **Status: built, four slices.** The kernel answers `ping`, a UDP echo and a TCP echo, and gives its
-> shell to a TCP connection when the console says so (section 8), over two links:
+> **Status: built, five slices.** The kernel answers `ping`, a UDP echo and a TCP echo, gives its
+> shell to a TCP connection when the console says so (section 8), and can end a connection and open
+> one (section 9), over two links:
 > SLIP on the second serial port of a Pi 3 or Pi 4, and Ethernet through a virtio network card on QEMU's
 > `virt` machine (section 6). It can ping (section 7). All of it in QEMU. Every number below was produced
 > by the command next to it, at the commit that adds its section. Nothing here has run on a real board.
@@ -282,12 +283,58 @@ Limits of this slice, besides "What it is not" above:
 
 - **A command's output is kept whole before it is sent, up to 4,096 bytes;** more is cut, and says so.
 - **A second connection waits in silence** until the first has gone.
-- **The kernel cannot hang up.** A connection that never finishes holds the shell; only `net shell off`
-  followed by its own closing, or a reset, frees it.
+- **The kernel could not hang up** when this was written; section 9 adds `exit` and five minutes of
+  silence.
 - **`crash` from the network halts the machine** as it does from the console, and the report goes to
   the serial port.
 
-## 9. Next
+## 9. Ending a connection, and opening one
+
+*(Fifth slice.)*
+
+### What is wanted
+
+Two things section 8 lists as limits. The kernel could not hang up, so a client that never left held the
+shell for ever. And it could not open a connection, so it could ask nothing of another machine.
+
+### The shape
+
+- **`tcp_close` works on an open connection too.** Our FIN goes out after what is still to be sent; the
+  connection then waits for the other end's FIN (state 5), acknowledges it, and is gone. What the other
+  end still sends meanwhile is acknowledged and thrown away. If its FIN never comes, the connection is
+  dropped after a minute of silence.
+- **`tcp_dial` opens one**: a SYN to an address and port, from a port the caller chooses. When the
+  SYN and ACK come back the connection is open and is the caller's to read and write, like one on its
+  own port. A reset means refused; no answer means five more tries and then nothing.
+- **In the kernel:** `exit` in the shell over a connection hangs up, and so does five minutes of
+  silence there. `http <address> <port>` opens a connection, asks for `/` in HTTP/1.0, and prints what
+  comes back: the smallest thing that shows a connection opened from here doing something.
+
+### What it does not do
+
+- **No waiting after the last acknowledgement** (TCP's TIME-WAIT, two minutes in which a late segment
+  of the old connection is still recognised). If our acknowledgement of the other end's FIN is lost, its
+  FIN comes again and is answered with a reset.
+- **No two machines opening to each other at once** (a SYN answered by a SYN).
+- **`http` is not a client to rely on:** one request, no headers of its own but the first line, no name
+  lookup (an address only), no TLS, and the shell waits while it runs.
+- **Only the same network**, as for `ping`: no gateway.
+
+### What is built, and how it is checked
+
+`src/inet.cho`: `tcp_close` on an open connection, `tcp_dial`, `tcp_quiet`, two more states. `src/kernel.cho`:
+`exit` and the five minutes, `http`, and `resolve` (the ARP question `ping` asked, now shared).
+`./authority.sh`: "as recorded".
+
+| | what | against |
+|---|---|---|
+| `cancho test tests/tcp_test.cho src/inet.cho --std` | 34 tests (26 before) | segments from the second implementation: finishing first; what was written going out with our FIN; both ends finishing at once; an end that never finishes; a connection opened, asked and answered; refused; an answer to another SYN; no room |
+| `MACHINE=virt ./test.sh 'net up' 'http 10.0.0.1 8099'` with Python's `http.server` on the host | the kernel's connection through QEMU's TCP | the server's headers and its page printed, "[219 bytes]"; a port with no server: "refused, or no answer" |
+| the same typed over the shell's connection, then `exit`, then `about` | | the page, "bye", and no answer to `about`: the kernel had hung up |
+| `exit` with the client's input held open 8 s (by hand) | | the console's `net` says "nobody connected" and "0 open" while the client is still there |
+| `sudo ./ping.sh`, `sudo MACHINE=virt ./ping.sh` (Linux, CI) | both links, Linux's TCP and Python's `http.server` on Linux | the page fetched; a port with no server refused; after `exit`, "nobody connected" while Linux's end is still open |
+
+## 10. Next
 
 The order, the boards and what each driver is written from are in [`drivers.md`](drivers.md).
 

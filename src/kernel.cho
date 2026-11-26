@@ -40,6 +40,7 @@ import inet;
 //   the shell over a connection: k[26] `putc` writes to it, not the serial port   k[27] bytes waiting to go there, at k[40..]
 //   k[28] bytes of a telnet option still to skip   k[29] its connection, plus one (0: none)   k[30] its port (0: closed)
 //   randomness: k[34] the generator (0 none, 1 virtio-rng, 3 the Pi 3's)   k[35] its registers   k[36] its queue's counter
+//   k[39] a command is waiting on the network (the shell's connection is not read)   k[4152] `exit` was typed over the connection
 //   k[37] words ready, at k[4136..]   k[38] words used to begin connections
 //   k[31] the length of the line typed there   k[32] its last byte was a carriage return   k[33] bytes printed and not kept
 //   k[10] the network link is up   k[11] packets answered   k[12] packets dropped   k[13] why the last one was
@@ -730,6 +731,7 @@ fn net_take[&mu, &mv, &md, &s, &a, &b, &w, &t, &g, &h](bus: &!mu Mmio("0x3f21500
         k[28] = 0;
         k[31] = 0;
         k[32] = 0;
+        k[4152] = 0;
     }
     return 0;
 }
@@ -741,8 +743,19 @@ fn net_take[&mu, &mv, &md, &s, &a, &b, &w, &t, &g, &h](bus: &!mu Mmio("0x3f21500
 // bytes of it) and the output waiting for it (k[40..], k[27] of it; `putc` fills it).
 // It touches no hardware. Answers 1 when a whole line is in `rline`, 2 when a connection
 // has just been given the shell and should be greeted, 0 otherwise.
-fn session[&s, &t, &g, &h, &l, &w](k: &!s [int], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], rline: &!l [byte], wire: &!w [byte]) -> [] int {
-    if k[30] == 0 {
+fn session[&s, &t, &g, &h, &l, &w](k: &!s [int], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], rline: &!l [byte], wire: &!w [byte], now: int) -> [] int {
+    if k[29] != 0 && inet.tcp_state(tcp, k[29] - 1) != 2 && inet.tcp_state(tcp, k[29] - 1) != 3 {
+        // the shell's connection has gone
+        k[29] = 0;
+        k[27] = 0;
+        k[28] = 0;
+        k[31] = 0;
+        k[32] = 0;
+        k[4152] = 0;
+    }
+    if k[30] == 0 || k[39] != 0 {
+        // the port is closed; or a command is itself waiting on the network, and the line it was typed
+        // on must not be read further meanwhile
         return 0;
     }
     if k[29] == 0 {
@@ -780,6 +793,12 @@ fn session[&s, &t, &g, &h, &l, &w](k: &!s [int], tcp: &!t [int], bufs: &!g [byte
     }
     if k[27] > 0 {
         // nothing more is read until what was said has gone
+        return 0;
+    }
+    if k[4152] != 0 || inet.tcp_quiet(tcp, c, now) > 300000 {
+        // `exit` was typed there, or nothing has been for five minutes: the kernel hangs up
+        k[4152] = 0;
+        inet.tcp_close(tcp, c);
         return 0;
     }
     while inet.tcp_read(tcp, inbox, c, wire, 1) == 1 {
@@ -827,7 +846,7 @@ fn net_poll[&mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l](bus: &!mu Mmio("0
             budget = budget - 1;
         }
     }
-    let ready = session(k, tcp, bufs, inbox, rline, wire);
+    let ready = session(k, tcp, bufs, inbox, rline, wire, now);
     var c = 0;
     while c < inet.tcp_count(tcp, bufs, inbox) {
         var m = 0;
@@ -893,6 +912,142 @@ fn put_address[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201
     return put_dec(con, k, a & 255);
 }
 
+// Whose card has `target`? Asked of every card (ARP), unless it is the neighbour already
+// remembered. Its card's address; 0 on the serial line, which has none; -1 if nobody answers
+// within a second. Whatever else arrives meanwhile is answered as always.
+fn resolve[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], target: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
+    if k[10] != 2 {
+        return 0;
+    }
+    if k[21] == target {
+        return k[22];
+    }
+    let ours = net_address();
+    let q = inet.arp_request(reply, k[19], ours, target);
+    if q > 0 {
+        vnet_send(vio, dma, k, reply, q);
+    }
+    let asked = now_us(cpu);
+    var card = -1;
+    while card < 0 && now_us(cpu) - asked < 1000000 {
+        let n = link_recv(bus, vio, dma, k, ns, frame);
+        if n > 0 {
+            card = inet.arp_answer_from(frame, n, k[19], ours, target);
+            if card < 0 {
+                net_take(bus, vio, dma, k, frame, n, reply, wire, tcp, bufs, inbox, uptime_ms(cpu), cpu_read(cpu, "cntvct_el0"));
+            }
+        }
+    }
+    if card < 0 {
+        puts(con, k, "nobody on this network says they are ");
+        put_address(con, k, target);
+        puts(con, k, "\r\n");
+        return -1;
+    }
+    k[21] = target;
+    k[22] = card;
+    return card;
+}
+
+// `<a.b.c.d> <port>` at `line[from..n]`: the address times 65536, plus the port. -1 if it is not that.
+fn address_and_port[&r](line: &r [byte], from: int, n: int) -> [] int {
+    var sp = from;
+    while sp < n && int_of(line[sp]) != ' ' {
+        sp = sp + 1;
+    }
+    let a = address(line, from, sp);
+    var port = 0;
+    var i = sp + 1;
+    if a < 0 || i >= n {
+        return -1;
+    }
+    while i < n {
+        let c = int_of(line[i]);
+        if c < '0' || c > '9' || port > 6553 {
+            return -1;
+        }
+        port = port * 10 + c - '0';
+        i = i + 1;
+    }
+    if port < 1 || port > 65535 {
+        return -1;
+    }
+    return a * 65536 + port;
+}
+
+// `http <address> <port>`: the kernel opens a connection, asks for `/` in HTTP/1.0, and
+// prints what comes back until the other end finishes, for at most five seconds. The
+// shell waits meanwhile; the network is served as always.
+fn net_http[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], rline: &!l [byte], dest: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
+    if k[10] == 0 {
+        return puts(con, k, "the link is down: `net up` first\r\n");
+    }
+    if dest < 0 {
+        return puts(con, k, "usage: http <a.b.c.d> <port>\r\n");
+    }
+    let target = dest / 65536;
+    let card = resolve(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, target);
+    if card < 0 {
+        return 0;
+    }
+    // a number nobody can guess to begin at, if there is one; and a port of ours not used a moment ago
+    var first = cpu_read(cpu, "cntvct_el0");
+    if k[37] > 0 {
+        k[37] = k[37] - 1;
+        first = k[4136 + k[37]];
+    }
+    k[23] = k[23] + 1;
+    let c = inet.tcp_dial(tcp, bufs, inbox, target, dest % 65536, 49152 + k[23] % 16384, uptime_ms(cpu), first, card);
+    if c < 0 {
+        return puts(con, k, "no room for another connection\r\n");
+    }
+    let began = uptime_ms(cpu);
+    var opened = false;
+    var printed = 0;
+    k[39] = 1;
+    while inet.tcp_state(tcp, c) != 0 && uptime_ms(cpu) - began < 5000 {
+        net_poll(bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, rline, uptime_ms(cpu), cpu_read(cpu, "cntvct_el0"));
+        let state = inet.tcp_state(tcp, c);
+        if state == 2 && !opened {
+            opened = true;
+            inet.tcp_write(tcp, bufs, c, "GET / HTTP/1.0\r\n\r\n", 0, 18);
+        }
+        let n = inet.tcp_read(tcp, inbox, c, wire, 256);
+        var i = 0;
+        while i < n {
+            let ch = int_of(wire[i]);
+            if ch == 10 {
+                puts(con, k, "\r\n");
+            } else if ch >= 32 && ch < 127 {
+                putc(con, k, ch);
+            } else if ch != 13 {
+                putc(con, k, '.');
+            }
+            i = i + 1;
+        }
+        printed = printed + n;
+        if state == 3 && n == 0 {
+            // the other end has finished and all of it is printed: we finish too
+            inet.tcp_close(tcp, c);
+        }
+    }
+    if inet.tcp_state(tcp, c) != 0 {
+        // five seconds: hang up, and let the closing happen behind the shell
+        inet.tcp_close(tcp, c);
+    }
+    k[39] = 0;
+    if !opened {
+        puts(con, k, "no connection to ");
+        put_address(con, k, target);
+        puts(con, k, " port ");
+        put_dec(con, k, dest % 65536);
+        return puts(con, k, ": refused, or no answer\r\n");
+    }
+    puts(con, k, "\r\n[");
+    put_dec(con, k, printed);
+    return puts(con, k, " bytes]\r\n");
+}
+
 // `ping <address>`: the kernel speaks first. An echo request, and the time to its reply.
 // On the card the address must first be asked for (ARP); the last answer is remembered.
 // Whatever else arrives meanwhile is answered as always.
@@ -905,29 +1060,8 @@ fn net_ping[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &r](cpu: &!f
         return puts(con, k, "usage: ping <a.b.c.d>\r\n");
     }
     let ours = net_address();
-    if k[10] == 2 && k[21] != target {
-        let q = inet.arp_request(reply, k[19], ours, target);
-        if q > 0 {
-            vnet_send(vio, dma, k, reply, q);
-        }
-        let asked = now_us(cpu);
-        var card = -1;
-        while card < 0 && now_us(cpu) - asked < 1000000 {
-            let n = link_recv(bus, vio, dma, k, ns, frame);
-            if n > 0 {
-                card = inet.arp_answer_from(frame, n, k[19], ours, target);
-                if card < 0 {
-                    net_take(bus, vio, dma, k, frame, n, reply, wire, tcp, bufs, inbox, uptime_ms(cpu), cpu_read(cpu, "cntvct_el0"));
-                }
-            }
-        }
-        if card < 0 {
-            puts(con, k, "nobody on this network says they are ");
-            put_address(con, k, target);
-            return puts(con, k, "\r\n");
-        }
-        k[21] = target;
-        k[22] = card;
+    if resolve(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, target) < 0 {
+        return 0;
     }
     k[23] = k[23] + 1;
     var at = 0;
@@ -1565,9 +1699,9 @@ fn run[&f, &mc, &mu, &mt, &mx, &mz, &s, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000
         return 0;
     }
     if same(line, n, "help") {
-        puts(con, k, "commands: help, about, echo <text>, uptime, ticks, mem, random, net [up|down], net shell [on|off], ping <address>, servo scan, servo pos, arm zero, arm pose, arm check <5 angles>, crash [null|write]\r\n");
+        puts(con, k, "commands: help, about, echo <text>, uptime, ticks, mem, random, net [up|down], net shell [on|off], ping <address>, http <address> <port>, servo scan, servo pos, arm zero, arm pose, arm check <5 angles>, crash [null|write]\r\n");
     } else if same(line, n, "about") {
-        puts(con, k, "cancho-os 0.0.14: a kernel written in cancho, no Linux underneath (");
+        puts(con, k, "cancho-os 0.0.15: a kernel written in cancho, no Linux underneath (");
         if k[1] >= 3 {
             puts(con, k, "Raspberry Pi ");
             put_dec(con, k, k[1]);
@@ -1672,7 +1806,13 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mv, &md, &mt, &mx, &mz, &s](cpu: &!f Cpu, con:
             } else if c == -2 {
                 // a line from the network: the same commands, and what they print goes back there
                 k[26] = 1;
-                if same(rline, k[31], "random") {
+                if same(rline, k[31], "exit") {
+                    puts(con, k, "bye\r\n");
+                    k[4152] = 1;
+                } else if k[31] > 5 && same(rline, 5, "http ") {
+                    let dest = address_and_port(rline, 5, k[31]);
+                    net_http(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, rline, dest);
+                } else if same(rline, k[31], "random") {
                     put_random(con, rng, vio, dma, k);
                 } else if k[31] > 5 && same(rline, 5, "ping ") {
                     net_ping(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, rline, 5, k[31]);
@@ -1684,12 +1824,16 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mv, &md, &mt, &mx, &mz, &s](cpu: &!f Cpu, con:
                     k[27] = 4000;
                     puts(con, k, "\r\n[more was printed than is kept: cut]\r\n");
                 }
-                puts(con, k, "> ");
+                if k[4152] == 0 {
+                    puts(con, k, "> ");
+                }
                 k[26] = 0;
                 k[31] = 0;
             } else if c == 13 || c == 10 {
                 puts(con, k, "\r\n");
-                if same(line, n, "random") {
+                if n > 5 && same(line, 5, "http ") {
+                    net_http(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, rline, address_and_port(line, 5, n));
+                } else if same(line, n, "random") {
                     put_random(con, rng, vio, dma, k);
                 } else if n > 5 && same(line, 5, "ping ") {
                     net_ping(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, line, 5, n);
@@ -1715,7 +1859,7 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mv, &md, &mt, &mx, &mz, &s](cpu: &!f Cpu, con:
 
 fn kernel[&f, &mc, &mp, &mi, &mu, &mr, &mv, &md, &mt, &mx, &mz, &mq](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), pins: &!mp Mmio("0x3f200004..0x3f200008,0xfe200004..0xfe200008"), irq: &!mi Mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), rng: &!mr Mmio("0x3f104000..0x3f10400c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), tab: &!mt Mmio("0x200000..0x208000,0x40200000..0x40208000"), code: &mx Mmio("0x80001..0x200000,0x40080001..0x40200000"), probe: &!mz Mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001"), fault: &mq Mmio("0x208000..0x208008,0x40208000..0x40208008")) -> [cpu("cntfrq_el0"), cpu("cntv_ctl_el0"), cpu("cntv_cval_el0"), cpu("cntv_tval_el0"), cpu("cntvct_el0"), cpu("elr_el1"), cpu("esr_el1"), cpu("far_el1"), cpu("mair_el1"), cpu("midr_el1"), cpu("sctlr_el1"), cpu("tcr_el1"), cpu("tlbi_vmalle1"), cpu("ttbr0_el1"), cpu("wfi"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f200004..0x3f200008,0xfe200004..0xfe200008"), mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x200000..0x208000,0x40200000..0x40208000"), mmio("0x80001..0x200000,0x40080001..0x40200000"), mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001"), mmio("0x208000..0x208008,0x40208000..0x40208008"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000"), mmio("0x3f104000..0x3f10400c")] int {
     region r {
-        let k = alloc_slice[r](40 + 4096 + 16, 0);
+        let k = alloc_slice[r](40 + 4096 + 16 + 8, 0);
         if detect(cpu, k) == 0 {
             // a board this kernel has no addresses for: nothing can even be printed
             return 1;

@@ -137,7 +137,8 @@ Pi 4's generator has no driver yet, because QEMU's Pi 4 does not have the device
 
 The kernel answers `ping`, a UDP echo and a TCP echo (port 7) over two links: a serial line
 (SLIP) on the second serial port of a Pi, and Ethernet, with ARP, through a virtio network card
-on QEMU's `virt` machine. It can also speak first: `ping 10.0.0.1` in its shell. And `net shell on`, typed at the serial
+on QEMU's `virt` machine. It can also speak first: `ping 10.0.0.1` in its shell, and `http 10.0.0.1 8000` opens a connection
+and prints the page a web server there gives. And `net shell on`, typed at the serial
 console, gives that shell to whoever connects to port 23 (`nc 10.0.0.2 23`): no password and no
 encryption, so only on a cable you trust, and only until SSH replaces it. TCP here is small
 on purpose: connections are opened from the other end only, and at most one segment's worth of
