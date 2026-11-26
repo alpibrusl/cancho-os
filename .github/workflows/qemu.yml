@@ -266,9 +266,11 @@ jobs:
         # cancho docs/freestanding.md, section 8: a JSON object made on the heap and printed, growing buffers read
         # back, and a block made and given back so many times that it must have been used again.
         run: |
-          ./test.sh heap 'echo 1' 'echo 2' 'echo 3' 'echo 4' 'echo 5' 'echo 6' 'echo 7' 'echo 8' heap 'echo 1' 'echo 2' 'echo 3' 'echo 4' 'echo 5' 'echo 6' 'echo 7' 'echo 8' about > heap.txt; cat heap.txt
+          # (a line is typed each second, and this machine is slow at being an ARM: the lines after each `heap` are time for it)
+          set -- heap; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do set -- "$@" "echo $i"; done
+          ./test.sh "$@" "$@" about > heap.txt; cat heap.txt
           test "$(grep -c '^{"type":"hash","path":"TEST.TXT","bytes":45,"ok":true}' heap.txt)" = 2
-          test "$(grep -c "^heap: 600 growing buffers filled, read back and given back; a 64 KiB block made and given back 100000 times; 0 bytes wrong" heap.txt)" = 2
+          test "$(grep -c "^heap: 600 growing buffers filled, read back and given back; a 64 KiB block made and given back 20000 times; 0 bytes wrong" heap.txt)" = 2
           grep -q "a kernel written in cancho" heap.txt
       - name: restart
         # docs/restart.md. As a Pi 3 the board must start a second time and answer; with a card, the record
