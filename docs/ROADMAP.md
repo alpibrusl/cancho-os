@@ -66,6 +66,8 @@
   for a wider one (cancho `docs/mmio.md` 3), not fixed yet.
 - `load` (docs/load.md): a kernel sent over the serial console replaces the running one. A tool for bringing up
   hardware on the real boards without moving the SD card for every build; `board/send.py` is the sender.
+- BOOT.TXT (2026-11-26, docs/boot.md): the lines the board types to itself at its start (the network, SSH, where
+  the servo bus is), from a file written at the console only. With `put` and `restart`, an update needs nobody.
 - A heap (2026-11-26): cancho's bare target got `malloc` and `free` (cancho docs/freestanding.md 8), asked for
   here so that cancho-tools, whose answers are JSON written through `std.json`, can be built into the kernel.
   `heap` tries it: JSON made and printed, 600 buffers checked, a 64 KiB block reused 20,000 times. In QEMU.

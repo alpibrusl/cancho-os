@@ -1,0 +1,105 @@
+edition 7;
+
+module boot;
+
+// boot.cho -- the lines of BOOT.TXT (docs/boot.md), with no disk under them: which of them the kernel runs at its
+// start, as if they had been typed at the console.
+//
+// Only a short list is run, because the file is run with nobody there: what brings the board back to where it was
+// (the network, SSH, where the servo bus is) and `echo`. A line that could change the disk, load a kernel or
+// restart the board is not on it. Nothing here traps on any bytes.
+
+// The most lines that are run, and the longest a line may be.
+pub fn most() -> [] int {
+    return 16;
+}
+
+pub fn longest() -> [] int {
+    return 80;
+}
+
+fn is[&t, &w](text: &t [byte], from: int, to: int, word: &w [byte]) -> [] bool {
+    if to - from != len(word) {
+        return false;
+    }
+    var i = 0;
+    while i < len(word) {
+        if int_of(text[from + i]) != int_of(word[i]) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn begins[&t, &w](text: &t [byte], from: int, to: int, word: &w [byte]) -> [] bool {
+    return to - from > len(word) && is(text, from, from + len(word), word);
+}
+
+// May the line `text[from..to]` (no spaces at its ends) be run at the start?
+pub fn allowed[&t](text: &t [byte], from: int, to: int) -> [] bool {
+    if from < 0 || to > len(text) || to <= from || to - from > longest() {
+        return false;
+    }
+    var i = from;
+    while i < to {
+        let c = int_of(text[i]);
+        if c < 32 || c > 126 {
+            return false;
+        }
+        i = i + 1;
+    }
+    if is(text, from, to, "net up") || is(text, from, to, "net eth") || is(text, from, to, "net dhcp") || is(text, from, to, "net ssh on") {
+        return true;
+    }
+    if is(text, from, to, "servo via off") {
+        return true;
+    }
+    return begins(text, from, to, "servo via ") || begins(text, from, to, "echo ");
+}
+
+// The file `text[0..n]` made into what is typed: each line that is allowed, then a carriage return, into `out`.
+// Empty lines and lines that begin with `#` are passed over. `count` gets 0 how many lines are to be run and
+// 1 how many were refused. Answers how many bytes of `out` are used.
+pub fn script[&t, &o, &c](text: &t [byte], n: int, out: &!o [byte], count: &!c [int]) -> [] int {
+    count[0] = 0;
+    count[1] = 0;
+    var size = n;
+    if size > len(text) {
+        size = len(text);
+    }
+    var used = 0;
+    var at = 0;
+    while at < size {
+        var end = at;
+        while end < size && int_of(text[end]) != 10 {
+            end = end + 1;
+        }
+        // the line without the spaces, tabs and carriage return at its ends
+        var from = at;
+        var to = end;
+        while from < to && (int_of(text[from]) == 32 || int_of(text[from]) == 9) {
+            from = from + 1;
+        }
+        while to > from && (int_of(text[to - 1]) == 32 || int_of(text[to - 1]) == 9 || int_of(text[to - 1]) == 13) {
+            to = to - 1;
+        }
+        if to > from && int_of(text[from]) != '#' {
+            if allowed(text, from, to) && count[0] < most() && used + (to - from) + 1 <= len(out) {
+                var i = from;
+                while i < to {
+                    out[used] = text[i];
+                    used = used + 1;
+                    i = i + 1;
+                }
+                out[used] = byte_of(13);
+                used = used + 1;
+                count[0] = count[0] + 1;
+            } else {
+                count[1] = count[1] + 1;
+            }
+        }
+        at = end + 1;
+    }
+    return used;
+}

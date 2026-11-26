@@ -137,9 +137,9 @@ fn kept_name[&r](text: &r [byte], from: int, to: int) -> [] bool {
 
 // Is `text[from..to]` a file the board starts from? The firmware reads these before any kernel runs, and a
 // wrong one stops the board until its card is mended on another machine. The kernel itself, the two files of
-// settings, and anything the firmware loads (`.ELF`, `.DAT`, `.DTB`, `.BIN`, `.IMG`).
+// settings, BOOT.TXT (the kernel's own lines for its start, docs/boot.md), and anything the firmware loads (`.ELF`, `.DAT`, `.DTB`, `.BIN`, `.IMG`).
 pub fn boot_name[&r](text: &r [byte], from: int, to: int) -> [] bool {
-    if fat.named("CONFIG.TXT", 10, text, from, to) || fat.named("CMDLINE.TXT", 11, text, from, to) {
+    if fat.named("CONFIG.TXT", 10, text, from, to) || fat.named("CMDLINE.TXT", 11, text, from, to) || fat.named("BOOT.TXT", 8, text, from, to) {
         return true;
     }
     if to - from < 5 || to > len(text) || from < 0 || int_of(text[to - 4]) != '.' {
@@ -156,7 +156,8 @@ pub fn put_name[&r](text: &r [byte], from: int, to: int) -> [] bool {
     var good = false;
     region r {
         let sec = alloc_slice[r](512, byte_of(0));
-        good = !kept_name(text, from, to) && fat.put_entry(sec, 0, text, from, to, 0, 0) == 0;
+        // (BOOT.TXT is run with the console's authority at the next start: it is written at the console only)
+        good = !kept_name(text, from, to) && !fat.named("BOOT.TXT", 8, text, from, to) && fat.put_entry(sec, 0, text, from, to, 0, 0) == 0;
     }
     return good;
 }
