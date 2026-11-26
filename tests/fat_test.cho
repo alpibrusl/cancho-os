@@ -523,3 +523,118 @@ fn test_no_name_makes_put_entry_trap() -> [] int {
     }
     return 0;
 }
+
+// ── directories made, entries removed, clusters given back ──
+
+fn test_a_directory_made_here_is_the_directory_macos_made() -> [] int {
+    region a {
+        let theirs = alloc_slice[a](512, byte_of(0));
+        let ours = alloc_slice[a](512, byte_of(9));
+        let got = alloc_slice[a](12, byte_of(0));
+        let out = alloc_slice[a](3, 0);
+        // the two entries `mkdir OLD` put at the start of the new directory, on a volume macOS made
+        set(theirs, "2e2020202020202020202012006717877a5d7a5d000017877a5d0200000000002e2e202020202020202020120000000821002100000017877a5d000000000000");
+        test.assert_eq(fat.put_dots(ours, 2, 0), 0);
+        var k = 0;
+        while k < 64 {
+            // the names, that each is a directory, and the two halves of the cluster each names
+            let field = k % 32;
+            if field < 11 || field == 20 || field == 21 || field == 26 || field == 27 {
+                test.assert_eq(int_of(ours[k]), int_of(theirs[k]));
+            }
+            if field == 11 {
+                test.assert_eq(int_of(ours[k]) / 16 % 2, 1);
+                test.assert_eq(int_of(theirs[k]) / 16 % 2, 1);
+            }
+            k = k + 1;
+        }
+        // and the entry that names the directory, in the one above it
+        set(theirs, "4f4c44202020202020202010006717877a5d7a5d000017877a5d020000000000");
+        test.assert_eq(fat.put_directory(ours, 0, "old", 0, 3, 2), 0);
+        k = 0;
+        while k < 12 {
+            test.assert_eq(int_of(ours[k]), int_of(theirs[k]));
+            k = k + 1;
+        }
+        test.assert_eq(int_of(ours[26]), int_of(theirs[26]));
+        test.assert_eq(int_of(ours[27]), int_of(theirs[27]));
+        test.assert_eq(fat.entry(ours, 0, got, out), fat.entry_directory());
+        test.assert(fat.named(got, out[0], "OLD", 0, 3));
+        test.assert_eq(out[1], 2);
+        // a directory with no cluster is none
+        test.assert_eq(fat.put_directory(ours, 0, "old", 0, 3, 0), -1);
+        test.assert_eq(fat.put_dots(ours, 1, 0), -1);
+    }
+    return 0;
+}
+
+fn test_an_entry_erased_names_nothing_and_its_place_is_free() -> [] int {
+    region a {
+        let s = alloc_slice[a](512, byte_of(0));
+        let got = alloc_slice[a](12, byte_of(0));
+        let out = alloc_slice[a](3, 0);
+        set(s, root32());
+        test.assert_eq(fat.free_slot(s), -1);
+        test.assert_eq(fat.erase(s, 4), 0);
+        test.assert_eq(fat.entry(s, 4, got, out), fat.entry_skip());
+        test.assert_eq(fat.free_slot(s), 4);
+        // its neighbours are as they were
+        test.assert_eq(fat.entry(s, 1, got, out), fat.entry_file());
+        test.assert_eq(fat.erase(s, 16), -1);
+    }
+    return 0;
+}
+
+fn test_a_cluster_given_back_is_free_again() -> [] int {
+    region a {
+        let b = alloc_slice[a](512, byte_of(0));
+        let s = alloc_slice[a](512, byte_of(0));
+        let info = alloc_slice[a](fat.facts(), 0);
+        set(b, boot16());
+        fat.mount(b, 0, info);
+        set(s, "f0ffffff00000000ffff0600ffff000000000a000b000c000d000e000f0010001100120013001400150016001700180019001a001b001c001d001e001f0020002100220023002400250026002700280029002a002b002c002d002e002f0030003100320033003400350036003700380039003a003b003c003d003e003f0040004100420043004400450046004700480049004a004b004c004d004e004f0050005100520053005400550056005700580059005a005b005c005d005e005f0060006100620063006400650066006700680069006a006b006c006d006e006f0070007100720073007400750076007700780079007a007b007c007d007e007f0080008100820083008400850086008700880089008a008b008c008d008e008f0090009100920093009400950096009700980099009a009b00ffff9d00ffff00000000a100ffff00000000a500ffffa700ffff00000000ffffac00ffff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+        // BIG.BIN's first cluster is in use: given back, it is the first free one of its sector again
+        let before = fat.free_cluster(info, s, 0, 0);
+        test.assert(before != 9);
+        test.assert_eq(fat.set_free(info, s, 9), 0);
+        test.assert_eq(fat.next(info, s, 9), fat.chain_broken());
+        test.assert_eq(fat.free_cluster(info, s, 0, 9), 9);
+        test.assert_eq(fat.set_free(info, s, 1), -1);
+        set(b, boot32());
+        fat.mount(b, 0, info);
+        set(s, "f0ffff0fffffff0f03000000ffffff0f00000000000000000000000000000000000000000000000000000000ffffff0f0d0000000e0000000f00000010000000110000001200000013000000ffffff0f00000000000000000000000000000000000000000000000000000000000000001d0000001e0000001f000000200000002100000022000000230000002400000025000000260000002700000028000000290000002a0000002b0000002c0000002d0000002e0000002f000000300000003100000032000000330000003400000035000000360000003700000038000000390000003a0000003b0000003c0000003d0000003e0000003f000000400000004100000042000000430000004400000045000000460000004700000048000000490000004a0000004b0000004c0000004d0000004e0000004f000000500000005100000052000000530000005400000055000000560000005700000058000000590000005a0000005b0000005c0000005d0000005e0000005f000000600000006100000062000000630000006400000065000000660000006700000068000000690000006a0000006b0000006c0000006d0000006e0000006f000000700000007100000072000000730000007400000075000000760000007700000078000000790000007a0000007b0000007c0000007d0000007e0000007f00000080000000");
+        s[28 * 4 % 512 + 3] = byte_of(int_of(s[28 * 4 % 512 + 3]) % 16 + 160);
+        test.assert_eq(fat.set_free(info, s, 28), 0);
+        test.assert_eq(fat.free_cluster(info, s, 28 / 128, 28 % 128), 28);
+        // the top four bits stay
+        test.assert_eq(int_of(s[28 * 4 % 512 + 3]), 160);
+        set(s, "525261410000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007272416180f50100a7020000000000000000000000000000000055aa");
+        s[488] = byte_of(10);
+        s[489] = byte_of(0);
+        s[490] = byte_of(0);
+        s[491] = byte_of(0);
+        test.assert_eq(fat.summary_more(s, 586), 0);
+        test.assert_eq(int_of(s[488]) + int_of(s[489]) * 256, 596);
+    }
+    return 0;
+}
+
+fn test_a_version_has_a_number_for_a_name() -> [] int {
+    region a {
+        let name = alloc_slice[a](12, byte_of(0));
+        test.assert_eq(fat.version_name(name, 12), 10);
+        test.assert(fat.named(name, 10, "00000012.V", 0, 10));
+        test.assert_eq(fat.version_number(name, 10), 12);
+        test.assert_eq(fat.version_name(name, 99999999), 10);
+        test.assert_eq(fat.version_number(name, 10), 99999999);
+        test.assert_eq(fat.version_name(name, 100000000), -1);
+        test.assert_eq(fat.version_number("0000001A.V", 10), -1);
+        test.assert_eq(fat.version_number("00000012.X", 10), -1);
+        test.assert_eq(fat.version_number("HELLO.TXT", 9), -1);
+        // a name it makes is one `put_entry` takes
+        let s = alloc_slice[a](512, byte_of(0));
+        fat.version_name(name, 7);
+        test.assert_eq(fat.put_entry(s, 0, name, 0, 10, 5, 99), 0);
+    }
+    return 0;
+}

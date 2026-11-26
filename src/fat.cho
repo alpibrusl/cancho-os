@@ -502,3 +502,125 @@ pub fn summary_less[&b](s: &!b [byte], taken: int) -> [] int {
     put16(s, 490, (free - taken) / 65536);
     return 0;
 }
+
+// ── directories made, entries removed, clusters given back ──────────────────────────────────────────────
+
+// Entry `i` of `s` made to name a directory whose first cluster is `cluster`: as `put_entry`, but a
+// directory (its length is always written as 0).
+pub fn put_directory[&b, &t](s: &!b [byte], i: int, text: &t [byte], from: int, to: int, cluster: int) -> [] int {
+    if cluster < 2 || put_entry(s, i, text, from, to, cluster, 0) != 0 {
+        return -1;
+    }
+    s[i * 32 + 11] = byte_of(16);
+    return 0;
+}
+
+// The first two entries every directory but the top one begins with, in `s`, the first sector of its first
+// cluster: `.`, the directory itself, and `..`, the one it is in (0 when that is the top directory).
+pub fn put_dots[&b](s: &!b [byte], itself: int, parent: int) -> [] int {
+    if len(s) < 512 || itself < 2 || parent < 0 {
+        return -1;
+    }
+    var e = 0;
+    while e < 2 {
+        let at = e * 32;
+        var k = 0;
+        while k < 32 {
+            s[at + k] = byte_of(0);
+            k = k + 1;
+        }
+        k = 0;
+        while k < 11 {
+            s[at + k] = byte_of(32);
+            k = k + 1;
+        }
+        s[at] = byte_of(46);
+        var c = itself;
+        if e == 1 {
+            s[at + 1] = byte_of(46);
+            c = parent;
+        }
+        s[at + 11] = byte_of(16);
+        put16(s, at + 16, 33);
+        put16(s, at + 18, 33);
+        put16(s, at + 24, 33);
+        put16(s, at + 20, c / 65536);
+        put16(s, at + 26, c % 65536);
+        e = e + 1;
+    }
+    return 0;
+}
+
+// Entry `i` of `s` names nothing any more: it is marked deleted. What it named is not touched.
+pub fn erase[&b](s: &!b [byte], i: int) -> [] int {
+    if len(s) < 512 || i < 0 || i > 15 {
+        return -1;
+    }
+    s[i * 32] = byte_of(229);
+    return 0;
+}
+
+// In `s`, the sector of the table that holds `cluster`'s entry: the cluster is free again.
+pub fn set_free[&i, &b](info: &i [int], s: &!b [byte], cluster: int) -> [] int {
+    if len(info) < facts() || len(s) < 512 || cluster < 2 || cluster >= info[7] + 2 {
+        return -1;
+    }
+    if info[0] == 32 {
+        let at = cluster * 4 % 512;
+        let kept = int_of(s[at + 3]) / 16;
+        put16(s, at, 0);
+        put16(s, at + 2, kept * 4096);
+    } else {
+        put16(s, cluster * 2 % 512, 0);
+    }
+    return 0;
+}
+
+// FAT32's count of free clusters, when `given` have just been given back: up by that many, if it was a count.
+pub fn summary_more[&b](s: &!b [byte], given: int) -> [] int {
+    if len(s) < 512 || le32(s, 0) != 1096897106 || le32(s, 484) != 1631679090 {
+        return -1;
+    }
+    let free = le32(s, 488);
+    if given < 0 || free == 4294967295 || free + given > 4294967294 {
+        return 0;
+    }
+    put16(s, 488, (free + given) % 65536);
+    put16(s, 490, (free + given) / 65536);
+    return 0;
+}
+
+// The name of version `n` of something, in `name` (12 bytes): eight digits and `.V`. Answers its length, 10.
+pub fn version_name[&m](name: &!m [byte], n: int) -> [] int {
+    if len(name) < 10 || n < 0 || n > 99999999 {
+        return -1;
+    }
+    var v = n;
+    var i = 7;
+    while i >= 0 {
+        name[i] = byte_of(48 + v % 10);
+        v = v / 10;
+        i = i - 1;
+    }
+    name[8] = byte_of(46);
+    name[9] = byte_of(86);
+    return 10;
+}
+
+// If `name[0..n]` is a version's name, its number; -1 otherwise.
+pub fn version_number[&m](name: &m [byte], n: int) -> [] int {
+    if n != 10 || len(name) < 10 || int_of(name[8]) != 46 || upper(int_of(name[9])) != 86 {
+        return -1;
+    }
+    var v = 0;
+    var i = 0;
+    while i < 8 {
+        let c = int_of(name[i]);
+        if c < 48 || c > 57 {
+            return -1;
+        }
+        v = v * 10 + c - 48;
+        i = i + 1;
+    }
+    return v;
+}
