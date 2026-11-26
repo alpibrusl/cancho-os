@@ -43,6 +43,46 @@ at_el1:
     adr     x0, vectors
     msr     vbar_el1, x0
     isb
+    // Whatever is in the caches is not ours: the firmware's, or an earlier kernel's. The kernel turns
+    // them on later; they are emptied here, while they are off. Every level of data cache, every set
+    // and way of it (the architecture's own recipe), then the instruction cache and the TLB.
+    mrs     x0, clidr_el1
+    ubfx    w3, w0, #24, #3           // how many levels there are
+    cbz     w3, 9f
+    mov     w10, #0                   // the level
+5:  add     w2, w10, w10, lsl #1
+    lsr     w1, w0, w2
+    and     w1, w1, #7
+    cmp     w1, #2
+    b.lo    8f                        // no data cache at this level
+    lsl     w11, w10, #1
+    msr     csselr_el1, x11
+    isb
+    mrs     x1, ccsidr_el1
+    and     w2, w1, #7
+    add     w2, w2, #4                // log2 of a line's bytes
+    ubfx    w4, w1, #3, #10           // ways, less one
+    clz     w5, w4                    // where the way goes in the operand
+    ubfx    w6, w1, #13, #15          // sets, less one
+6:  mov     w7, w6
+7:  lsl     w8, w4, w5
+    orr     w8, w8, w11
+    lsl     w9, w7, w2
+    orr     w8, w8, w9
+    dc      isw, x8
+    subs    w7, w7, #1
+    b.ge    7b
+    subs    w4, w4, #1
+    b.ge    6b
+8:  add     w10, w10, #1
+    cmp     w10, w3
+    b.lo    5b
+9:  msr     csselr_el1, xzr
+    dsb     sy
+    ic      iallu
+    tlbi    vmalle1
+    dsb     sy
+    isb
     ldr     x0, =_start
     mov     sp, x0
     ldr     x0, =__bss_start

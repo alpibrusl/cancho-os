@@ -61,6 +61,13 @@ jobs:
           ./build/expect > expect.txt
           test "$(wc -l < arm-kernel.txt)" -eq 16 && diff arm-kernel.txt expect.txt
           grep -q "^refused: limit.joint (joint 5)" arm-kernel.txt
+      - name: what the firmware says the board is
+        # the mailbox, asked three questions (docs/genet.md); QEMU's Pi 3 answers, its virt has none to ask
+        run: |
+          ./test.sh board > board.txt; cat board.txt
+          grep -Eq "^revision 00a02082, serial [0-9a-f]{16}, card address ([0-9a-f]{2}:){5}[0-9a-f]{2}$" board.txt
+          MACHINE=virt ./test.sh board > noboard.txt; cat noboard.txt
+          grep -q "^this board has no firmware to ask" noboard.txt
       - name: a kernel loaded over the serial console
         # the running kernel takes another (this build, renamed 0.0.99) and starts it: a wrong checksum
         # must forget it, the right one must run it, and the fault report must still work afterwards

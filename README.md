@@ -131,8 +131,8 @@ UART); the protocol, and everything built on it, does not. Not verified in QEMU:
 ## Randomness
 
 `random` prints sixteen bytes from the board's own generator: virtio-rng on QEMU's `virt`, the BCM2835
-generator on a Pi 3. The kernel keeps a few words ready and begins each TCP connection at one. The
-Pi 4's generator has no driver yet, because QEMU's Pi 4 does not have the device to test against:
+generator on a Pi 3, the RNG200 on a real Pi 4 (started by `net eth`, since QEMU's Pi 4 has neither it
+nor the card). The kernel keeps a few words ready and begins each TCP connection at one.
 [docs/random.md](docs/random.md).
 
 ## The network
@@ -231,13 +231,11 @@ You need a Raspberry Pi 4, a microSD card and a USB-serial cable with **3.3 V** 
 
 What QEMU does not model, so where a real board may differ:
 
-- **The data cache.** The kernel turns it on with the MMU and does not invalidate it first.
-  QEMU has no cache. It did not hang on the one board tried, which says the firmware left the
-  cache clean that time, not that the kernel is right to rely on it.
+- **The data cache.** The boot stub now empties the caches before the kernel turns them on
+  (docs/load.md says what was seen without that). On the board it has run only at the start of
+  kernels sent with `load`, not yet at a power-on.
 - **The UART clock.** The divisor is for 48 MHz, the Pi 4's default. Garbage on the console
   points here (`init_uart_clock=48000000` in `config.txt` pins it).
-- **The card's address is made up** (`02:63:61:6e:63:04`): the firmware left none in the card, and
-  the kernel does not ask the firmware for the board's own. Two such boards on one network collide.
 - **The servo bus does not work on a Pi 4 header yet.** It is the mini UART, whose only
   header pins are the two the console uses. It has to move to another PL011 (UART3, on
   GPIO4/5) before a real arm can be read.
