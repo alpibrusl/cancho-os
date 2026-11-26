@@ -84,6 +84,10 @@ jobs:
           grep -qi "^tcp port 23, before: .*refused" ping.txt
           grep -q "^remote: > cancho-os .* no Linux underneath" ping.txt
           grep -q "^remote: .*r-x  kernel code" ping.txt
+          grep -q "^exit: shell on port 23: nobody connected" ping.txt
+          grep -q "^exit: the kernel said bye" ping.txt
+          grep -q "^a page from linux, for cancho-os" ping.txt
+          grep -q "^no connection to 10.0.0.1 port 8098: refused, or no answer" ping.txt
       - name: QEMU's virt machine, and its network card
         run: |
           # the same kernel linked for a board whose RAM starts at 1 GB: the shell, the timer, the MMU, a fault
@@ -105,6 +109,18 @@ jobs:
           grep -q "^tcp echo: 200000 bytes came back the same" tcp.txt
           grep -q "^reply from 10.0.0.1 in " tcp.txt
           grep -q "^tcp: 0 open" tcp.txt
+          # the kernel opens a connection: a page from a web server on this machine, through QEMU's TCP; a port
+          # with no server; and both again typed over the shell's connection, which `exit` then ends
+          mkdir -p www && echo "a page from the host, for cancho-os" > www/index.html
+          (cd www && exec python3 -m http.server 8099 --bind 127.0.0.1) > /dev/null 2>&1 &
+          sleep 1
+          MACHINE=virt RSH='http 10.0.0.1 8099\nexit\nabout\n' ./test.sh 'net up' 'net shell on' 'http 10.0.0.1 8099' 'http 10.0.0.1 8098' net > http.txt; cat http.txt
+          grep -q "^a page from the host, for cancho-os" http.txt
+          grep -q "^no connection to 10.0.0.1 port 8098: refused, or no answer" http.txt
+          grep -q "^remote: a page from the host, for cancho-os" http.txt
+          grep -q "^remote: > bye" http.txt
+          ! grep -q "^remote: .*no Linux underneath" http.txt
+          grep -q "^tcp: 0 open" http.txt
           # randomness: the virtual generator here, the Pi 3's own on that board, none on QEMU's Pi 4 (which
           # has no such device); two draws are 32 hex digits each and differ
           MACHINE=virt ./test.sh random random 'net up' net > rng.txt; cat rng.txt
@@ -142,3 +158,7 @@ jobs:
           grep -qi "^tcp port 23, before: .*refused" eping.txt
           grep -q "^remote: > cancho-os .* no Linux underneath" eping.txt
           grep -q "^remote: .*r-x  kernel code" eping.txt
+          grep -q "^exit: shell on port 23: nobody connected" eping.txt
+          grep -q "^exit: the kernel said bye" eping.txt
+          grep -q "^a page from linux, for cancho-os" eping.txt
+          grep -q "^no connection to 10.0.0.1 port 8098: refused, or no answer" eping.txt

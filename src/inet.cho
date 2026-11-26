@@ -418,7 +418,8 @@ fn eth_wrap[&o](out: &!o [byte], length: int, to: int, mac: int, kind: int) -> [
 //
 // The ints of connection c, at tcp[c * 20 ..]:
 //    0 state: 0 free, 1 opening (our SYN is out), 2 open, 3 the other end has finished and we have not
-//      (the caller's port only), 4 the other end has finished and our FIN is out
+//      (the caller's port only), 4 the other end has finished and our FIN is out, 5 we have finished and
+//      the other end has not, 6 we are opening it (our SYN is out, and it has not been answered)
 //    1 the other end's address   2 its port   3 our port
 //    4 the first sequence number of ours not acknowledged   5 the next not yet sent   6 the next we expect
 //    7 how many bytes of data are out (they are in `bufs`)   8 what else is out: 1 a FIN after them, 2 a SYN
@@ -533,7 +534,7 @@ fn segment[&b, &o](out: &!o [byte], o: int, from: int, to: int, sport: int, dpor
 fn tcp_say[&t, &b, &o](tcp: &!t [int], bufs: &!b [byte], c: int, ours: int, from: int, out: &!o [byte], o: int) -> [] int {
     let b = c * 20;
     var window = 0;
-    if tcp[b] <= 2 {
+    if tcp[b] <= 2 || tcp[b] == 6 {
         // the room left for what arrives: on port 7 it is echoed from the same buffer, so what is out takes
         // from it; on the caller's port it waits in `inbox`
         window = tcp[b + 11] - tcp[b + 7];
@@ -545,6 +546,11 @@ fn tcp_say[&t, &b, &o](tcp: &!t [int], bufs: &!b [byte], c: int, ours: int, from
             tcp[b + 16] = 1;
         }
     }
+    if tcp[b] == 5 {
+        // we have finished, and what still arrives is thrown away: there is always room for that. A
+        // window of zero here would keep the other end's FIN from ever being sent
+        window = tcp_inbox();
+    }
     if from < 0 || from > tcp[b + 7] {
         return segment(out, o, ours, tcp[b + 1], tcp[b + 3], tcp[b + 2], tcp[b + 5], tcp[b + 6], 16, window, 0, bufs, 0, 0);
     }
@@ -552,6 +558,10 @@ fn tcp_say[&t, &b, &o](tcp: &!t [int], bufs: &!b [byte], c: int, ours: int, from
     var mss = 0;
     if tcp[b + 8] == 2 {
         flags = 18;
+        if tcp[b] == 6 {
+            // a SYN of our own answers nothing
+            flags = 2;
+        }
         mss = tcp_segment_max();
     }
     if tcp[b + 8] == 1 {
@@ -694,6 +704,35 @@ fn tcp_at[&p, &t, &b, &i, &o](pkt: &p [byte], at: int, ours: int, tcp: &!t [int]
         return tcp_say(tcp, bufs, slot, ours, 0, out, o);
     }
     let b = found * 20;
+    if tcp[b] == 6 {
+        // our own SYN is out. The answer is a SYN that acknowledges it, or a reset that does
+        let answers = acks != 0 && tcp[b + 5] != tcp[b + 4] && ack == tcp[b + 5];
+        if rst != 0 {
+            if answers {
+                tcp[b] = 0;
+            }
+            return 0;
+        }
+        if acks != 0 && !answers {
+            return segment(out, o, ours, peer, dport, sport, ack, 0, 4, 0, 0, bufs, 0, 0);
+        }
+        if syn == 0 || acks == 0 {
+            // a SYN alone: both ends opening at once, which is not done here
+            return 0;
+        }
+        var room = peer_mss(pkt, from, doff);
+        if room > tcp_segment_max() {
+            room = tcp_segment_max();
+        }
+        tcp[b] = 2;
+        tcp[b + 4] = ack;
+        tcp[b + 6] = plus(seq, 1);
+        tcp[b + 8] = 0;
+        tcp[b + 10] = 0;
+        tcp[b + 11] = room;
+        tcp[b + 13] = now;
+        return tcp_say(tcp, bufs, found, ours, -1, out, o);
+    }
     if rst != 0 {
         // believed only if it is exactly the next segment expected
         if seq == tcp[b + 6] {
@@ -763,6 +802,22 @@ fn tcp_at[&p, &t, &b, &i, &o](pkt: &p [byte], at: int, ours: int, tcp: &!t [int]
     } else if tcp[b] == 1 {
         // the opening is not acknowledged by this
         return segment(out, o, ours, peer, dport, sport, ack, 0, 4, 0, 0, bufs, 0, 0);
+    }
+    if tcp[b] == 5 && (n > 0 || fin != 0) {
+        // we have finished: what the other end still sends is acknowledged and not kept
+        tcp[b + 6] = plus(tcp[b + 6], n);
+        if fin == 0 {
+            return tcp_say(tcp, bufs, found, ours, -1, out, o);
+        }
+        tcp[b + 6] = plus(tcp[b + 6], 1);
+        let last = tcp_say(tcp, bufs, found, ours, -1, out, o);
+        if tcp[b + 8] == 0 {
+            // and it has our FIN: both have finished
+            tcp[b] = 0;
+        } else {
+            tcp[b] = 4;
+        }
+        return last;
     }
     if tcp[b + 3] != 7 && tcp[b] == 2 && (n > 0 || fin != 0) {
         // the caller's port: what arrives waits in `inbox`, as much of it as there is room for
@@ -931,15 +986,60 @@ pub fn tcp_write[&t, &b, &d](tcp: &!t [int], bufs: &!b [byte], c: int, data: &d 
     return k;
 }
 
-// The other end has finished and so have we: our FIN goes after what is still to be sent. 1 if that was
-// so, 0 if the other end has not finished (a connection cannot be ended from here first).
+// We have finished with connection `c`: our FIN goes after what is still to be sent, and no more can be
+// written. If the other end had finished first that is the end of it; if not, the connection waits for
+// its FIN. 1 if the connection was there to close, 0 if not.
 pub fn tcp_close[&t](tcp: &!t [int], c: int) -> [] int {
-    if !tcp_mine(tcp, c) || tcp[c * 20] != 3 {
+    if !tcp_mine(tcp, c) {
         return 0;
     }
     tcp[c * 20 + 8] = 1;
-    tcp[c * 20] = 4;
+    if tcp[c * 20] == 3 {
+        tcp[c * 20] = 4;
+    } else {
+        tcp[c * 20] = 5;
+    }
     return 1;
+}
+
+// How long connection `c` has heard nothing, in the caller's milliseconds.
+pub fn tcp_quiet[&t](tcp: &!t [int], c: int, now: int) -> [] int {
+    if c < 0 || c * 20 + 20 > len(tcp) || tcp[c * 20] == 0 {
+        return 0;
+    }
+    return now - tcp[c * 20 + 13];
+}
+
+// Open a connection to `port` of the machine `peer`, from our port `from` (not 7, and not one in use
+// with that machine). `via` is the card to send to, as for `eth_tick`. Answers the connection, or -1 if
+// there is no place for one. Nothing is sent until `tcp_flush`; `tcp_state` then says how it goes: 6 while
+// the SYN is unanswered, 2 when it is open, 0 if it was refused or five more tries got no answer.
+pub fn tcp_dial[&t, &b, &i](tcp: &!t [int], bufs: &!b [byte], inbox: &!i [byte], peer: int, port: int, from: int, now: int, iss: int, via: int) -> [] int {
+    if from == 7 || from < 1 || from > 65535 || port < 1 || port > 65535 {
+        return -1;
+    }
+    let c = tcp_slot(tcp, tcp_count(tcp, bufs, inbox), now);
+    if c < 0 {
+        return -1;
+    }
+    let b = c * 20;
+    tcp[b] = 6;
+    tcp[b + 1] = peer;
+    tcp[b + 2] = port;
+    tcp[b + 3] = from;
+    tcp[b + 4] = iss % 4294967296;
+    tcp[b + 5] = tcp[b + 4];
+    tcp[b + 6] = 0;
+    tcp[b + 7] = 0;
+    tcp[b + 8] = 2;
+    tcp[b + 9] = now;
+    tcp[b + 10] = 0;
+    tcp[b + 11] = tcp_segment_max();
+    tcp[b + 12] = via;
+    tcp[b + 13] = now;
+    tcp[b + 14] = 0;
+    tcp[b + 16] = 0;
+    return c;
 }
 
 // What connection `c` has to send that it has not sent: what was written, its FIN, or a window that has
@@ -991,6 +1091,11 @@ pub fn tcp_tick[&t, &b, &o](tcp: &!t [int], bufs: &!b [byte], c: int, now: int, 
         return 0;
     }
     let b = c * 20;
+    if tcp[b] == 5 && tcp[b + 4] == tcp[b + 5] && now - tcp[b + 13] > 60000 {
+        // we finished a minute ago and the other end never has
+        tcp[b] = 0;
+        return 0;
+    }
     if tcp[b] == 0 || tcp[b + 4] == tcp[b + 5] {
         return 0;
     }
