@@ -229,6 +229,10 @@ Limits of this slice, besides "What it will not do" above:
 
 ## 8. The shell over a connection
 
+> **Removed in 0.0.28** ([`update.md`](update.md)). This section is kept as the account of a step: the
+> shell's queue and `putc` it describes are what SSH uses now; the port, the command and the session code
+> are gone.
+
 *(Fourth slice.)*
 
 ### What is wanted

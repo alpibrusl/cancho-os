@@ -810,7 +810,7 @@ fn run[&f, &mc, &mu, &mt, &mx, &mz, &s, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000
         return 0;
     }
     if same(line, n, "help") {
-        base.puts(con, k, "commands: help, about, echo <text>, uptime, ticks, mem, board, random, disk, ls, cat <name>, sum <name>, write <name> <text>, append <name> <text>, copy <from> <to>, remove <name>, versions, purge <number>, record, put <name> <bytes> <sha256> (over SSH), net [up|down|eth|dhcp], net shell [on|off], net ssh [on|off], lookup <name>, ping <address or name>, http <address or name> <port>, servo scan, servo pos, arm zero, arm pose, arm check <5 angles>, crash [null|write], load <bytes>\r\n");
+        base.puts(con, k, "commands: help, about, echo <text>, uptime, ticks, mem, board, random, disk, ls, cat <name>, sum <name>, write <name> <text>, append <name> <text>, copy <from> <to>, remove <name>, versions, purge <number>, record, put <name> <bytes> <sha256> (over SSH), net [up|down|eth|dhcp], net ssh [on|off], lookup <name>, ping <address or name>, http <address or name> <port>, servo scan, servo pos, arm zero, arm pose, arm check <5 angles>, crash [null|write], load <bytes>\r\n");
     } else if same(line, n, "about") {
         base.puts(con, k, "cancho-os 0.0.28: a kernel written in cancho (");
         if k[1] >= 3 {
@@ -853,17 +853,6 @@ fn run[&f, &mc, &mu, &mt, &mx, &mz, &s, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000
     } else if same(line, n, "net down") {
         k[10] = 0;
         network.put_net(con, k);
-    } else if same(line, n, "net shell on") && k[26] != 0 {
-        base.puts(con, k, "only from the serial console\r\n");
-    } else if same(line, n, "net shell on") {
-        k[30] = 23;
-        k[4153] = 0;
-        k[29] = 0;
-        base.puts(con, k, "the shell is on port 23: no password, not encrypted, for a cable you trust\r\n");
-    } else if same(line, n, "net shell off") {
-        k[4174] = k[30];
-        k[30] = 0;
-        base.puts(con, k, "port 23 is closed\r\n");
     } else if same(line, n, "net") {
         network.put_net(con, k);
     } else if k[10] != 0 && (same(line, n, "servo scan") || same(line, n, "servo pos") || same(line, n, "arm pose") || n > 10 && same(line, 10, "arm check ")) {
@@ -1199,10 +1188,8 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s](cpu: &!f
                 k[26] = 1;
                 if k[4153] == 1 && k[4179] == 2 {
                     base.puts(con, k, "cancho-os: the kernel's shell, over SSH. `help` lists the commands, `exit` leaves.\r\n> ");
-                } else if k[4153] == 1 {
-                    base.puts(con, k, "cancho-os: the kernel's shell, over SSH, with a key that may only read. `help` lists the commands, `exit` leaves.\r\n> ");
                 } else {
-                    base.puts(con, k, "cancho-os: the kernel's shell. One session, not encrypted. Type `help`.\r\n> ");
+                    base.puts(con, k, "cancho-os: the kernel's shell, over SSH, with a key that may only read. `help` lists the commands, `exit` leaves.\r\n> ");
                 }
                 k[26] = 0;
             } else if c == -5 {

@@ -37,7 +37,7 @@ Rules of the road
 - The Pi 4's Ethernet (docs/genet.md) runs only on the real board: QEMU's raspi4b has no GENET and `net eth`
   faults there, so no test may type it. Change it only with the board on the serial link, and send builds
   with `board/send.py` (docs/load.md). `dma` is mapped as device memory on purpose: a card writes it.
-  Never leave `net shell on` open on a real network after a test.
+  The network's only way in is SSH: the open shell on port 23 was removed (docs/update.md) and stays out.
 - Storage (docs/storage.md): `src/fat.cho` is pure like `inet` (given a sector, says what it means; no trap
   on any bytes) and its tests use sectors of volumes other tools made, read by a second implementation.
   `src/disk.cho` holds the driver and the commands. A change is tried against real images before it is
@@ -86,9 +86,11 @@ Rules of the road
 - Randomness (docs/random.md): `rng_word` reads the generator, the pool at k[4136..] is what other code takes
   from. QEMU's raspi4b has no RNG200 and reading 0xfe104000 there faults: do not add the Pi 4 driver without
   a real board to try it on. Never print or reuse a word taken from the pool.
-- The shell on port 23 (`net shell on`, docs/network.md section 8) has no password and no encryption. It must
-  stay off by default and openable only from the serial console, and it must be removed or put behind SSH
-  before any command can move a servo. All shell output goes through `putc`: never write to the UART elsewhere.
+- All shell output goes through `putc`: never write to the UART elsewhere. Over SSH it is queued in `k`.
+- `put` (docs/update.md): `sshd.step` answers 4 with file bytes in `rline` while k[4258] > 0; the kernel moves
+  them to the staging memory and `disk.store` writes them. The hash is checked twice (what came, what the disk
+  gives back) before the directory entry changes: keep both. `disk.boot_name` lists what the firmware reads;
+  over SSH only `put` changes those. Never `put` a kernel to the real board that has not booted in QEMU.
 - Three boards, two links. `MACHINE=virt` is QEMU's own board (RAM at 1 GB: every RAM address in the kernel
   is `k[14] +` an offset, and each capability's bound lists the Pi's addresses and virt's). build.sh links
   `build/kernel-virt.elf` for it. The virtio card's memory is the `dma` capability, 64 KB the link script

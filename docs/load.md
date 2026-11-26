@@ -30,8 +30,8 @@ has, and start it.
 ## What it means for trust
 
 Whoever has the serial console can replace the kernel. That was already true in the sense that matters:
-the console is where `net shell on` is given and where the board is held. `load` is not offered over
-the network shell. It is a tool for bringing up hardware, and a kernel that guards a robot should be
+the console is where the board is held. `load` is not offered over SSH; a kernel comes in over SSH
+with `put`, to the card and not to memory ([`update.md`](update.md)). It is a tool for bringing up hardware, and a kernel that guards a robot should be
 built without it.
 
 ## What was measured

@@ -16,8 +16,6 @@
 #                                        OpenSSH's client logs in with that key and runs the command
 #                                        (SSHIN='about\nexit\n' types into a shell session instead)
 #   MACHINE=virt DISKRW=image SSHKEY=key SSHPUT=file:NAME SSHAFTER='sum NAME' ./test.sh 'net up' 'net ssh on'
-#   MACHINE=virt RSH='about\nticks\n' ./test.sh 'net up' 'net shell on' net
-#                                        those lines typed into the kernel's shell over a connection to port 23
 #                                        (after the second line given here), and what it answered
 #   SERVOS=1 ./test.sh 'servo scan'      with six simulated servos on the board's second serial
 #                                        port (build/servos, from sim/servos.cho: see build.sh)
@@ -49,7 +47,7 @@ if [ "$MACHINE" = virt ]; then
     # QEMU's own board: one serial port (no servo bus), RAM at 1 GB. A Cortex-A57 is how the kernel knows it.
     # A network card on QEMU's own user-mode network: the host is 10.0.0.1, the kernel 10.0.0.2, and a
     # datagram sent to this machine's port 5507 reaches the kernel's port 7, and so does a connection.
-    MACHINE="virt -cpu cortex-a57 -m 1G -global virtio-mmio.force-legacy=false -netdev user,id=n0,net=10.0.0.0/24,host=10.0.0.1,hostfwd=udp:127.0.0.1:5507-10.0.0.2:7,hostfwd=tcp:127.0.0.1:5507-10.0.0.2:7,hostfwd=tcp:127.0.0.1:5523-10.0.0.2:23,hostfwd=tcp:127.0.0.1:5522-10.0.0.2:22 -device virtio-net-device,netdev=n0 ${NORNG:--device virtio-rng-device} ${DISK:+-drive file=$DISK,format=raw,if=none,id=d0,readonly=on -device virtio-blk-device,drive=d0} ${DISKRW:+-drive file=$DISKRW,format=raw,if=none,id=d0 -device virtio-blk-device,drive=d0} ${DUMP:+-object filter-dump,id=f0,netdev=n0,file=$DUMP}"
+    MACHINE="virt -cpu cortex-a57 -m 1G -global virtio-mmio.force-legacy=false -netdev user,id=n0,net=10.0.0.0/24,host=10.0.0.1,hostfwd=udp:127.0.0.1:5507-10.0.0.2:7,hostfwd=tcp:127.0.0.1:5507-10.0.0.2:7,hostfwd=tcp:127.0.0.1:5522-10.0.0.2:22 -device virtio-net-device,netdev=n0 ${NORNG:--device virtio-rng-device} ${DISK:+-drive file=$DISK,format=raw,if=none,id=d0,readonly=on -device virtio-blk-device,drive=d0} ${DISKRW:+-drive file=$DISKRW,format=raw,if=none,id=d0 -device virtio-blk-device,drive=d0} ${DUMP:+-object filter-dump,id=f0,netdev=n0,file=$DUMP}"
     KERNEL=build/kernel-virt.elf
     BUS=
 fi
@@ -86,13 +84,6 @@ for line in "$@"; do
         if [ -n "${SSHIN:-}" ]; then
             printf "$SSHIN" | ssh -T $opts cancho@127.0.0.1 2>&1 | tr -d '\r' | sed 's/^/ssh: /' >> build/peer.txt
         fi
-        sleep 1
-    fi
-    if [ "$typed" = 2 ] && [ -n "${RSH:-}" ]; then
-        # the kernel's shell from this machine: the lines go in, the connection is closed, the answers come back
-        printf "$RSH" | nc -w 5 127.0.0.1 5523 | tr -d '\r' | sed 's/^/remote: /' >> build/peer.txt
-        # the last acknowledgement of the closing is still on its way when nc returns: the kernel looks at
-        # the network only between keys, so the next line is not typed at once
         sleep 1
     fi
     if [ -n "$first" ] && [ -n "${UDP:-}" ]; then

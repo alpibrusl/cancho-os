@@ -67,7 +67,7 @@ and `exit`; another key was refused.
 - **No names.** Any user name is taken; the key decides.
 - **The host key is kept, and a keys file is read, where there is a disk** (permissions.md, slice 2):
   that is QEMU's `virt` so far. On a real Pi, with no disk yet, both are as this file says above.
-- **Port 23 is still there** (`net shell on`), and must go: it was kept one more change so that this
-  one could be compared with it.
+- **Port 23 is gone** ([`update.md`](update.md)): SSH is the only way in from the network.
+- **File transfer** is `put`, the kernel's own command, not `scp` or `sftp`.
 - **The window is small and the handshake slow:** a connection's inbox is 256 bytes, and a client's
   first message is about 1,500.

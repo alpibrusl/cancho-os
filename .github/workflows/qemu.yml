@@ -212,6 +212,30 @@ jobs:
           ./test.sh disk about > nosd.txt; cat nosd.txt
           grep -q "^no disk: the SD card did not start" nosd.txt
           grep -q "a kernel written in cancho" nosd.txt
+      - name: a file sent over SSH, and the files the board starts from
+        # docs/update.md. board/put.sh sends this build as KERNEL8.IMG; the kernel keeps it only with the
+        # SHA-256 it was told, and mcopy must then read the same bytes. Sent again, the first is in OLD. A
+        # wrong hash writes nothing; the board's own files are not changed by `write` or `remove` over SSH.
+        run: |
+          cp fat32.img u.img
+          MACHINE=virt DISKRW=u.img SSHKEY=/tmp/sshkey SSHPUT=build/kernel8.img:KERNEL8.IMG SSHAFTER='sum KERNEL8.IMG' ./test.sh 'net up' 'net ssh on' > put1.txt; cat put1.txt
+          grep -q "^ssh: kept: $(wc -c < build/kernel8.img) bytes, read back from the disk with the SHA-256 that was given" put1.txt
+          MACHINE=virt DISKRW=u.img SSHKEY=/tmp/sshkey SSHPUT=big.bin:KERNEL8.IMG SSHAFTER=versions ./test.sh 'net up' 'net ssh on' > put2.txt; cat put2.txt
+          grep -q "^ssh: kept: 300000 bytes, .*; what was there is OLD/00000001.V" put2.txt
+          wrong=$(printf 'world' | sha256sum | cut -d' ' -f1)
+          MACHINE=virt DISKRW=u.img SSHKEY=/tmp/sshkey SSHIN="put X.TXT 5 $wrong\nhello" ./test.sh 'net up' 'net ssh on' > put3.txt; cat put3.txt
+          grep -q "what came does not have the SHA-256 that was given: nothing was written" put3.txt
+          MACHINE=virt DISKRW=u.img SSHKEY=/tmp/sshkey SSHCMD='remove KERNEL8.IMG' ./test.sh 'net up' 'net ssh on' > put4.txt; cat put4.txt
+          grep -q "^ssh: a file the board starts from" put4.txt
+          MACHINE=virt DISKRW=u.img SSHKEY=/tmp/sshkey SSHCMD='write CONFIG.TXT x' ./test.sh 'net up' 'net ssh on' > put5.txt; cat put5.txt
+          grep -q "^ssh: a file the board starts from" put5.txt
+          fsck.fat -n u.img
+          rm -rf uout; mkdir uout
+          mcopy -i u.img ::LOG.TXT uout/LOG.TXT
+          mcopy -i u.img ::KERNEL8.IMG uout/KERNEL8.IMG && cmp uout/KERNEL8.IMG big.bin
+          mcopy -i u.img ::OLD/00000001.V first.out && cmp first.out build/kernel8.img
+          if mdir -i u.img :: | grep -q '^X '; then exit 1; fi
+          python3 tests/checklog.py uout/LOG.TXT uout
       - name: who may log in, and the host key kept
         # docs/permissions.md, slice 2, with OpenSSH's own client and three keys made here. The owner's is
         # built into the image; the reader's is put in KEYS.TXT at the console; the third is in neither.
@@ -248,9 +272,9 @@ jobs:
             MACHINE=$m ./load.sh > load-$m.txt 2>&1 || { cat load-$m.txt; exit 1; }
             grep -E "written in cancho|forgotten|starting it|data abort" load-$m.txt
           done
-          # and it is not offered over the network shell
-          MACHINE=virt RSH='load 2000\n' ./test.sh 'net up' 'net shell on' net > noload.txt; cat noload.txt
-          grep -q "^remote: > unknown command" noload.txt
+          # and it is not offered over SSH
+          MACHINE=virt SSHKEY=/tmp/sshkey SSHCMD='load 2000' ./test.sh 'net up' 'net ssh on' net > noload.txt; cat noload.txt
+          grep -q "^ssh: unknown command" noload.txt
       - name: the network link
         run: |
           # sim/netpeer.cho on the second serial port: three replies it insists on byte for byte, and one
@@ -273,13 +297,9 @@ jobs:
           grep -q "^tcp echo: 16384 bytes came back the same" ping.txt
           grep -qi "^tcp port 9: .*refused" ping.txt
           grep -q "^reply from 10.0.0.1 in " ping.txt
-          grep -qi "^tcp port 23, before: .*refused" ping.txt
-          grep -q "^remote: > cancho-os .* a kernel written in cancho" ping.txt
-          grep -q "^remote: .*r-x  kernel code" ping.txt
+          grep -qi "^tcp port 23: .*refused" ping.txt
           grep -q "^ssh: cancho-os .* a kernel written in cancho" ping.txt
           grep -q "^ssh, another key: .*Permission denied" ping.txt
-          grep -q "^exit: shell on port 23: nobody connected" ping.txt
-          grep -q "^exit: the kernel said bye" ping.txt
           grep -q "^a page from linux, for cancho-os" ping.txt
           grep -q "^no connection to 10.0.0.1 port 8098: refused, or no answer" ping.txt
       - name: QEMU's virt machine, and its network card
@@ -308,12 +328,12 @@ jobs:
           mkdir -p www && echo "a page from the host, for cancho-os" > www/index.html
           (cd www && exec python3 -m http.server 8099 --bind 127.0.0.1) > /dev/null 2>&1 &
           sleep 1
-          MACHINE=virt RSH='http 10.0.0.1 8099\nexit\nabout\n' ./test.sh 'net up' 'net shell on' 'http 10.0.0.1 8099' 'http 10.0.0.1 8098' net > http.txt; cat http.txt
+          MACHINE=virt SSHKEY=/tmp/sshkey SSHIN='http 10.0.0.1 8099\nexit\nabout\n' ./test.sh 'net up' 'net ssh on' 'http 10.0.0.1 8099' 'http 10.0.0.1 8098' net > http.txt; cat http.txt
           grep -q "^a page from the host, for cancho-os" http.txt
           grep -q "^no connection to 10.0.0.1 port 8098: refused, or no answer" http.txt
-          grep -q "^remote: a page from the host, for cancho-os" http.txt
-          grep -q "^remote: > bye" http.txt
-          ! grep -q "^remote: .*a kernel written in cancho" http.txt
+          grep -q "^ssh: a page from the host, for cancho-os" http.txt
+          grep -q "^ssh: > bye" http.txt
+          ! grep -q "^ssh: .*a kernel written in cancho" http.txt
           grep -q "^tcp: 0 open" http.txt
           # an address from QEMU's own DHCP server, and the page again from that address; a name asked of
           # QEMU's name server is not insisted on (it needs the runner's resolver), a name that is none is
@@ -358,15 +378,17 @@ jobs:
           NORNG=' ' MACHINE=virt ./test.sh random 'net up' net > norng.txt; cat norng.txt
           grep -q "^this board gave the kernel no source of randomness" norng.txt
           grep -q "^connections begin at the counter's value" norng.txt
-          # the shell over a connection: closed until the console opens it, then seven commands typed from this
-          # machine, among them one that must be refused from there
-          MACHINE=virt RSH='about\nticks\nnet\nnet shell on\nping 10.0.0.1\nmem\n' ./test.sh 'net up' 'net shell on' net > rsh.txt; cat rsh.txt
-          grep -q "^remote: > cancho-os .* a kernel written in cancho (QEMU virt)" rsh.txt
-          grep -Eq "^remote: > [1-9][0-9]* timer interrupts" rsh.txt
-          grep -q "^remote: shell on port 23: a session is open" rsh.txt
-          grep -q "^remote: > only from the serial console" rsh.txt
-          grep -q "^remote: > reply from 10.0.0.1 in " rsh.txt
-          grep -q "^remote:   0x40080000 - .*r-x  kernel code" rsh.txt
+          # the shell over SSH: seven commands typed from this machine, among them one that must be refused from
+          # there, and the command that used to open the shell on port 23
+          MACHINE=virt SSHKEY=/tmp/sshkey SSHIN='about\nticks\nnet\nnet ssh on\nping 10.0.0.1\nmem\nnet shell on\n' ./test.sh 'net up' 'net ssh on' net > rsh.txt; cat rsh.txt
+          grep -q "^ssh: > cancho-os .* a kernel written in cancho (QEMU virt)" rsh.txt
+          grep -Eq "^ssh: > [1-9][0-9]* timer interrupts" rsh.txt
+          grep -q "^ssh: ssh on port 22: a session is open" rsh.txt
+          grep -q "^ssh: > only from the serial console" rsh.txt
+          grep -q "^ssh: > reply from 10.0.0.1 in " rsh.txt
+          grep -q "^ssh:   0x40080000 - .*r-x  kernel code" rsh.txt
+          # the open shell on port 23 is gone: its command is no command
+          grep -q "^ssh: > unknown command" rsh.txt
           grep -q "^tcp: 0 open" rsh.txt
       - name: ping over Ethernet, from Linux's own stack
         # the card on a tap interface: Linux's ARP, the system's ping and nc, none of it ours
@@ -386,12 +408,8 @@ jobs:
           grep -q "^tcp echo: 65536 bytes came back the same" eping.txt
           grep -qi "^tcp port 9: .*refused" eping.txt
           grep -q "^reply from 10.0.0.1 in " eping.txt
-          grep -qi "^tcp port 23, before: .*refused" eping.txt
-          grep -q "^remote: > cancho-os .* a kernel written in cancho" eping.txt
-          grep -q "^remote: .*r-x  kernel code" eping.txt
+          grep -qi "^tcp port 23: .*refused" eping.txt
           grep -q "^ssh: cancho-os .* a kernel written in cancho" eping.txt
           grep -q "^ssh, another key: .*Permission denied" eping.txt
-          grep -q "^exit: shell on port 23: nobody connected" eping.txt
-          grep -q "^exit: the kernel said bye" eping.txt
           grep -q "^a page from linux, for cancho-os" eping.txt
           grep -q "^no connection to 10.0.0.1 port 8098: refused, or no answer" eping.txt

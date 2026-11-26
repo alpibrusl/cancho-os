@@ -7,10 +7,9 @@
 #   sudo MACHINE=virt ./ping.sh   the same over Ethernet: QEMU's virt machine, its network card on a tap interface
 # Exit 0 if every ping was answered, a UDP datagram to port 7 came back, a TCP connection to it echoed a line
 # and then 64 KB (BYTES=n for another size), port 9 refused one, and the kernel's own ping of this machine
-# was answered; the kernel fetched a page from a web server here and was refused by a port with none; `exit`
-# over the shell's connection made the kernel hang up; with SSHKEY=path, OpenSSH logged in with that key and
+# was answered; the kernel fetched a page from a web server here and was refused by a port with none; with SSHKEY=path, OpenSSH logged in with that key and
 # another key was refused; on the card, dnsmasq gave the kernel an address and
-# answered its questions about names, and the kernel then reached 10.0.0.1 by the gateway; and port 23 refused a connection before `net shell on` and gave the kernel's shell after it.
+# answered its questions about names, and the kernel then reached 10.0.0.1 by the gateway; and port 23, where an open shell used to be, refused a connection.
 set -u
 cd "$(dirname "$0")"
 MACHINE=${MACHINE:-raspi3b}
@@ -81,30 +80,10 @@ if [ -n "$ready" ]; then
     refused=$(timeout 5 nc -v -w 3 10.0.0.2 9 < /dev/null 2>&1 | tr "\n" " ")
     echo "tcp port 9: ${refused:-no answer}"
     echo "$refused" | grep -qi refused || status=1
-    # the shell's port is closed until the console opens it
+    # the port the open shell used to be on: nothing listens there any more
     closed=$(timeout 5 nc -v -w 3 10.0.0.2 23 < /dev/null 2>&1 | tr "\n" " ")
-    echo "tcp port 23, before: ${closed:-no answer}"
+    echo "tcp port 23: ${closed:-no answer}"
     echo "$closed" | grep -qi refused || status=1
-    printf 'net shell on\r' >&3
-    sleep 1
-    # the kernel's shell from Linux: two lines a second apart, answered while the connection is open, then
-    # Linux finishes and the kernel does
-    (printf 'about\n'; sleep 1; printf 'mem\n'; sleep 1) | timeout 15 nc -N -w 5 10.0.0.2 23 | tr -d '\r' | sed 's/^/remote: /' > build/remote.txt
-    cat build/remote.txt
-    grep -q "^remote: > cancho-os .* a kernel written in cancho" build/remote.txt || status=1
-    grep -q "r-x  kernel code" build/remote.txt || status=1
-    # `exit` there: the kernel hangs up while Linux's end is still open (its input stays open six seconds)
-    (printf 'about\nexit\n'; sleep 6) | timeout 12 nc -N -w 10 10.0.0.2 23 | tr -d '\r' > build/exit.txt &
-    NC=$!
-    sleep 3
-    printf 'echo after exit\r' >&3
-    sleep 1
-    printf 'net\r' >&3
-    sleep 1
-    echo
-    tr -d '\r' < build/ping-uart.out | awk '/^after exit/ { f = 1 } f && /^shell on port 23/ { print "exit: " $0; exit }'
-    wait $NC
-    grep -q "bye" build/exit.txt && echo "exit: the kernel said bye" || status=1
     # the kernel opens a connection: a web server on this machine, asked for its page; and a port with none
     mkdir -p build/www && echo "a page from linux, for cancho-os" > build/www/index.html
     (cd build/www && exec python3 -m http.server 8099 --bind 10.0.0.1) > /dev/null 2>&1 &
