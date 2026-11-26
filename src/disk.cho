@@ -91,8 +91,11 @@ fn request[&mv, &md, &s](vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd59
     k[4173] = (k[4173] + 1) % 65536;
     network.put16le(dma, q + 0x102, k[4173]);
     mmio_write32(vio, k[4172] + 0x50, 0);
+    // The device answers when the host's own disk has: usually at once, sometimes not for a second or
+    // more on a busy host. The wait is counted in turns of this loop, not in time (no clock is held
+    // here), so the count is large: a device that never answers stops the kernel for about a minute.
     var spins = 0;
-    while network.get16le(dma, q + 0x202) != k[4173] && spins < 10000000 {
+    while network.get16le(dma, q + 0x202) != k[4173] && spins < 2000000000 {
         spins = spins + 1;
     }
     let raised = mmio_read32(vio, k[4172] + 0x60);
