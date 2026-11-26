@@ -190,8 +190,13 @@ steps below, with the Pi's firmware of April 2021. One board, one session:
 - `servo scan` found no servo, and `random` no generator: both as expected (below).
 
 The console was a second Pi's header UART, read over SSH: three wires, pin 6 to pin 6 and pins 8
-and 10 crossed. Everything else in this file was still measured in QEMU. Not tried on the board:
-the network (no link to carry it there), a second boot's worth of anything.
+and 10 crossed.
+
+**And it is on the network.** The same day, with the board cabled to a home router: `net eth` found
+the card and the cable at 1000 Mb/s, `net dhcp` got an address from the router, `http example.com 80`
+printed the page, and a Mac on the network pinged the kernel, used its TCP echo (200,000 bytes back
+in 1 s) and its shell. [docs/genet.md](docs/genet.md). Everything else in this file was still
+measured in QEMU.
 
 You need a Raspberry Pi 4, a microSD card and a USB-serial cable with **3.3 V** levels (a
 5 V one damages the pins).
@@ -231,6 +236,8 @@ What QEMU does not model, so where a real board may differ:
   cache clean that time, not that the kernel is right to rely on it.
 - **The UART clock.** The divisor is for 48 MHz, the Pi 4's default. Garbage on the console
   points here (`init_uart_clock=48000000` in `config.txt` pins it).
+- **The card's address is made up** (`02:63:61:6e:63:04`): the firmware left none in the card, and
+  the kernel does not ask the firmware for the board's own. Two such boards on one network collide.
 - **The servo bus does not work on a Pi 4 header yet.** It is the mini UART, whose only
   header pins are the two the console uses. It has to move to another PL011 (UART3, on
   GPIO4/5) before a real arm can be read.

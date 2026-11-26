@@ -58,7 +58,7 @@ pub fn get16le[&md](dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"),
 }
 
 // Tell the card where queue `q`'s three tables are (they start at `at`), and that it is ready.
-pub fn vnet_queue[&mv](vio: &!mv Mmio("0xa000000..0xa004000"), base: int, q: int, at: int) -> [mmio("0xa000000..0xa004000")] int {
+pub fn vnet_queue[&mv](vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), base: int, q: int, at: int) -> [mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
     mmio_write32(vio, base + 0x30, q);
     if mmio_read32(vio, base + 0x34) < 8 {
         return 1;
@@ -76,7 +76,7 @@ pub fn vnet_queue[&mv](vio: &!mv Mmio("0xa000000..0xa004000"), base: int, q: int
 
 // Find the card and bring it up. k[15] is its registers afterwards, or 0 if there is none
 // or it refused; k[19] is its address.
-pub fn vnet_start[&mv, &md, &s](vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int]) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
+pub fn vnet_start[&mv, &md, &s](vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int]) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
     var base = 0;
     var slot = 0;
     while slot < 32 && base == 0 {
@@ -150,7 +150,7 @@ pub fn vnet_start[&mv, &md, &s](vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!m
 }
 
 // Send `frame[0..n]`, and wait until the card has taken it.
-pub fn vnet_send[&mv, &md, &s, &b](vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], frame: &b [byte], n: int) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
+pub fn vnet_send[&mv, &md, &s, &b](vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], frame: &b [byte], n: int) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
     let d = k[14] + 0x210000;
     let buf = d + 0x5000;
     mmio_write64(dma, buf, 0);
@@ -176,7 +176,7 @@ pub fn vnet_send[&mv, &md, &s, &b](vio: &!mv Mmio("0xa000000..0xa004000"), dma: 
 
 // The next frame the card has finished with, in `frame`: its length, or 0 if there is none.
 // Its buffer is offered to the card again.
-pub fn vnet_recv[&mv, &md, &s, &a](vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], frame: &!a [byte]) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
+pub fn vnet_recv[&mv, &md, &s, &a](vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], frame: &!a [byte]) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
     let d = k[14] + 0x210000;
     var got = 0;
     while got == 0 && get16le(dma, d + 0x202) != k[17] {
@@ -205,6 +205,290 @@ pub fn vnet_recv[&mv, &md, &s, &a](vio: &!mv Mmio("0xa000000..0xa004000"), dma: 
     return got;
 }
 
+// ---- the Pi 4's network card: GENET ----------------------------------------------------
+// BCM2711's Ethernet controller (docs/genet.md), at 0xfd580000, version 5. Written from
+// NetBSD's bcmgenet.c and FreeBSD's if_genet.c (both BSD-2-Clause). Only a real board
+// has one: QEMU's Pi 4 does not, and reading its address there is a fault, so nothing
+// here runs until `net eth` is typed.
+// The card and the driver share `dma`, mapped uncached: sixteen receive buffers of 2 KB
+// at +0x0000, sixteen to send at +0x8000. The card finds them through descriptors that
+// are its own registers (three words each: length and flags, then the address), in two
+// rings the driver sizes: 16 of the 256 there are.
+//   +0x000 version     +0x004 port mode     +0x008 receive buffer reset     +0x08c RGMII
+//   +0x200.. interrupts (all masked: the card is polled)     +0x300 receive buffer control
+//   +0x808 the MAC's command (bit 0 send, 1 receive, 2..3 speed, 4 take every frame,
+//          13 reset)   +0x80c +0x810 its address   +0x814 longest frame   +0xe14 MDIO
+//   +0x2000 receive descriptors, +0x3000 the ring's registers, +0x3040 the DMA's
+//   +0x4000 send descriptors,    +0x5000 the ring's registers, +0x5040 the DMA's
+
+fn genet_wait[&f](cpu: &!f Cpu, us: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0")] int {
+    let from = base.now_us(cpu);
+    while base.now_us(cpu) - from < us {
+    }
+    return 0;
+}
+
+// A register of the transceiver beside the card (the PHY, at address 1 on a Pi 4), read
+// through the card. -1 if the card gives up.
+fn genet_phy_read[&mv](vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), reg: int) -> [mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
+    let m = 0xfd580000 + 0xe14;
+    let cmd = 2 << 26 | 1 << 21 | reg << 16;
+    mmio_write32(vio, m, cmd);
+    mmio_write32(vio, m, cmd | 1 << 29);
+    var spins = 0;
+    while mmio_read32(vio, m) & 1 << 29 != 0 && spins < 1000000 {
+        spins = spins + 1;
+    }
+    let v = mmio_read32(vio, m);
+    if v & 1 << 29 != 0 || v & 1 << 28 != 0 {
+        return -1;
+    }
+    return v & 0xffff;
+}
+
+fn genet_phy_write[&mv](vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), reg: int, value: int) -> [mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
+    let m = 0xfd580000 + 0xe14;
+    let cmd = 1 << 26 | 1 << 21 | reg << 16 | value & 0xffff;
+    mmio_write32(vio, m, cmd);
+    mmio_write32(vio, m, cmd | 1 << 29);
+    var spins = 0;
+    while mmio_read32(vio, m) & 1 << 29 != 0 && spins < 1000000 {
+        spins = spins + 1;
+    }
+    return 0;
+}
+
+// Reset the card, give it its rings and buffers, and tell the transceiver how the two are
+// wired. k[15] is the card afterwards and k[19] its address; 1 if it is not the card expected.
+pub fn genet_start[&f, &mv, &s](cpu: &!f Cpu, vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), k: &!s [int]) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
+    let g = 0xfd580000;
+    if mmio_read32(vio, g) >> 24 & 15 != 6 {
+        // version 5 says 6 here
+        return 1;
+    }
+    // the address the firmware gave the card, before the reset forgets it
+    var mac = (mmio_read32(vio, g + 0x80c) & 0xffffffff) << 16 | mmio_read32(vio, g + 0x810) & 0xffff;
+    if mac == 0 {
+        // the firmware gave it none (the board's own is kept by the firmware, which is not asked
+        // yet): an address of the kind anyone may make up, 02:63:61:6e:63:04
+        mac = 0x0263616e6304;
+    }
+    mmio_write32(vio, g + 0x008, 2);
+    genet_wait(cpu, 10);
+    mmio_write32(vio, g + 0x008, 0);
+    genet_wait(cpu, 10);
+    mmio_write32(vio, g + 0x808, 0);
+    mmio_write32(vio, g + 0x808, 1 << 15 | 1 << 13);
+    genet_wait(cpu, 10);
+    mmio_write32(vio, g + 0x808, 0);
+    // counters cleared; the longest frame taken; two bytes before each frame, so that what
+    // follows the 14 of its header is aligned
+    mmio_write32(vio, g + 0xd80, 7);
+    mmio_write32(vio, g + 0xd80, 0);
+    mmio_write32(vio, g + 0x814, 1536);
+    mmio_write32(vio, g + 0x300, mmio_read32(vio, g + 0x300) | 2);
+    mmio_write32(vio, g + 0x3b4, 1);
+    // no interrupt is wanted
+    mmio_write32(vio, g + 0x210, 0xffffffff);
+    mmio_write32(vio, g + 0x208, 0xffffffff);
+    // the transceiver is outside the chip
+    mmio_write32(vio, g + 0x004, 3);
+    mmio_write32(vio, g + 0x80c, mac >> 16 & 0xffffffff);
+    mmio_write32(vio, g + 0x810, mac & 0xffff);
+    // both directions stopped while their rings are made
+    mmio_write32(vio, g + 0x3044, 0);
+    mmio_write32(vio, g + 0x5044, 0);
+    mmio_write32(vio, g + 0xb34, 1);
+    genet_wait(cpu, 10);
+    mmio_write32(vio, g + 0xb34, 0);
+    mmio_write32(vio, g + 0x304c, 8);
+    mmio_write32(vio, g + 0x504c, 8);
+    let d = k[14] + 0x210000;
+    var i = 0;
+    while i < 16 {
+        mmio_write32(vio, g + 0x2000 + i * 12 + 4, d + i * 0x800);
+        mmio_write32(vio, g + 0x2000 + i * 12 + 8, 0);
+        mmio_write32(vio, g + 0x4000 + i * 12 + 4, d + 0x8000 + i * 0x800);
+        mmio_write32(vio, g + 0x4000 + i * 12 + 8, 0);
+        i = i + 1;
+    }
+    // the receive ring (the last, number 16): 16 buffers of 2 KB, descriptors 0 to 15
+    let rx = g + 0x3000;
+    mmio_write32(vio, rx, 0);
+    mmio_write32(vio, rx + 0x08, 0);
+    mmio_write32(vio, rx + 0x0c, 0);
+    mmio_write32(vio, rx + 0x10, 16 << 16 | 2048);
+    mmio_write32(vio, rx + 0x14, 0);
+    mmio_write32(vio, rx + 0x1c, 16 * 3 - 1);
+    mmio_write32(vio, rx + 0x28, 5 << 16 | 1);
+    mmio_write32(vio, rx + 0x2c, 0);
+    mmio_write32(vio, g + 0x3040, 1 << 16);
+    let tx = g + 0x5000;
+    mmio_write32(vio, tx, 0);
+    mmio_write32(vio, tx + 0x08, 0);
+    mmio_write32(vio, tx + 0x0c, 0);
+    mmio_write32(vio, tx + 0x10, 16 << 16 | 2048);
+    mmio_write32(vio, tx + 0x14, 0);
+    mmio_write32(vio, tx + 0x1c, 16 * 3 - 1);
+    mmio_write32(vio, tx + 0x24, 1);
+    mmio_write32(vio, tx + 0x28, 0);
+    mmio_write32(vio, tx + 0x2c, 0);
+    mmio_write32(vio, g + 0x5040, 1 << 16);
+    // where the card's own counters start, whatever the reset left in them
+    k[17] = mmio_read32(vio, rx + 0x08) & 0xffff;
+    mmio_write32(vio, rx + 0x0c, k[17]);
+    k[18] = mmio_read32(vio, tx + 0x08) & 0xffff;
+    mmio_write32(vio, tx + 0x0c, k[18]);
+    mmio_write32(vio, g + 0x3044, 1 | 1 << 17);
+    mmio_write32(vio, g + 0x5044, 1 | 1 << 17);
+    // RGMII to the transceiver, which delays the receive clock itself ("rgmii-rxid")
+    let oob = mmio_read32(vio, g + 0x08c) & ~(1 << 5) & ~(1 << 16);
+    mmio_write32(vio, g + 0x08c, oob | 1 << 6 | 1 << 4);
+    // and the transceiver told so: its receive clock delayed (shadow 7 of register 0x18,
+    // bit 8), its send clock not (shadow 3 of register 0x1c, bit 9)
+    genet_phy_write(vio, 0x18, 0x7007);
+    let aux = genet_phy_read(vio, 0x18);
+    if aux >= 0 {
+        genet_phy_write(vio, 0x18, aux & 0x7ff8 | 0x8000 | 0x100 | 7);
+    }
+    genet_phy_write(vio, 0x1c, 3 << 10);
+    let clk = genet_phy_read(vio, 0x1c);
+    if clk >= 0 {
+        genet_phy_write(vio, 0x1c, 0x8000 | 3 << 10 | clk & 0x1ff);
+    }
+    // negotiate again with whoever is on the cable
+    genet_phy_write(vio, 0, 0x1200);
+    k[19] = mac;
+    k[15] = g;
+    return 0;
+}
+
+// Is there a cable, and at what speed did the two ends agree? 0 for no cable; else 10, 100
+// or 1000, and the MAC is set to it and told to send and receive.
+pub fn genet_link[&mv, &s](vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), k: &!s [int]) -> [mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
+    // the status register remembers a lost link until it is read: read twice
+    genet_phy_read(vio, 1);
+    let status = genet_phy_read(vio, 1);
+    if status < 0 || status & 4 == 0 || status & 0x20 == 0 {
+        return 0;
+    }
+    var speed = 10;
+    var bits = 0;
+    let giga = genet_phy_read(vio, 9) << 2 & genet_phy_read(vio, 10);
+    let common = genet_phy_read(vio, 4) & genet_phy_read(vio, 5);
+    if giga & 0xc00 != 0 {
+        speed = 1000;
+        bits = 2;
+    } else if common & 0x180 != 0 {
+        speed = 100;
+        bits = 1;
+    }
+    // every frame is taken (bit 4): `inet` drops what is not for this card
+    mmio_write32(vio, k[15] + 0x808, bits << 2 | 1 << 4 | 3);
+    return speed;
+}
+
+fn genet_send[&mv, &md, &s, &b](vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], frame: &b [byte], n: int) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
+    if n < 14 || n > 1536 {
+        return 1;
+    }
+    let slot = k[18] & 15;
+    let buf = k[14] + 0x218000 + slot * 0x800;
+    var i = 0;
+    while i < n {
+        mmio_write8(dma, buf + i, int_of(frame[i]));
+        i = i + 1;
+    }
+    // the length; one whole frame (first and last piece); the card adds the check
+    mmio_write32(vio, k[15] + 0x4000 + slot * 12, n << 16 | 0x1f80 | 0x2000 | 0x4000 | 0x40);
+    k[18] = (k[18] + 1) & 0xffff;
+    mmio_write32(vio, k[15] + 0x5000 + 0x0c, k[18]);
+    var spins = 0;
+    while mmio_read32(vio, k[15] + 0x5000 + 0x08) & 0xffff != k[18] && spins < 1000000 {
+        spins = spins + 1;
+    }
+    return 0;
+}
+
+fn genet_recv[&mv, &md, &s, &a](vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], frame: &!a [byte]) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
+    var got = 0;
+    while got == 0 && mmio_read32(vio, k[15] + 0x3000 + 0x08) & 0xffff != k[17] {
+        let slot = k[17] & 15;
+        // the length counts the two bytes in front. If the four of the frame's check are behind,
+        // they stay: `inet` goes by the lengths inside the frame, and takes what follows as padding
+        let n = (mmio_read32(vio, k[15] + 0x2000 + slot * 12) >> 16 & 0xfff) - 2;
+        let buf = k[14] + 0x210000 + slot * 0x800 + 2;
+        if n >= 14 && n <= len(frame) && n <= 2040 {
+            var i = 0;
+            while i < n {
+                frame[i] = byte_of(mmio_read8(dma, buf + i));
+                i = i + 1;
+            }
+            got = n;
+        }
+        k[17] = (k[17] + 1) & 0xffff;
+        mmio_write32(vio, k[15] + 0x3000 + 0x0c, k[17]);
+    }
+    return got;
+}
+
+// Whichever card the board has.
+fn card_send[&mv, &md, &s, &b](vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], frame: &b [byte], n: int) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
+    if k[1] == 4 {
+        return genet_send(vio, dma, k, frame, n);
+    }
+    return vnet_send(vio, dma, k, frame, n);
+}
+
+fn card_recv[&mv, &md, &s, &a](vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], frame: &!a [byte]) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
+    if k[1] == 4 {
+        return genet_recv(vio, dma, k, frame);
+    }
+    return vnet_recv(vio, dma, k, frame);
+}
+
+// `net eth` on a Pi 4: bring the card up, wait up to five seconds for the cable, and make
+// it the link.
+pub fn net_eth[&f, &mc, &mv, &s](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), k: &!s [int]) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
+    if k[1] != 4 {
+        return base.puts(con, k, "`net eth` is for a Pi 4's own card; on this board `net up` is the link there is\r\n");
+    }
+    k[10] = 0;
+    if genet_start(cpu, vio, k) != 0 {
+        base.puts(con, k, "not the card expected: its version register says ");
+        base.put_dec(con, k, mmio_read32(vio, 0xfd580000) >> 24 & 15);
+        return base.puts(con, k, "\r\n");
+    }
+    base.puts(con, k, "GENET, transceiver ");
+    var shift = 12;
+    let id1 = genet_phy_read(vio, 2);
+    let id2 = genet_phy_read(vio, 3);
+    while shift >= 0 {
+        base.put_hex(con, k, id1 >> shift & 15);
+        shift = shift - 4;
+    }
+    shift = 12;
+    while shift >= 0 {
+        base.put_hex(con, k, id2 >> shift & 15);
+        shift = shift - 4;
+    }
+    base.puts(con, k, "\r\n");
+    let from = base.now_us(cpu);
+    var speed = 0;
+    while speed == 0 && base.now_us(cpu) - from < 5000000 {
+        genet_wait(cpu, 100000);
+        speed = genet_link(vio, k);
+    }
+    if speed == 0 {
+        return base.puts(con, k, "no cable, or nobody at its other end, after five seconds\r\n");
+    }
+    k[10] = 2;
+    base.puts(con, k, "cable in, ");
+    base.put_dec(con, k, speed);
+    base.puts(con, k, " Mb/s\r\n");
+    return put_net(con, k);
+}
+
 // ---- randomness ------------------------------------------------------------------------
 // Numbers nobody outside can guess, from the board's own generator (docs/random.md):
 // on QEMU's virt a virtio device (number 4), which fills a buffer it is offered; on a Pi 3
@@ -214,7 +498,7 @@ pub fn vnet_recv[&mv, &md, &s, &a](vio: &!mv Mmio("0xa000000..0xa004000"), dma: 
 // k[34] says which (0: none), k[35] where. The virtio queue is in `dma`, after the
 // network card's: +0x6000 its three tables, +0x6400 the buffer.
 
-pub fn rng_start[&mr, &mv, &md, &s](rng: &!mr Mmio("0x3f104000..0x3f10400c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int]) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f104000..0x3f10400c"), mmio("0xa000000..0xa004000")] int {
+pub fn rng_start[&mr, &mv, &md, &s](rng: &!mr Mmio("0x3f104000..0x3f10400c"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int]) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f104000..0x3f10400c"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
     if k[1] == 3 {
         k[35] = 0x3f104000;
         // the first words are to be thrown away: this many, the chip's own advice
@@ -269,7 +553,7 @@ pub fn rng_start[&mr, &mv, &md, &s](rng: &!mr Mmio("0x3f104000..0x3f10400c"), vi
 }
 
 // One word of 32 bits from the generator, or -1 if it gave none in time.
-pub fn rng_word[&mr, &mv, &md, &s](rng: &!mr Mmio("0x3f104000..0x3f10400c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int]) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f104000..0x3f10400c"), mmio("0xa000000..0xa004000")] int {
+pub fn rng_word[&mr, &mv, &md, &s](rng: &!mr Mmio("0x3f104000..0x3f10400c"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int]) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f104000..0x3f10400c"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
     var spins = 0;
     if k[34] == 3 {
         while mmio_read32(rng, k[35] + 4) >> 24 == 0 && spins < 1000000 {
@@ -308,7 +592,7 @@ pub fn rng_word[&mr, &mv, &md, &s](rng: &!mr Mmio("0x3f104000..0x3f10400c"), vio
 
 // Keep 16 words ready at k[4136..]; k[37] is how many there are. What needs one takes it
 // from there, and so needs no capability.
-pub fn rng_fill[&mr, &mv, &md, &s](rng: &!mr Mmio("0x3f104000..0x3f10400c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int]) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f104000..0x3f10400c"), mmio("0xa000000..0xa004000")] int {
+pub fn rng_fill[&mr, &mv, &md, &s](rng: &!mr Mmio("0x3f104000..0x3f10400c"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int]) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f104000..0x3f10400c"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
     while k[34] != 0 && k[37] < 16 {
         let w = rng_word(rng, vio, dma, k);
         if w < 0 {
@@ -328,7 +612,7 @@ pub fn put_rng_name[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x
 }
 
 // `random`: sixteen bytes straight from the generator, and which one it is.
-pub fn put_random[&mc, &mr, &mv, &md, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), rng: &!mr Mmio("0x3f104000..0x3f10400c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f104000..0x3f10400c"), mmio("0xa000000..0xa004000")] int {
+pub fn put_random[&mc, &mr, &mv, &md, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), rng: &!mr Mmio("0x3f104000..0x3f10400c"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f104000..0x3f10400c"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
     if k[34] == 0 {
         return base.puts(con, k, "this board gave the kernel no source of randomness\r\n");
     }
@@ -355,16 +639,16 @@ pub fn put_random[&mc, &mr, &mv, &md, &s](con: &!mc Mmio("0x9000000..0x9000048,0
 // What arrives is a frame on the card and a bare packet on the serial line; `inet` has
 // a function for each, and these four are where the kernel chooses.
 
-pub fn link_recv[&mu, &mv, &md, &s, &n, &a](bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte]) -> [mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
+pub fn link_recv[&mu, &mv, &md, &s, &n, &a](bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte]) -> [mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
     if k[10] == 2 {
-        return vnet_recv(vio, dma, k, frame);
+        return card_recv(vio, dma, k, frame);
     }
     return slip_recv(bus, k, ns, frame);
 }
 
-pub fn link_send[&mu, &mv, &md, &s, &b, &w](bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], pkt: &b [byte], n: int, wire: &!w [byte]) -> [mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
+pub fn link_send[&mu, &mv, &md, &s, &b, &w](bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], pkt: &b [byte], n: int, wire: &!w [byte]) -> [mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
     if k[10] == 2 {
-        return vnet_send(vio, dma, k, pkt, n);
+        return card_send(vio, dma, k, pkt, n);
     }
     let w = inet.slip_encode(pkt, n, wire);
     var i = 0;
@@ -378,7 +662,7 @@ pub fn link_send[&mu, &mv, &md, &s, &b, &w](bus: &!mu Mmio("0x3f215004..0x3f2150
 // What arrived, `frame[0..n]`, given to `inet`, and its answer sent. `iss` is where a new
 // connection's sequence numbers start if the pool of random words is empty: the counter's
 // value, which is not a secret.
-pub fn net_take[&mu, &mv, &md, &s, &a, &b, &w, &t, &g, &h](bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], frame: &!a [byte], n: int, reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], now: int, iss: int) -> [mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
+pub fn net_take[&mu, &mv, &md, &s, &a, &b, &w, &t, &g, &h](bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], frame: &!a [byte], n: int, reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], now: int, iss: int) -> [mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
     var m = 0;
     // a word nobody can guess, if the board has given any; else the counter
     var first = iss;
@@ -517,7 +801,7 @@ pub fn session[&s, &t, &g, &h, &l, &w](k: &!s [int], tcp: &!t [int], bufs: &!g [
 // Take what has arrived, at most eight packets, and answer each; move the shell's bytes;
 // then send again whatever a connection has had out too long, and whatever is new.
 // Answers what `session` does.
-pub fn net_poll[&mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l](bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], rline: &!l [byte], now: int, iss: int) -> [mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
+pub fn net_poll[&mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l](bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], rline: &!l [byte], now: int, iss: int) -> [mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
     var budget = 8;
     while budget > 0 {
         let n = link_recv(bus, vio, dma, k, ns, frame);
@@ -598,7 +882,7 @@ pub fn put_address[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3
 // else the gateway's. Asked of every card (ARP), unless it is the neighbour already
 // remembered. Its card's address; 0 on the serial line, which has none; -1 if nobody answers
 // within a second. Whatever else arrives meanwhile is answered as always.
-pub fn resolve[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], target: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
+pub fn resolve[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], target: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
     if k[10] != 2 {
         return 0;
     }
@@ -616,7 +900,7 @@ pub fn resolve[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h](cpu: &!f 
     let ours = k[4154];
     let q = inet.arp_request(reply, k[19], ours, hop);
     if q > 0 {
-        vnet_send(vio, dma, k, reply, q);
+        card_send(vio, dma, k, reply, q);
     }
     let asked = base.now_us(cpu);
     var card = -1;
@@ -655,7 +939,7 @@ fn put_bytes[&o, &d](out: &!o [byte], at: int, data: &d [byte], from: int, to: i
 // `http <address> <port>`: the kernel opens a connection, asks for `/` in HTTP/1.0, and
 // prints what comes back until the other end finishes, for at most five seconds. The
 // shell waits meanwhile; the network is served as always.
-pub fn net_http[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], rline: &!l [byte], dest: int, name: &r [byte], from: int, to: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
+pub fn net_http[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], rline: &!l [byte], dest: int, name: &r [byte], from: int, to: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
     let target = dest / 65536;
     let card = resolve(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, target);
     if card < 0 {
@@ -728,7 +1012,7 @@ pub fn net_http[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l, &r](
 // `ping <address>`: the kernel speaks first. An echo request, and the time to its reply.
 // On the card the address must first be asked for (ARP); the last answer is remembered.
 // Whatever else arrives meanwhile is answered as always.
-pub fn net_ping[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], target: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
+pub fn net_ping[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], target: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
     if k[10] == 0 {
         return base.puts(con, k, "the link is down: `net up` first\r\n");
     }
@@ -791,7 +1075,7 @@ fn put_text[&mc, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f20
 
 // The address of the name `name[from..to]`, asked of the name server over UDP: twice at
 // most, two seconds each. -1, and the reason printed, if there is none to be had.
-pub fn net_lookup[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], name: &r [byte], from: int, to: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
+pub fn net_lookup[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], name: &r [byte], from: int, to: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
     if k[4157] == 0 {
         base.puts(con, k, "no name server is known: `net dhcp` asks for one\r\n");
         return -1;
@@ -869,7 +1153,7 @@ pub fn net_lookup[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &r](cp
 }
 
 // `a.b.c.d` or a name, at `text[from..to]`: its address, or -1 with the reason printed.
-fn host[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], text: &r [byte], from: int, to: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
+fn host[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], text: &r [byte], from: int, to: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
     let a = address(text, from, to);
     if a >= 0 {
         return a;
@@ -878,9 +1162,10 @@ fn host[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &r](cpu: &!f Cpu
 }
 
 // `net dhcp`: ask whoever is on the network for an address (DISCOVER, the OFFER, REQUEST, the
-// ACK), twice at most, two seconds for each answer. What the server says becomes the
+// ACK), twice at most, five seconds for each answer (a home router took more than two
+// to acknowledge). What the server says becomes the
 // kernel's address, mask, gateway and name server.
-pub fn net_dhcp[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte]) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
+pub fn net_dhcp[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte]) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
     if k[10] != 2 {
         return base.puts(con, k, "an address is asked for on a network card: this link is not one, or it is down\r\n");
     }
@@ -890,6 +1175,10 @@ pub fn net_dhcp[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h](cpu: &!f
         xid = k[4136 + k[37]];
     }
     var given = 0;
+    // how far the exchange got, for when it fails: the address offered, and what answered the request
+    var offered_was = 0;
+    var answer_was = -1;
+    var server_was = 0;
     region r {
         let facts = alloc_slice[r](inet.dhcp_facts(), 0);
         var tries = 0;
@@ -897,11 +1186,11 @@ pub fn net_dhcp[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h](cpu: &!f
             // who will give this card an address?
             var m = inet.dhcp_discover(reply, k[19], xid);
             if m > 0 {
-                vnet_send(vio, dma, k, reply, m);
+                card_send(vio, dma, k, reply, m);
             }
             var what = -1;
             var asked = base.now_us(cpu);
-            while what != 2 && base.now_us(cpu) - asked < 2000000 {
+            while what != 2 && base.now_us(cpu) - asked < 5000000 {
                 let n = link_recv(bus, vio, dma, k, ns, frame);
                 if n > 0 {
                     what = inet.dhcp_answer(frame, n, k[19], xid, facts);
@@ -913,13 +1202,15 @@ pub fn net_dhcp[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h](cpu: &!f
             if what == 2 && facts[0] != 0 {
                 // the address offered is asked for, of the server that offered it
                 let offered = facts[0];
+                offered_was = offered;
+                server_was = facts[4];
                 m = inet.dhcp_request(reply, k[19], xid, offered, facts[4]);
                 if m > 0 {
-                    vnet_send(vio, dma, k, reply, m);
+                    card_send(vio, dma, k, reply, m);
                 }
                 what = -1;
                 asked = base.now_us(cpu);
-                while what != 5 && what != 6 && base.now_us(cpu) - asked < 2000000 {
+                while what != 5 && what != 6 && base.now_us(cpu) - asked < 5000000 {
                     let n = link_recv(bus, vio, dma, k, ns, frame);
                     if n > 0 {
                         what = inet.dhcp_answer(frame, n, k[19], xid, facts);
@@ -928,6 +1219,7 @@ pub fn net_dhcp[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h](cpu: &!f
                         }
                     }
                 }
+                answer_was = what;
                 if what == 5 && facts[0] == offered {
                     given = 1;
                     k[4154] = facts[0];
@@ -944,6 +1236,20 @@ pub fn net_dhcp[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h](cpu: &!f
             }
             tries = tries + 1;
         }
+    }
+    if given == 0 && offered_was != 0 {
+        put_address(con, k, offered_was);
+        base.puts(con, k, " was offered by ");
+        put_address(con, k, server_was);
+        base.puts(con, k, ", but asking for it got ");
+        if answer_was == 6 {
+            base.puts(con, k, "a refusal");
+        } else if answer_was == 5 {
+            base.puts(con, k, "an acknowledgement of another address");
+        } else {
+            base.puts(con, k, "no answer");
+        }
+        return base.puts(con, k, "; the kernel keeps the address it had\r\n");
     }
     if given == 0 {
         return base.puts(con, k, "nobody on this network gave an address; the kernel keeps the one it had\r\n");
@@ -979,7 +1285,25 @@ fn begins[&r, &w](text: &r [byte], n: int, word: &w [byte]) -> [] bool {
 // 1 if `text[0..n]` was one of them and has been run, 0 if it is another command.
 // `rline` is the line being typed over the shell's connection, which `http` must leave
 // alone while it waits; `text` is never that buffer.
-pub fn net_command[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], rline: &!l [byte], text: &r [byte], n: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
+pub fn net_command[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], rline: &!l [byte], text: &r [byte], n: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
+    if n > 12 && begins(text, n, "net address ") {
+        // an address by hand, on a network of 256, with no gateway: for a network that gives none
+        let a = address(text, 12, n);
+        if a < 0 {
+            base.puts(con, k, "usage: net address <a.b.c.d>\r\n");
+            return 1;
+        }
+        k[4154] = a;
+        k[4155] = 0xffffff00;
+        k[4156] = 0;
+        k[21] = 0;
+        put_net(con, k);
+        return 1;
+    }
+    if n == 7 && begins(text, n, "net eth") {
+        net_eth(cpu, con, vio, k);
+        return 1;
+    }
     if n == 8 && begins(text, n, "net dhcp") {
         net_dhcp(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox);
         return 1;
@@ -1042,7 +1366,11 @@ pub fn put_net[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201
     } else if k[10] == 0 {
         base.puts(con, k, "link down");
     } else if k[10] == 2 {
-        base.puts(con, k, "link up: virtio-net, card ");
+        if k[1] == 4 {
+            base.puts(con, k, "link up: the Pi 4's Ethernet, card ");
+        } else {
+            base.puts(con, k, "link up: virtio-net, card ");
+        }
         var shift = 40;
         while shift >= 0 {
             base.put_hex(con, k, k[19] >> shift + 4 & 15);

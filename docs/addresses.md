@@ -17,8 +17,8 @@ network; and it knew other machines by number only.
   the machine's own: `inet.next_hop` says which, and the ARP question is asked about that. On the
   serial line there is no such choice: everything goes down the line.
 - **DHCP (RFC 2131), on the card only.** `net dhcp` asks: DISCOVER, the server's OFFER, REQUEST, its
-  ACK. `inet` builds the two frames and reads the two answers; the kernel waits two seconds for each
-  and tries twice. The answer's address, mask, gateway and name server become the kernel's.
+  ACK. `inet` builds the two frames and reads the two answers; the kernel waits five seconds for each
+  and tries twice (two seconds at first: a real router took longer to acknowledge, docs/genet.md). The answer's address, mask, gateway and name server become the kernel's.
 - **DNS (RFC 1035).** `lookup <name>` asks the name server for the name's IPv4 address, over UDP, and
   `ping` and `http` take a name where they took an address. `inet` builds the question and reads the
   answer: the first address in it, whatever aliases come before.
