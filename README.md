@@ -280,7 +280,9 @@ card is taken out.
 ## Files
 
 On QEMU's `virt` machine the kernel reads a FAT16 or FAT32 disk ([docs/storage.md](docs/storage.md)):
-`disk`, `ls`, `cat <name>`, `sum <name>`. Reading only, the top directory only, short names only; a
+`disk`, `ls`, `cat <name>`, `sum <name>`, and it can add to one: `write <name> <text>`,
+`append <name> <text>`, `copy <from> <to>`. It never replaces or removes a file (that waits for
+versions: [docs/permissions.md](docs/permissions.md)). The top directory only, short names only; a
 real Pi's SD card has no driver yet.
 
 ```

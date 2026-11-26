@@ -322,3 +322,204 @@ fn test_no_damage_to_a_directory_or_a_table_makes_reading_trap() -> [] int {
     }
     return 0;
 }
+
+// ── writing: the bytes of a sector, changed ──
+
+fn test_the_two_facts_writing_needs_are_read_too() -> [] int {
+    region a {
+        let s = alloc_slice[a](512, byte_of(0));
+        let info = alloc_slice[a](fat.facts(), 0);
+        set(s, boot32());
+        fat.mount(s, 0, info);
+        // two copies of the table; FAT32's summary in sector 1
+        test.assert_eq(info[10], 2);
+        test.assert_eq(info[11], 1);
+        fat.mount(s, 1, info);
+        test.assert_eq(info[11], 2);
+        set(s, boot16());
+        fat.mount(s, 0, info);
+        test.assert_eq(info[10], 2);
+        test.assert_eq(info[11], 0);
+    }
+    return 0;
+}
+
+fn test_an_entry_made_here_is_the_entry_macos_made() -> [] int {
+    region a {
+        let theirs = alloc_slice[a](512, byte_of(0));
+        let ours = alloc_slice[a](512, byte_of(0));
+        let got = alloc_slice[a](12, byte_of(0));
+        let out = alloc_slice[a](3, 0);
+        set(theirs, root32());
+        // the same file, written small: the name, the kind, the first cluster and the length are theirs
+        test.assert_eq(fat.put_entry(ours, 1, "hello.txt", 0, 9, 11, 32), 0);
+        var k = 0;
+        while k < 12 {
+            test.assert_eq(int_of(ours[32 + k]), int_of(theirs[32 + k]));
+            k = k + 1;
+        }
+        test.assert_eq(int_of(ours[32 + 20]), int_of(theirs[32 + 20]));
+        test.assert_eq(int_of(ours[32 + 21]), int_of(theirs[32 + 21]));
+        k = 26;
+        while k < 32 {
+            test.assert_eq(int_of(ours[32 + k]), int_of(theirs[32 + k]));
+            k = k + 1;
+        }
+        // and it reads back, here
+        test.assert_eq(fat.entry(ours, 1, got, out), fat.entry_file());
+        test.assert(fat.named(got, out[0], "HELLO.TXT", 0, 9));
+        test.assert_eq(out[1], 11);
+        test.assert_eq(out[2], 32);
+        // a first cluster past 65535 is in two halves; a name with no dot
+        test.assert_eq(fat.put_entry(ours, 15, "KERNEL8", 0, 7, 70000, 300000), 0);
+        test.assert_eq(fat.entry(ours, 15, got, out), fat.entry_file());
+        test.assert(fat.named(got, out[0], "kernel8", 0, 7));
+        test.assert_eq(out[1], 70000);
+        test.assert_eq(out[2], 300000);
+        test.assert_eq(fat.set_extent(ours, 15, 12, 77), 0);
+        fat.entry(ours, 15, got, out);
+        test.assert_eq(out[1], 12);
+        test.assert_eq(out[2], 77);
+    }
+    return 0;
+}
+
+// `name` is refused, and the sector is as it was.
+fn refused[&m](name: &m [byte]) -> [] int {
+    region a {
+        let s = alloc_slice[a](512, byte_of(7));
+        test.assert_eq(fat.put_entry(s, 3, name, 0, len(name), 5, 5), -1);
+        var k = 0;
+        while k < 512 {
+            test.assert_eq(int_of(s[k]), 7);
+            k = k + 1;
+        }
+    }
+    return 0;
+}
+
+fn test_what_is_not_a_short_name_is_not_written() -> [] int {
+    refused("toolongname.txt");
+    refused("a.long");
+    refused("a b.txt");
+    refused("a..b");
+    refused(".txt");
+    refused("a.");
+    refused("a/b");
+    refused("a*b");
+    region a {
+        let s = alloc_slice[a](512, byte_of(0));
+        test.assert_eq(fat.put_entry(s, 0, "x", 0, 0, 5, 5), -1);
+        test.assert_eq(fat.put_entry(s, 16, "x", 0, 1, 5, 5), -1);
+        test.assert_eq(fat.put_entry(s, 0, "x", 0, 1, -1, 5), -1);
+        test.assert_eq(fat.put_entry(s, 0, "A-1_~!#.B$%", 0, 11, 2, 0), 0);
+    }
+    return 0;
+}
+
+fn test_a_place_for_a_new_entry_is_one_never_used_or_one_deleted() -> [] int {
+    region a {
+        let s = alloc_slice[a](512, byte_of(0));
+        test.assert_eq(fat.free_slot(s), 0);
+        set(s, root32());
+        // macOS filled all sixteen of this sector
+        test.assert_eq(fat.free_slot(s), -1);
+        s[5 * 32] = byte_of(229);
+        test.assert_eq(fat.free_slot(s), 5);
+    }
+    return 0;
+}
+
+fn test_a_free_cluster_is_found_and_chained() -> [] int {
+    region a {
+        let b = alloc_slice[a](512, byte_of(0));
+        let s = alloc_slice[a](512, byte_of(0));
+        let info = alloc_slice[a](fat.facts(), 0);
+        set(b, boot16());
+        fat.mount(b, 0, info);
+        test.assert_eq(fat.per_sector(info), 256);
+        set(s, "f0ffffff00000000ffff0600ffff000000000a000b000c000d000e000f0010001100120013001400150016001700180019001a001b001c001d001e001f0020002100220023002400250026002700280029002a002b002c002d002e002f0030003100320033003400350036003700380039003a003b003c003d003e003f0040004100420043004400450046004700480049004a004b004c004d004e004f0050005100520053005400550056005700580059005a005b005c005d005e005f0060006100620063006400650066006700680069006a006b006c006d006e006f0070007100720073007400750076007700780079007a007b007c007d007e007f0080008100820083008400850086008700880089008a008b008c008d008e008f0090009100920093009400950096009700980099009a009b00ffff9d00ffff00000000a100ffff00000000a500ffffa700ffff00000000ffffac00ffff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+        // the first free cluster of this sector of the table, as the second implementation finds it
+        test.assert_eq(fat.free_cluster(info, s, 0, 0), 2);
+        test.assert_eq(fat.free_cluster(info, s, 0, 2 % 256 + 1), 2 + 1);
+        test.assert_eq(fat.free_cluster(info, s, info[3], 0), -1);
+        // made the last of a file, then made to be followed by the next: read back with `next`
+        test.assert_eq(fat.set_next(info, s, 2, -1), 0);
+        test.assert_eq(fat.next(info, s, 2), fat.chain_end());
+        test.assert_eq(fat.free_cluster(info, s, 0, 0), 2 + 1);
+        test.assert_eq(fat.set_next(info, s, 2, 2 + 1), 0);
+        test.assert_eq(fat.next(info, s, 2), 2 + 1);
+        test.assert_eq(fat.set_next(info, s, 1, -1), -1);
+        test.assert_eq(fat.set_next(info, s, 2, 1), -1);
+        set(b, boot32());
+        fat.mount(b, 0, info);
+        test.assert_eq(fat.per_sector(info), 128);
+        set(s, "0102000002020000030200000402000005020000060200000702000008020000090200000a0200000b0200000c0200000d0200000e0200000f020000100200001102000012020000130200001402000015020000160200001702000018020000190200001a0200001b0200001c0200001d0200001e0200001f020000200200002102000022020000230200002402000025020000260200002702000028020000290200002a0200002b0200002c0200002d0200002e0200002f020000300200003102000032020000330200003402000035020000360200003702000038020000390200003a0200003b0200003c0200003d0200003e0200003f020000400200004102000042020000430200004402000045020000460200004702000048020000490200004a0200004b0200004c0200004d0200004e0200004f020000500200005102000052020000530200005402000055020000560200005702000058020000590200005a0200005b0200005c0200005d0200005e0200005f020000600200006102000062020000630200006402000065020000ffffff0f6702000068020000690200006a0200006b0200006c0200006d020000ffffff0f00000000000000000000000000000000000000000000000000000000000000007702000078020000790200007a0200007b0200007c0200007d020000ffffff0f0000000000000000");
+        test.assert_eq(fat.free_cluster(info, s, 4, 0), 622);
+        // the top four bits of a FAT32 entry are not ours to change
+        s[622 * 4 % 512 + 3] = byte_of(160);
+        test.assert_eq(fat.set_next(info, s, 622, -1), 0);
+        test.assert_eq(int_of(s[622 * 4 % 512 + 3]), 175);
+        test.assert_eq(fat.next(info, s, 622), fat.chain_end());
+        test.assert_eq(fat.set_next(info, s, 622, 70000), 0);
+        test.assert_eq(fat.next(info, s, 622), 70000);
+        test.assert_eq(int_of(s[622 * 4 % 512 + 3]) / 16, 10);
+    }
+    return 0;
+}
+
+fn test_fat32s_count_of_free_clusters_is_made_unknown() -> [] int {
+    region a {
+        let s = alloc_slice[a](512, byte_of(0));
+        set(s, "525261410000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007272416180f50100a7020000000000000000000000000000000055aa");
+        test.assert_eq(fat.summary_unknown(s), 0);
+        var k = 488;
+        while k < 496 {
+            test.assert_eq(int_of(s[k]), 255);
+            k = k + 1;
+        }
+        // any other sector is left alone
+        set(s, boot32());
+        test.assert_eq(fat.summary_unknown(s), -1);
+        test.assert_eq(fat.summary_less(s, 3), -1);
+        // a count that is one goes down by what was taken; "unknown" stays unknown
+        set(s, "525261410000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007272416180f50100a7020000000000000000000000000000000055aa");
+        s[488] = byte_of(16);
+        s[489] = byte_of(39);
+        s[490] = byte_of(2);
+        s[491] = byte_of(0);
+        test.assert_eq(fat.summary_less(s, 600), 0);
+        test.assert_eq(int_of(s[488]) + int_of(s[489]) * 256 + int_of(s[490]) * 65536, 141072 - 600);
+        test.assert_eq(fat.summary_unknown(s), 0);
+        test.assert_eq(fat.summary_less(s, 600), 0);
+        test.assert_eq(int_of(s[488]), 255);
+    }
+    return 0;
+}
+
+fn test_no_name_makes_put_entry_trap() -> [] int {
+    region a {
+        let s = alloc_slice[a](512, byte_of(0));
+        let name = alloc_slice[a](12, byte_of(65));
+        var at = 0;
+        var tried = 0;
+        while at < 12 {
+            var v = 0;
+            while v < 256 {
+                name[at] = byte_of(v);
+                var n = 0;
+                while n <= 12 {
+                    let r = fat.put_entry(s, at, name, 0, n, at, v);
+                    test.assert(r == 0 || r == -1);
+                    tried = tried + 1;
+                    n = n + 1;
+                }
+                v = v + 1;
+            }
+            name[at] = byte_of(65);
+            at = at + 1;
+        }
+        test.assert_eq(tried, 12 * 256 * 13);
+    }
+    return 0;
+}

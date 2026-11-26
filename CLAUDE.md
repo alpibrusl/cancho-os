@@ -41,8 +41,11 @@ Rules of the road
 - Storage (docs/storage.md): `src/fat.cho` is pure like `inet` (given a sector, says what it means; no trap
   on any bytes) and its tests use sectors of volumes other tools made, read by a second implementation.
   `src/disk.cho` holds the driver and the commands. A change is tried against real images before it is
-  believed: `MACHINE=virt DISK=img ./test.sh ... 'sum NAME'` and the checksum from another tool. Nothing
-  writes a disk yet: writing is its own design and its own slice.
+  believed: `MACHINE=virt DISK=img ./test.sh ... 'sum NAME'` and the checksum from another tool.
+  Writing follows docs/permissions.md: the directory sector that names new data is written LAST, nothing
+  that is on the disk is changed in place, and a write is believed only when another system's checker
+  (`fsck.fat -n`, macOS `fsck_msdos -n`) finds nothing wrong and another system reads the bytes back.
+  Do not add replacing or removing a file before versions exist.
 - SSH (docs/ssh.md) is cancho-ssh, pinned by `SSH_REF` in the workflow and taken from `../cancho-ssh` (or
   `SSH=`) by build.sh: change it there, never copy it here. `src/sshd.cho` is the loop and must keep its two
   rules (read the connection only when nothing else moved; keep what `feed` and `tcp_write` did not take).
