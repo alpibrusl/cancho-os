@@ -17,11 +17,6 @@ import inet;
 // commands refuse while it is up. Everything about packets is src/inet.cho, which holds
 // no hardware; this is the part that moves bytes.
 
-// 10.0.0.2. The other end of the line is whoever is there; SLIP has no addresses.
-pub fn net_address() -> [] int {
-    return 10 * 16777216 + 2;
-}
-
 // The next whole packet from the line, in `frame`: its length, or 0 if there is none yet.
 // At most 256 bytes are taken at once.
 pub fn slip_recv[&mu, &s, &n, &a](bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), k: &!s [int], ns: &!n [int], frame: &!a [byte]) -> [mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c")] int {
@@ -393,9 +388,9 @@ pub fn net_take[&mu, &mv, &md, &s, &a, &b, &w, &t, &g, &h](bus: &!mu Mmio("0x3f2
     var at = 0;
     if k[10] == 2 {
         at = 14;
-        m = inet.eth_serve(frame, n, k[19], net_address(), tcp, bufs, inbox, k[30], now, first, reply);
+        m = inet.eth_serve(frame, n, k[19], k[4154], tcp, bufs, inbox, k[30], now, first, reply);
     } else {
-        m = inet.serve(frame, n, net_address(), tcp, bufs, inbox, k[30], now, first, reply);
+        m = inet.serve(frame, n, k[4154], tcp, bufs, inbox, k[30], now, first, reply);
     }
     if k[37] > 0 && m >= at + 40 && int_of(reply[at + 9]) == 6 && int_of(reply[at + 33]) == 18 {
         // the reply opens a connection (SYN and ACK): it began at that word, which is not used again
@@ -538,9 +533,9 @@ pub fn net_poll[&mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l](bus: &!mu Mmi
     while c < inet.tcp_count(tcp, bufs, inbox) {
         var m = 0;
         if k[10] == 2 {
-            m = inet.eth_tick(tcp, bufs, c, now, k[19], net_address(), reply);
+            m = inet.eth_tick(tcp, bufs, c, now, k[19], k[4154], reply);
         } else {
-            m = inet.tcp_tick(tcp, bufs, c, now, net_address(), reply, 0);
+            m = inet.tcp_tick(tcp, bufs, c, now, k[4154], reply, 0);
         }
         if m > 0 {
             link_send(bus, vio, dma, k, reply, m, wire);
@@ -548,9 +543,9 @@ pub fn net_poll[&mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l](bus: &!mu Mmi
         }
         // and what the shell's connection has to send that it has not sent
         if k[10] == 2 {
-            m = inet.eth_flush(tcp, bufs, c, now, k[19], net_address(), reply);
+            m = inet.eth_flush(tcp, bufs, c, now, k[19], k[4154], reply);
         } else {
-            m = inet.tcp_flush(tcp, bufs, c, now, net_address(), reply, 0);
+            m = inet.tcp_flush(tcp, bufs, c, now, k[4154], reply, 0);
         }
         if m > 0 {
             link_send(bus, vio, dma, k, reply, m, wire);
@@ -599,18 +594,27 @@ pub fn put_address[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3
     return base.put_dec(con, k, a & 255);
 }
 
-// Whose card has `target`? Asked of every card (ARP), unless it is the neighbour already
+// Whose card is a packet for `target` sent to? The machine's own if it is on our network,
+// else the gateway's. Asked of every card (ARP), unless it is the neighbour already
 // remembered. Its card's address; 0 on the serial line, which has none; -1 if nobody answers
 // within a second. Whatever else arrives meanwhile is answered as always.
 pub fn resolve[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], target: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
     if k[10] != 2 {
         return 0;
     }
-    if k[21] == target {
+    // a machine outside our network is reached through the gateway's card
+    let hop = inet.next_hop(k[4154], k[4155], k[4156], target);
+    if hop == 0 {
+        base.puts(con, k, "no gateway is known, and ");
+        put_address(con, k, target);
+        base.puts(con, k, " is not on this network\r\n");
+        return -1;
+    }
+    if k[21] == hop {
         return k[22];
     }
-    let ours = net_address();
-    let q = inet.arp_request(reply, k[19], ours, target);
+    let ours = k[4154];
+    let q = inet.arp_request(reply, k[19], ours, hop);
     if q > 0 {
         vnet_send(vio, dma, k, reply, q);
     }
@@ -619,7 +623,7 @@ pub fn resolve[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h](cpu: &!f 
     while card < 0 && base.now_us(cpu) - asked < 1000000 {
         let n = link_recv(bus, vio, dma, k, ns, frame);
         if n > 0 {
-            card = inet.arp_answer_from(frame, n, k[19], ours, target);
+            card = inet.arp_answer_from(frame, n, k[19], ours, hop);
             if card < 0 {
                 net_take(bus, vio, dma, k, frame, n, reply, wire, tcp, bufs, inbox, base.uptime_ms(cpu), cpu_read(cpu, "cntvct_el0"));
             }
@@ -627,51 +631,31 @@ pub fn resolve[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h](cpu: &!f 
     }
     if card < 0 {
         base.puts(con, k, "nobody on this network says they are ");
-        put_address(con, k, target);
+        put_address(con, k, hop);
         base.puts(con, k, "\r\n");
         return -1;
     }
-    k[21] = target;
+    k[21] = hop;
     k[22] = card;
     return card;
 }
 
-// `<a.b.c.d> <port>` at `line[from..n]`: the address times 65536, plus the port. -1 if it is not that.
-pub fn address_and_port[&r](line: &r [byte], from: int, n: int) -> [] int {
-    var sp = from;
-    while sp < n && int_of(line[sp]) != ' ' {
-        sp = sp + 1;
-    }
-    let a = address(line, from, sp);
-    var port = 0;
-    var i = sp + 1;
-    if a < 0 || i >= n {
-        return -1;
-    }
-    while i < n {
-        let c = int_of(line[i]);
-        if c < '0' || c > '9' || port > 6553 {
-            return -1;
-        }
-        port = port * 10 + c - '0';
+// `data[from..to]` copied to `out[at..]`, as much as fits. Where the next byte goes.
+fn put_bytes[&o, &d](out: &!o [byte], at: int, data: &d [byte], from: int, to: int) -> [] int {
+    var i = from;
+    var w = at;
+    while i < to && w < len(out) {
+        out[w] = data[i];
+        w = w + 1;
         i = i + 1;
     }
-    if port < 1 || port > 65535 {
-        return -1;
-    }
-    return a * 65536 + port;
+    return w;
 }
 
 // `http <address> <port>`: the kernel opens a connection, asks for `/` in HTTP/1.0, and
 // prints what comes back until the other end finishes, for at most five seconds. The
 // shell waits meanwhile; the network is served as always.
-pub fn net_http[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], rline: &!l [byte], dest: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
-    if k[10] == 0 {
-        return base.puts(con, k, "the link is down: `net up` first\r\n");
-    }
-    if dest < 0 {
-        return base.puts(con, k, "usage: http <a.b.c.d> <port>\r\n");
-    }
+pub fn net_http[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], rline: &!l [byte], dest: int, name: &r [byte], from: int, to: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
     let target = dest / 65536;
     let card = resolve(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, target);
     if card < 0 {
@@ -697,7 +681,13 @@ pub fn net_http[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l](cpu:
         let state = inet.tcp_state(tcp, c);
         if state == 2 && !opened {
             opened = true;
-            inet.tcp_write(tcp, bufs, c, "GET / HTTP/1.0\r\n\r\n", 0, 18);
+            // the request: its first line, and whom it is for, as the user named it (a server that
+            // answers for several names needs that)
+            var w = 0;
+            w = put_bytes(wire, w, "GET / HTTP/1.0\r\nHost: ", 0, 22);
+            w = put_bytes(wire, w, name, from, to);
+            w = put_bytes(wire, w, "\r\n\r\n", 0, 4);
+            inet.tcp_write(tcp, bufs, c, wire, 0, w);
         }
         let n = inet.tcp_read(tcp, inbox, c, wire, 256);
         var i = 0;
@@ -738,15 +728,14 @@ pub fn net_http[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l](cpu:
 // `ping <address>`: the kernel speaks first. An echo request, and the time to its reply.
 // On the card the address must first be asked for (ARP); the last answer is remembered.
 // Whatever else arrives meanwhile is answered as always.
-pub fn net_ping[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], line: &r [byte], from: int, len_line: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
+pub fn net_ping[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], target: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
     if k[10] == 0 {
         return base.puts(con, k, "the link is down: `net up` first\r\n");
     }
-    let target = address(line, from, len_line);
     if target < 0 {
-        return base.puts(con, k, "usage: ping <a.b.c.d>\r\n");
+        return 0;
     }
-    let ours = net_address();
+    let ours = k[4154];
     if resolve(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, target) < 0 {
         return 0;
     }
@@ -789,6 +778,264 @@ pub fn net_ping[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &r](cpu:
     return base.puts(con, k, " within a second\r\n");
 }
 
+// ---- names, and an address that is given (docs/addresses.md) ------------------------
+
+fn put_text[&mc, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], text: &r [byte], from: int, to: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
+    var i = from;
+    while i < to {
+        base.putc(con, k, int_of(text[i]));
+        i = i + 1;
+    }
+    return 0;
+}
+
+// The address of the name `name[from..to]`, asked of the name server over UDP: twice at
+// most, two seconds each. -1, and the reason printed, if there is none to be had.
+pub fn net_lookup[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], name: &r [byte], from: int, to: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
+    if k[4157] == 0 {
+        base.puts(con, k, "no name server is known: `net dhcp` asks for one\r\n");
+        return -1;
+    }
+    let ours = k[4154];
+    let server = k[4157];
+    let card = resolve(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, server);
+    if card < 0 {
+        return -1;
+    }
+    // the question's number and our port: from the generator if there is one, since whoever
+    // guesses both can answer in the server's place
+    var id = cpu_read(cpu, "cntvct_el0");
+    if k[37] > 0 {
+        k[37] = k[37] - 1;
+        id = k[4136 + k[37]];
+    }
+    let port = 49152 + id / 65536 % 16384;
+    var at = 0;
+    if k[10] == 2 {
+        at = 14;
+    }
+    var found = inet.dns_not_an_answer();
+    var tries = 0;
+    while tries < 2 && found == inet.dns_not_an_answer() {
+        let q = inet.dns_question(wire, 0, id, name, from, to);
+        if q < 0 {
+            base.puts(con, k, "not a name: ");
+            put_text(con, k, name, from, to);
+            base.puts(con, k, "\r\n");
+            return -1;
+        }
+        var m = inet.udp_packet(reply, at, ours, server, port, 53, wire, 0, q);
+        if m > 0 && k[10] == 2 {
+            m = inet.eth_frame(reply, m, card, k[19]);
+        }
+        if m > 0 {
+            link_send(bus, vio, dma, k, reply, m, wire);
+        }
+        let asked = base.now_us(cpu);
+        while found == inet.dns_not_an_answer() && base.now_us(cpu) - asked < 2000000 {
+            let n = link_recv(bus, vio, dma, k, ns, frame);
+            if n > 0 {
+                var d = -1;
+                if k[10] != 2 {
+                    d = inet.udp_data(frame, 0, n, ours, server, 53, port);
+                } else if n > 14 && inet.get16(frame, 12) == 2048 {
+                    d = inet.udp_data(frame, 14, n - 14, ours, server, 53, port);
+                }
+                if d >= 0 {
+                    found = inet.dns_address(frame, d, inet.udp_size(frame, d), id);
+                } else {
+                    net_take(bus, vio, dma, k, frame, n, reply, wire, tcp, bufs, inbox, base.uptime_ms(cpu), cpu_read(cpu, "cntvct_el0"));
+                }
+            }
+        }
+        tries = tries + 1;
+    }
+    if found >= 0 {
+        return found;
+    }
+    if found == inet.dns_no_such_name() {
+        base.puts(con, k, "no such name: ");
+        put_text(con, k, name, from, to);
+    } else if found == inet.dns_no_address() {
+        put_text(con, k, name, from, to);
+        base.puts(con, k, " has no address the name server would give");
+    } else {
+        base.puts(con, k, "the name server ");
+        put_address(con, k, server);
+        base.puts(con, k, " did not answer");
+    }
+    base.puts(con, k, "\r\n");
+    return -1;
+}
+
+// `a.b.c.d` or a name, at `text[from..to]`: its address, or -1 with the reason printed.
+fn host[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], text: &r [byte], from: int, to: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
+    let a = address(text, from, to);
+    if a >= 0 {
+        return a;
+    }
+    return net_lookup(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, text, from, to);
+}
+
+// `net dhcp`: ask whoever is on the network for an address (DISCOVER, the OFFER, REQUEST, the
+// ACK), twice at most, two seconds for each answer. What the server says becomes the
+// kernel's address, mask, gateway and name server.
+pub fn net_dhcp[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte]) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
+    if k[10] != 2 {
+        return base.puts(con, k, "an address is asked for on a network card: this link is not one, or it is down\r\n");
+    }
+    var xid = cpu_read(cpu, "cntvct_el0") % 4294967296;
+    if k[37] > 0 {
+        k[37] = k[37] - 1;
+        xid = k[4136 + k[37]];
+    }
+    var given = 0;
+    region r {
+        let facts = alloc_slice[r](inet.dhcp_facts(), 0);
+        var tries = 0;
+        while tries < 2 && given == 0 {
+            // who will give this card an address?
+            var m = inet.dhcp_discover(reply, k[19], xid);
+            if m > 0 {
+                vnet_send(vio, dma, k, reply, m);
+            }
+            var what = -1;
+            var asked = base.now_us(cpu);
+            while what != 2 && base.now_us(cpu) - asked < 2000000 {
+                let n = link_recv(bus, vio, dma, k, ns, frame);
+                if n > 0 {
+                    what = inet.dhcp_answer(frame, n, k[19], xid, facts);
+                    if what < 0 {
+                        net_take(bus, vio, dma, k, frame, n, reply, wire, tcp, bufs, inbox, base.uptime_ms(cpu), cpu_read(cpu, "cntvct_el0"));
+                    }
+                }
+            }
+            if what == 2 && facts[0] != 0 {
+                // the address offered is asked for, of the server that offered it
+                let offered = facts[0];
+                m = inet.dhcp_request(reply, k[19], xid, offered, facts[4]);
+                if m > 0 {
+                    vnet_send(vio, dma, k, reply, m);
+                }
+                what = -1;
+                asked = base.now_us(cpu);
+                while what != 5 && what != 6 && base.now_us(cpu) - asked < 2000000 {
+                    let n = link_recv(bus, vio, dma, k, ns, frame);
+                    if n > 0 {
+                        what = inet.dhcp_answer(frame, n, k[19], xid, facts);
+                        if what < 0 {
+                            net_take(bus, vio, dma, k, frame, n, reply, wire, tcp, bufs, inbox, base.uptime_ms(cpu), cpu_read(cpu, "cntvct_el0"));
+                        }
+                    }
+                }
+                if what == 5 && facts[0] == offered {
+                    given = 1;
+                    k[4154] = facts[0];
+                    k[4155] = facts[1];
+                    if k[4155] == 0 {
+                        k[4155] = 0xffffff00;
+                    }
+                    k[4156] = facts[2];
+                    k[4157] = facts[3];
+                    k[4158] = facts[5];
+                    // whoever was remembered was a neighbour on the old network
+                    k[21] = 0;
+                }
+            }
+            tries = tries + 1;
+        }
+    }
+    if given == 0 {
+        return base.puts(con, k, "nobody on this network gave an address; the kernel keeps the one it had\r\n");
+    }
+    base.puts(con, k, "address ");
+    put_address(con, k, k[4154]);
+    base.puts(con, k, ", mask ");
+    put_address(con, k, k[4155]);
+    base.puts(con, k, ", gateway ");
+    put_address(con, k, k[4156]);
+    base.puts(con, k, ", names from ");
+    put_address(con, k, k[4157]);
+    base.puts(con, k, "\r\nit is lent for ");
+    base.put_dec(con, k, k[4158]);
+    return base.puts(con, k, " s, and the kernel does not ask again when that is over\r\n");
+}
+
+fn begins[&r, &w](text: &r [byte], n: int, word: &w [byte]) -> [] bool {
+    if n < len(word) {
+        return false;
+    }
+    var i = 0;
+    while i < len(word) {
+        if int_of(text[i]) != int_of(word[i]) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// The commands that use the network, for the shell: `ping`, `http`, `lookup`, `net dhcp`.
+// 1 if `text[0..n]` was one of them and has been run, 0 if it is another command.
+// `rline` is the line being typed over the shell's connection, which `http` must leave
+// alone while it waits; `text` is never that buffer.
+pub fn net_command[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], rline: &!l [byte], text: &r [byte], n: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000")] int {
+    if n == 8 && begins(text, n, "net dhcp") {
+        net_dhcp(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox);
+        return 1;
+    }
+    if n > 7 && begins(text, n, "lookup ") {
+        let a = net_lookup(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, text, 7, n);
+        if a >= 0 {
+            put_text(con, k, text, 7, n);
+            base.puts(con, k, " is ");
+            put_address(con, k, a);
+            base.puts(con, k, "\r\n");
+        }
+        return 1;
+    }
+    if n > 5 && begins(text, n, "ping ") {
+        if k[10] == 0 {
+            base.puts(con, k, "the link is down: `net up` first\r\n");
+            return 1;
+        }
+        net_ping(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, host(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, text, 5, n));
+        return 1;
+    }
+    if n > 5 && begins(text, n, "http ") {
+        if k[10] == 0 {
+            base.puts(con, k, "the link is down: `net up` first\r\n");
+            return 1;
+        }
+        // the port is what follows the last space
+        var sp = n - 1;
+        while sp > 5 && int_of(text[sp]) != ' ' {
+            sp = sp - 1;
+        }
+        var port = 0;
+        var i = sp + 1;
+        while i < n && port >= 0 {
+            let c = int_of(text[i]);
+            if c < '0' || c > '9' || port > 6553 {
+                port = -1;
+            } else {
+                port = port * 10 + c - '0';
+            }
+            i = i + 1;
+        }
+        if sp <= 5 || port < 1 || port > 65535 {
+            base.puts(con, k, "usage: http <address or name> <port>\r\n");
+            return 1;
+        }
+        let a = host(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, text, 5, sp);
+        if a >= 0 {
+            net_http(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, rline, a * 65536 + port, text, 5, sp);
+        }
+        return 1;
+    }
+    return 0;
+}
+
 pub fn put_net[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
     if k[10] == 0 && k[9] == 0 && k[15] == 0 {
         base.puts(con, k, "no network card, and no second serial port");
@@ -805,11 +1052,28 @@ pub fn put_net[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201
             }
             shift = shift - 8;
         }
-        base.puts(con, k, ", address 10.0.0.2");
+        base.puts(con, k, ", address ");
+        put_address(con, k, k[4154]);
     } else {
-        base.puts(con, k, "link up: SLIP on the second serial port, address 10.0.0.2");
+        base.puts(con, k, "link up: SLIP on the second serial port, address ");
+        put_address(con, k, k[4154]);
     }
     base.puts(con, k, "\r\n");
+    if k[10] == 2 {
+        base.puts(con, k, "gateway ");
+        if k[4156] != 0 {
+            put_address(con, k, k[4156]);
+        } else {
+            base.puts(con, k, "none");
+        }
+        base.puts(con, k, ", names from ");
+        if k[4157] != 0 {
+            put_address(con, k, k[4157]);
+        } else {
+            base.puts(con, k, "nobody (`net dhcp` asks for a name server)");
+        }
+        base.puts(con, k, "\r\n");
+    }
     base.put_dec(con, k, k[11]);
     base.puts(con, k, " packets answered, ");
     base.put_dec(con, k, k[12]);

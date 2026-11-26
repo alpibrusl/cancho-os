@@ -91,6 +91,8 @@ frames and ARP; `ping` from Linux over a tap interface in CI. Third slice (same 
 (state owned by the caller, so `inet` is still pure), and the kernel speaking first (`ping <address>`, with an ARP request
 on the card). Fourth slice: the shell over a connection (port 23, off until `net shell on` at the console; `inet` gained a port
 the caller reads and writes). Fifth slice: the kernel ends a connection (`exit`, five minutes idle) and opens one (`tcp_dial`; `http <address> <port>`).
+Sixth slice (docs/addresses.md): the address is state; DHCP (`net dhcp`), a gateway, DNS (`lookup`, names in `ping` and `http`).
+The kernel's network code moved to src/network.cho, its console and clock to src/base.cho.
 Randomness (docs/random.md): virtio-rng and the Pi 3's generator feed a small pool, and connections begin at a random number;
 the Pi 4's generator waits for a board. Next: SSH as its own package, cancho-ssh,
 replacing the open port; a link on pins the console does not use; the Pi 4's Ethernet (GENET), testable only on the board.
