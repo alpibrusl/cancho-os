@@ -836,7 +836,7 @@ fn run[&f, &mc, &mu, &mt, &mx, &mz, &s, &r, &nv, &nd, &nn, &na, &nb, &nw, &nt, &
     if same(line, n, "help") {
         base.puts(con, k, "commands: help, about, echo <text>, uptime, ticks, mem, board, random, disk, ls, cat <name>, sum <name>, write <name> <text>, append <name> <text>, copy <from> <to>, remove <name>, mkdir <path>, ls <path>, versions, purge <number>, record, put <name> <bytes> <sha256> (over SSH), restart, heap, net [up|down|eth|dhcp], net ssh [on|off], lookup <name>, ping <address or name>, http <address or name> <port>, servo via <address> <port>|off, servo scan, servo pos, arm zero, arm pose, arm check <5 angles>, crash [null|write], load <bytes>\r\n");
     } else if same(line, n, "about") {
-        base.puts(con, k, "cancho-os 0.0.33: a kernel written in cancho (");
+        base.puts(con, k, "cancho-os 0.0.34: a kernel written in cancho (");
         if k[1] >= 3 {
             base.puts(con, k, "Raspberry Pi ");
             base.put_dec(con, k, k[1]);

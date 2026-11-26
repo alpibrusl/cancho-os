@@ -24,7 +24,7 @@ pub fn get[&mv, &md, &s, &m, &d](vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000
         let info = alloc_slice[r](fat.facts(), 0);
         let name = alloc_slice[r](12, byte_of(0));
         let out = alloc_slice[r](3, 0);
-        let o = alloc_slice[r](10, 0);
+        let o = alloc_slice[r](12, 0);
         if disk.volume(vio, dma, k, sec, info) == 0 && disk.look(vio, dma, k, sec, tab, info, name, out, o, 0, wanted, 0, len(wanted)) == 0 && o[0] != 0 && o[8] == fat.entry_file() {
             var size = o[4];
             if size > len(into) {
@@ -74,7 +74,7 @@ pub fn keep[&mc, &mv, &md, &s, &m, &d](con: &!mc Mmio("0x9000000..0x9000048,0x3f
         let info = alloc_slice[r](fat.facts(), 0);
         let name = alloc_slice[r](12, byte_of(0));
         let out = alloc_slice[r](3, 0);
-        let o = alloc_slice[r](10, 0);
+        let o = alloc_slice[r](12, 0);
         let wt = alloc_slice[r](512, byte_of(0));
         let w = alloc_slice[r](8, 0);
         w[5] = -1;
@@ -91,7 +91,7 @@ pub fn keep[&mc, &mv, &md, &s, &m, &d](con: &!mc Mmio("0x9000000..0x9000048,0x3f
                     i = i + 1;
                 }
                 // what it holds may be a secret: the record has its name and its length, not its hash
-                if disk.put(vio, dma, k, tab, info, w, sec) == 0 && disk.kept(vio, dma, k, tab, info, w) == 0 && ledger.record_add(vio, dma, k, info, w, 3, "keep", wanted, 0, len(wanted), wanted, 0, 0, 0, n, sec, false) == 0 && disk.name_it(vio, dma, k, sec, tab, info, o, w, wanted, 0, len(wanted), n) == 0 {
+                if disk.put(vio, dma, k, tab, info, w, sec) == 0 && disk.kept(vio, dma, k, tab, info, w) == 0 && ledger.record_add(vio, dma, k, info, w, 3, "keep", wanted, 0, len(wanted), wanted, 0, 0, 0, n, sec, false) == 0 && disk.name_it(vio, dma, k, sec, tab, info, o, w, name, wanted, 0, len(wanted), n) == 0 {
                     disk.counted(vio, dma, k, sec, info, w);
                     made = 0;
                 }
@@ -160,7 +160,7 @@ pub fn put_name[&r](text: &r [byte], from: int, to: int) -> [] bool {
         let at = leaf(text, from, to);
         // (BOOT.TXT is run with the console's authority at the next start: it is written at the console only)
         let own = at == from && (kept_name(text, from, to) || fat.named("BOOT.TXT", 8, text, from, to));
-        good = !own && !under_old(text, from, to) && fat.put_entry(sec, 0, text, at, to, 0, 0) == 0;
+        good = !own && !under_old(text, from, to) && (fat.put_entry(sec, 0, text, at, to, 0, 0) == 0 || fat.long_ok(text, at, to));
     }
     return good;
 }
@@ -287,7 +287,7 @@ fn change[&mc, &mv, &md, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000
         let hs = alloc_slice[r](sha.state_len(), 0);
         let hd = alloc_slice[r](32, byte_of(0));
         let out = alloc_slice[r](3, 0);
-        let o = alloc_slice[r](10, 0);
+        let o = alloc_slice[r](12, 0);
         let pd = alloc_slice[r](4, 0);
         let w = alloc_slice[r](8, 0);
         w[5] = -1;
@@ -338,7 +338,7 @@ fn change[&mc, &mv, &md, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000
                     base.puts(con, k, "the record could not be added to: nothing was changed\r\n");
                     bad = true;
                 }
-                bad = bad || disk.read(vio, dma, k, slot, sec) != 0 || fat.put_directory(sec, slot_i, text, pd[1], mid, c) != 0 || disk.write(vio, dma, k, slot, sec) != 0;
+                bad = bad || disk.read(vio, dma, k, slot, sec) != 0 || disk.named_at(sec, o, name, text, pd[1], mid, c, 0, true) != 0 || disk.write(vio, dma, k, slot, sec) != 0;
                 if bad {
                     base.puts(con, k, "the disk is full, or could not be written: no directory was made\r\n");
                 } else {
@@ -386,7 +386,7 @@ fn change[&mc, &mv, &md, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000
                 } else if !there {
                     if ledger.record_add(vio, dma, k, info, w, who, "write", text, first, mid, text, 0, 0, 0, size, hd, true) != 0 {
                         base.puts(con, k, "the record could not be added to: nothing was changed\r\n");
-                    } else if disk.name_it(vio, dma, k, sec, tab, info, o, w, text, pd[1], mid, size) != 0 {
+                    } else if disk.name_it(vio, dma, k, sec, tab, info, o, w, name, text, pd[1], mid, size) != 0 {
                         base.puts(con, k, "the disk could not be written: no file was made\r\n");
                     } else {
                         disk.counted(vio, dma, k, sec, info, w);
@@ -432,17 +432,16 @@ fn change[&mc, &mv, &md, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000
             } else {
                 let es = o[1];
                 let ei = o[2];
+                let long = o[9];
+                let long_s = o[10];
+                let long_i = o[11];
                 let v = disk.version(con, vio, dma, k, sec, tab, rtab, info, name, out, o, w, vname, o[3], o[4]);
                 var bad = v < 0;
                 if !bad && ledger.record_add(vio, dma, k, info, w, who, "remove", text, first, mid, text, 0, 0, v, -1, hd, false) != 0 {
                     base.puts(con, k, "the record could not be added to: nothing was changed\r\n");
                     bad = true;
                 }
-                bad = bad || disk.read(vio, dma, k, es, sec) != 0;
-                if !bad {
-                    fat.erase(sec, ei);
-                    bad = disk.write(vio, dma, k, es, sec) != 0;
-                }
+                bad = bad || disk.unname(vio, dma, k, sec, rtab, info, pd[0], es, ei, long, long_s, long_i) != 0;
                 if bad {
                     base.puts(con, k, "the file is as it was\r\n");
                 } else {
@@ -560,7 +559,7 @@ fn change[&mc, &mv, &md, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000
                         sha.final(hs, hd);
                         bad = ledger.record_add(vio, dma, k, info, w, who, "copy", text, mid + 1, n, text, first, mid, 0, size, hd, true) != 0;
                     }
-                    if bad || disk.name_it(vio, dma, k, sec, tab, info, o, w, text, pd[3], n, size) != 0 {
+                    if bad || disk.name_it(vio, dma, k, sec, tab, info, o, w, name, text, pd[3], n, size) != 0 {
                         base.puts(con, k, "the disk is full, or could not be read or written: no file was made\r\n");
                     } else {
                         disk.counted(vio, dma, k, sec, info, w);
@@ -635,7 +634,7 @@ pub fn store[&mc, &mv, &md, &mg, &s, &r, &h](con: &!mc Mmio("0x9000000..0x900004
         let hd = alloc_slice[r](32, byte_of(0));
         let hx = alloc_slice[r](64, byte_of(0));
         let out = alloc_slice[r](3, 0);
-        let o = alloc_slice[r](10, 0);
+        let o = alloc_slice[r](12, 0);
         let pd = alloc_slice[r](4, 0);
         let w = alloc_slice[r](8, 0);
         w[5] = -1;
@@ -767,7 +766,7 @@ pub fn store[&mc, &mv, &md, &mg, &s, &r, &h](con: &!mc Mmio("0x9000000..0x900004
                     bad = disk.write(vio, dma, k, es, sec) != 0;
                 }
             } else if !bad {
-                bad = disk.read(vio, dma, k, slot, sec) != 0 || fat.put_entry(sec, slot_i, text, pd[1], to, first_new, size) != 0 || disk.write(vio, dma, k, slot, sec) != 0;
+                bad = disk.read(vio, dma, k, slot, sec) != 0 || disk.named_at(sec, o, name, text, pd[1], to, first_new, size, false) != 0 || disk.write(vio, dma, k, slot, sec) != 0;
             }
             if !bad {
                 disk.counted(vio, dma, k, sec, info, w);
@@ -866,7 +865,7 @@ pub fn command[&mc, &mv, &md, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f2
         let info = alloc_slice[r](fat.facts(), 0);
         let name = alloc_slice[r](12, byte_of(0));
         let out = alloc_slice[r](3, 0);
-        let o = alloc_slice[r](10, 0);
+        let o = alloc_slice[r](12, 0);
         let w = alloc_slice[r](8, 0);
         w[5] = -1;
         let sum = alloc_slice[r](2, 0);

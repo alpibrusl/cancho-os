@@ -265,6 +265,8 @@ pub fn top[&mc, &mv, &md, &s, &b, &t, &i, &m, &o, &w](con: &!mc Mmio("0x9000000.
     var result = -2;
     region r {
         let st = alloc_slice[r](6, 0);
+        let ls = alloc_slice[r](fat.long_state(), 0);
+        let lname = alloc_slice[r](fat.long_room(), byte_of(0));
         walk_start(info, dir, st);
         var going = true;
         while going {
@@ -278,30 +280,42 @@ pub fn top[&mc, &mv, &md, &s, &b, &t, &i, &m, &o, &w](con: &!mc Mmio("0x9000000.
             var i = 0;
             while i < 16 && going {
                 let kind = fat.entry(sec, i, name, out);
+                let long = fat.long(sec, i, kind, ls, lname);
                 if kind == fat.entry_end() {
                     going = false;
                 } else if kind == fat.entry_directory() && to == from && out[0] > 0 && int_of(name[0]) != '.' {
                     // a directory, in a listing: its name and a `/` (not `.` and `..`, which every directory has)
                     var c = 0;
-                    while c < out[0] {
+                    while c < long {
+                        base.putc(con, k, int_of(lname[c]));
+                        c = c + 1;
+                    }
+                    while long == 0 && c < out[0] {
                         base.putc(con, k, int_of(name[c]));
                         c = c + 1;
                     }
                     base.puts(con, k, "/\r\n");
                 } else if kind == fat.entry_file() {
                     if to > from {
-                        if fat.named(name, out[0], wanted, from, to) {
+                        if fat.named(name, out[0], wanted, from, to) || long > 0 && fat.named(lname, long, wanted, from, to) {
                             result = 1;
                             going = false;
                         }
                     } else {
+                        // the long name if it has one, else the short; then spaces to the fourteenth column at least
                         var c = 0;
+                        while c < long {
+                            base.putc(con, k, int_of(lname[c]));
+                            c = c + 1;
+                        }
+                        while long == 0 && c < out[0] {
+                            base.putc(con, k, int_of(name[c]));
+                            c = c + 1;
+                        }
+                        base.putc(con, k, 32);
+                        c = c + 1;
                         while c < 14 {
-                            if c < out[0] {
-                                base.putc(con, k, int_of(name[c]));
-                            } else {
-                                base.putc(con, k, 32);
-                            }
+                            base.putc(con, k, 32);
                             c = c + 1;
                         }
                         base.put_dec(con, k, out[2]);
@@ -510,7 +524,8 @@ pub fn put[&mv, &md, &s, &t, &i, &u, &b](vio: &!mv Mmio("0xa000000..0xa004000,0x
 // A directory, looked through for the name `wanted[from..to]` and for a place to put one. `o` gets:
 //   0 whether something has that name   1 2 the sector and the entry that names it   3 4 its first cluster
 //   and length   5 6 the sector and the entry of the first free place (-1: none)   7 the directory's last
-//   cluster (0 for FAT16's top directory, which cannot grow)   8 what was found: 2 a file, 3 a directory.
+//   cluster (0 for FAT16's top directory, which cannot grow)   8 what was found: 2 a file, 3 a directory
+//   9 how long its long name is (0: it has none)   10 11 the sector and the entry where that name's pieces begin.
 // 0, or 1 if the disk failed.
 pub fn look[&mv, &md, &s, &b, &t, &i, &m, &n, &o, &r](vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], sec: &!b [byte], wt: &!t [byte], info: &i [int], name: &!m [byte], out: &!n [int], o: &!o [int], dir: int, wanted: &r [byte], from: int, to: int) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
     o[0] = 0;
@@ -519,6 +534,10 @@ pub fn look[&mv, &md, &s, &b, &t, &i, &m, &n, &o, &r](vio: &!mv Mmio("0xa000000.
     var failed = 0;
     region r {
         let st = alloc_slice[r](6, 0);
+        let ls = alloc_slice[r](fat.long_state(), 0);
+        let lname = alloc_slice[r](fat.long_room(), byte_of(0));
+        var began_at = 0;
+        var began_i = 0;
         walk_start(info, dir, st);
         var going = true;
         while going {
@@ -539,10 +558,19 @@ pub fn look[&mv, &md, &s, &b, &t, &i, &m, &n, &o, &r](vio: &!mv Mmio("0xa000000.
             var i = 0;
             while i < 16 && going {
                 let kind = fat.entry(sec, i, name, out);
+                if fat.long_begins(sec, i) {
+                    began_at = at;
+                    began_i = i;
+                }
+                let long = fat.long(sec, i, kind, ls, lname);
                 if kind == fat.entry_end() {
                     going = false;
                 } else if kind == fat.entry_file() || kind == fat.entry_directory() {
-                    if fat.named(name, out[0], wanted, from, to) {
+                    if fat.named(name, out[0], wanted, from, to) || long > 0 && fat.named(lname, long, wanted, from, to) {
+                        // (with a long name: how long, and the sector and entry where its pieces begin)
+                        o[9] = long;
+                        o[10] = began_at;
+                        o[11] = began_i;
                         o[0] = 1;
                         o[1] = at;
                         o[2] = i;
@@ -558,13 +586,98 @@ pub fn look[&mv, &md, &s, &b, &t, &i, &m, &n, &o, &r](vio: &!mv Mmio("0xa000000.
     return failed;
 }
 
+// Does an entry of the directory `dir` have exactly this short form? 1, or 0 (also if the disk failed: the
+// caller's next step reads the same sectors and will say so).
+pub fn has_raw[&mv, &md, &s, &b, &t, &i, &e](vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], sec: &!b [byte], wt: &!t [byte], info: &i [int], dir: int, eleven: &e [byte]) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+    var found = 0;
+    region r {
+        let st = alloc_slice[r](6, 0);
+        walk_start(info, dir, st);
+        var going = true;
+        while going {
+            let at = walk_next(vio, dma, k, wt, info, st);
+            if at <= 0 || read(vio, dma, k, at, sec) != 0 {
+                going = false;
+            }
+            var i = 0;
+            while i < 16 && going {
+                if int_of(sec[i * 32]) == 0 {
+                    going = false;
+                } else if fat.is_raw(sec, i, eleven) {
+                    found = 1;
+                    going = false;
+                }
+                i = i + 1;
+            }
+        }
+    }
+    return found;
+}
+
+// A row of `need` entries of the directory `dir` that name nothing, in one sector: `o[5]`, `o[6]` the sector
+// and the first of them (-1: no sector has such a row), and `o[7]` the directory's last cluster as `look`
+// leaves it. A sector that is passed over is left with no never-used entry (`fat.close_end`).
+pub fn free_row[&mv, &md, &s, &b, &t, &i, &o](vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], sec: &!b [byte], wt: &!t [byte], info: &i [int], dir: int, need: int, o: &!o [int]) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+    o[5] = -1;
+    region r {
+        let st = alloc_slice[r](6, 0);
+        walk_start(info, dir, st);
+        var going = true;
+        while going {
+            let at = walk_next(vio, dma, k, wt, info, st);
+            if at <= 0 || read(vio, dma, k, at, sec) != 0 {
+                going = false;
+            } else {
+                o[7] = st[5];
+                let row = fat.free_run(sec, need);
+                if row >= 0 {
+                    o[5] = at;
+                    o[6] = row;
+                    going = false;
+                } else if fat.close_end(sec) > 0 {
+                    // this sector is passed over: it must not be where the directory ends
+                    write(vio, dma, k, at, sec);
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+// The entry that names something new, into the sector `sec`, which is the one `place` chose (`o[5]`): at
+// `o[6]`, a short name's one entry; or the pieces of a long name (`o[9]` of them) and after them the entry
+// with the short form `place` left in `alias`. One sector, so one write makes the whole name appear.
+pub fn named_at[&b, &o, &e, &t](sec: &!b [byte], o: &o [int], alias: &e [byte], text: &t [byte], from: int, to: int, cluster: int, size: int, directory: bool) -> [] int {
+    if o[9] == 0 {
+        if directory {
+            return fat.put_directory(sec, o[6], text, from, to, cluster);
+        }
+        return fat.put_entry(sec, o[6], text, from, to, cluster, size);
+    }
+    let pieces = o[9];
+    let sum = fat.sum11(alias);
+    var i = 0;
+    while i < pieces {
+        if fat.put_long(sec, o[6] + i, text, from, to, pieces - i, pieces, sum) != 0 {
+            return -1;
+        }
+        i = i + 1;
+    }
+    return fat.put_raw(sec, o[6] + pieces, alias, cluster, size, directory);
+}
+
 // Everything before the first byte of something new in the directory `dir`: the name is one, nothing
 // there has it, and there is a place for it (a directory that is a chain and has none is given another
 // cluster). 0 with `o[5]`, `o[6]` the place; else the reason is printed and 1 answered.
 pub fn place[&mc, &mv, &md, &s, &b, &t, &q, &i, &m, &n, &o, &u, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], sec: &!b [byte], tab: &!t [byte], wt: &!q [byte], info: &i [int], name: &!m [byte], out: &!n [int], o: &!o [int], w: &!u [int], dir: int, text: &r [byte], from: int, to: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+    // a short name if it is one; else a long one, kept in pieces before an entry with a short form of it
+    var pieces = 0;
     if fat.put_entry(sec, 0, text, from, to, 0, 0) != 0 {
-        base.puts(con, k, "not a short name: one to eight letters or digits, then perhaps a dot and one to three\r\n");
-        return 1;
+        if !fat.long_ok(text, from, to) {
+            base.puts(con, k, "not a name: up to 195 characters, none of \" * / : < > ? \\ |, no space or dot at either end\r\n");
+            return 1;
+        }
+        pieces = fat.long_pieces(to - from);
     }
     if look(vio, dma, k, sec, wt, info, name, out, o, dir, text, from, to) != 0 {
         base.puts(con, k, "the disk could not be read\r\n");
@@ -574,6 +687,24 @@ pub fn place[&mc, &mv, &md, &s, &b, &t, &q, &i, &m, &n, &o, &u, &r](con: &!mc Mm
         base.puts(con, k, "there is something of that name already\r\n");
         return 1;
     }
+    if pieces > 0 {
+        // a short form no entry of the directory has, and a row of entries for the pieces and the entry
+        var number = 1;
+        var taken = true;
+        while taken && number < 10000 {
+            fat.alias(text, from, to, number, name);
+            taken = has_raw(vio, dma, k, sec, wt, info, dir, name) != 0;
+            if taken {
+                number = number + 1;
+            }
+        }
+        if taken {
+            base.puts(con, k, "no short form is left for that name in this directory\r\n");
+            return 1;
+        }
+        free_row(vio, dma, k, sec, wt, info, dir, pieces + 1, o);
+    }
+    o[9] = pieces;
     if o[5] < 0 {
         if o[7] == 0 {
             base.puts(con, k, "the top directory is full\r\n");
@@ -687,14 +818,61 @@ pub fn counted[&mv, &md, &s, &b, &i, &u](vio: &!mv Mmio("0xa000000..0xa004000,0x
 }
 
 // The last step of a new file: what is left of the table, then the directory entry that makes it exist.
-pub fn name_it[&mv, &md, &s, &b, &t, &i, &o, &u, &r](vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], sec: &!b [byte], tab: &!t [byte], info: &i [int], o: &!o [int], w: &!u [int], text: &r [byte], from: int, to: int, size: int) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+pub fn name_it[&mv, &md, &s, &b, &t, &i, &o, &u, &r, &e](vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], sec: &!b [byte], tab: &!t [byte], info: &i [int], o: &!o [int], w: &!u [int], alias: &e [byte], text: &r [byte], from: int, to: int, size: int) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
     if kept(vio, dma, k, tab, info, w) != 0 || read(vio, dma, k, o[5], sec) != 0 {
         return 1;
     }
-    if fat.put_entry(sec, o[6], text, from, to, w[0], size) != 0 {
+    if named_at(sec, o, alias, text, from, to, w[0], size, false) != 0 {
         return 1;
     }
     return write(vio, dma, k, o[5], sec);
+}
+
+// A name taken away from the directory `dir`: the entry at sector `es`, number `ei`, and before it the pieces
+// of its long name if it has one (`long` characters, beginning at sector `ls`, entry `li`). The pieces go
+// first and the entry last: until the entry goes the file is still there, under its short name.
+pub fn unname[&mv, &md, &s, &b, &t, &i](vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], sec: &!b [byte], wt: &!t [byte], info: &i [int], dir: int, es: int, ei: int, long: int, ls: int, li: int) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+    var failed = 0;
+    if long > 0 {
+        region r {
+            let st = alloc_slice[r](6, 0);
+            walk_start(info, dir, st);
+            var going = true;
+            var erasing = false;
+            while going {
+                let at = walk_next(vio, dma, k, wt, info, st);
+                if at <= 0 || read(vio, dma, k, at, sec) != 0 {
+                    going = false;
+                    failed = 1;
+                }
+                var changed = false;
+                var i = 0;
+                while i < 16 && going {
+                    if at == ls && i == li {
+                        erasing = true;
+                    }
+                    if at == es && i == ei {
+                        // the entry itself is left for the last write, below
+                        going = false;
+                        failed = 0;
+                    } else if erasing {
+                        fat.erase(sec, i);
+                        changed = true;
+                    }
+                    i = i + 1;
+                }
+                if changed && write(vio, dma, k, at, sec) != 0 {
+                    going = false;
+                    failed = 1;
+                }
+            }
+        }
+    }
+    if failed != 0 || read(vio, dma, k, es, sec) != 0 {
+        return 1;
+    }
+    fat.erase(sec, ei);
+    return write(vio, dma, k, es, sec);
 }
 
 // ---- adding to a file ------------------------------------------------------------------------
