@@ -38,6 +38,11 @@ Rules of the road
   faults there, so no test may type it. Change it only with the board on the serial link, and send builds
   with `board/send.py` (docs/load.md). `dma` is mapped as device memory on purpose: a card writes it.
   Never leave `net shell on` open on a real network after a test.
+- SSH (docs/ssh.md) is cancho-ssh, pinned by `SSH_REF` in the workflow and taken from `../cancho-ssh` (or
+  `SSH=`) by build.sh: change it there, never copy it here. `src/sshd.cho` is the loop and must keep its two
+  rules (read the connection only when nothing else moved; keep what `feed` and `tcp_write` did not take).
+  A real person's public key goes into an image, never into the repository: `AUTHORIZED=` writes
+  `build/authorized.cho`, and `build/` is ignored. SSH must refuse to start without a generator.
 - The firmware's mailbox (`fw`, docs/genet.md) can set things as well as answer: the kernel asks three tags
   and sets nothing. A new tag is a decision, not a convenience. Never write a real board's serial number or
   full card address into a doc, a test or a commit.

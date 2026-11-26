@@ -262,6 +262,21 @@ A Pi 5 tries the SD card before its other disks by default (`BOOT_ORDER=0xf461`:
 `rpi-eeprom-config`). So what is installed on an NVMe drive is not touched, and boots again when the
 card is taken out.
 
+## SSH
+
+`net ssh on`, at the serial console, puts the kernel's shell behind SSH on port 22
+([docs/ssh.md](docs/ssh.md)). SSH itself is [cancho-ssh](https://github.com/alpibrusl/cancho-ssh), built
+in from a checkout beside this one; who may log in is built in too:
+
+```
+git clone https://github.com/alpibrusl/cancho-ssh ../cancho-ssh
+AUTHORIZED=~/.ssh/id_ed25519.pub ./build.sh       # that key may log in, and no other
+ssh anyone@<the kernel's address> about            # after `net ssh on`: the host key is on the console
+```
+
+It works in QEMU and on a real Pi 4. The host key is new at every start (there is nowhere to keep it),
+there are no passwords, and cancho-ssh has not been reviewed: for a network you trust.
+
 ## A new kernel without moving the card
 
 `load <bytes>`, at the serial console, takes a kernel over that line and starts it in place of the

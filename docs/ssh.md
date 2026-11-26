@@ -1,6 +1,7 @@
 # SSH
 
-> **Status: design.** What was measured is at the end.
+> **Status: works**, in QEMU on every change and on a real Pi 4 (one board, one session). The SSH
+> implementation under it is unreviewed: for a network you trust, not for the internet.
 
 ## What is wanted
 
@@ -37,9 +38,34 @@ yet. That holds here too.
   nothing, so the kernel echoes, and understands backspace, Ctrl-C and Ctrl-D. `ssh host command` runs
   the one command and ends with it.
 
+## What is built, and what was measured
+
+`src/sshd.cho` (about 300 lines) is the loop; `build.sh` takes cancho-ssh from a checkout (`SSH=path`, or
+`../cancho-ssh`) and writes `build/authorized.cho` from `AUTHORIZED=`. The image grows from 140 KB to
+291 KB. **`./authority.sh` says "as recorded"**: SSH, its cryptography and the loop added nothing to
+what the kernel can touch.
+
+In QEMU (`virt`, the connection through QEMU's own TCP), OpenSSH 10.0 on a Mac and whatever CI's runner has:
+
+| | result |
+|---|---|
+| `ssh host about` with the key the image allows | the answer, exit status 0; about 6 s for the whole run, the boot included |
+| a shell session, `ticks`, `mem`, `exit`, then `about` | the three answered, "bye", and no answer to what came after |
+| the same with a terminal (`ssh -tt`) | each key echoed; backspace rubs out; Ctrl-C drops the line; Ctrl-D ends the session |
+| a key that is not in the image | "Permission denied (publickey)" |
+| `net ssh on` with no generator | "not without random numbers", and the port stays closed |
+| in CI also: Linux's OpenSSH over SLIP and over the tap interface | a command answered; another key refused |
+
+On the real Pi 4 (2026-11-26), on a home network, the image built with its owner's key and sent with
+`load` (25 s for 291 KB): `net eth`, `net dhcp`, `net ssh on` printed the host key; from a Mac,
+`ssh board about` answered in 0.19 s with status 0; a shell session ran `uptime`, `mem`, `random`, `net`
+and `exit`; another key was refused.
+
 ## What it does not do
 
 - **No passwords, no forwarding, no file transfer:** cancho-ssh has none.
 - **No names.** Any user name is taken; the key decides.
+- **Port 23 is still there** (`net shell on`), and must go: it was kept one more change so that this
+  one could be compared with it.
 - **The window is small and the handshake slow:** a connection's inbox is 256 bytes, and a client's
   first message is about 1,500.

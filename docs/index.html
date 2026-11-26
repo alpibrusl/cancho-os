@@ -203,6 +203,7 @@ halted.</pre></div>
       <li>A first network: <code>ping</code>, a UDP echo and a TCP echo answered, over a serial line and over Ethernet (a virtual card in QEMU); the kernel can <code>ping</code> and fetch a web page too</li>
       <li>An address from the network (DHCP), a gateway, and names (DNS): <code>http example.com 80</code> works</li>
       <li>Random numbers from the board's generator (QEMU's and the Pi 3's), used to begin each connection</li>
+      <li>SSH: the shell behind <a href="https://github.com/alpibrusl/cancho-ssh">cancho-ssh</a>, logged in to by OpenSSH in QEMU and on a real Pi 4</li>
       <li>The shell over a TCP connection, off until the console turns it on (no password, no encryption: a step towards SSH)</li>
     </ul></div>
     <div class="no"><h3>Not built</h3><ul>
@@ -210,7 +211,7 @@ halted.</pre></div>
       <li>Separate programs, an SD card driver, files</li>
       <li>Preemption, and more than one core</li>
       <li>The Pi 5, which is the robot's board: its console, timer and memory map are written from the board's own device tree and have never run</li>
-      <li>SSH, Wi-Fi, USB, display</li>
+      <li>Storage, Wi-Fi, USB, display</li>
     </ul></div>
   </div>
 </section>

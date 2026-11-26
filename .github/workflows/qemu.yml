@@ -3,21 +3,30 @@ on: [push, pull_request]
 env:
   # cancho's bare-metal target (`--target aarch64-none-elf`, alpibrusl/cancho#826) is on its main branch
   CANCHO_REF: main
+  # cancho-ssh (docs/ssh.md) is taken at one commit: a newer one is a change to try, not to drift into
+  SSH_REF: e2e8386d29e1d182ff7349d66cf8b2ea9692f311
 jobs:
   boot:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: tools
-        run: sudo apt-get update && sudo apt-get install -y clang lld llvm qemu-system-arm net-tools netcat-openbsd iputils-ping dnsmasq-base
+        run: sudo apt-get update && sudo apt-get install -y clang lld llvm qemu-system-arm net-tools netcat-openbsd iputils-ping dnsmasq-base openssh-client
       - name: cancho, built from its seed by itself
         # The bare-metal target (cancho docs/freestanding.md) is newer than the committed seed, so the
         # compiler is built from source: the seed builds stage 1, which builds the cancho used here.
         run: |
           git clone --depth 1 --branch "$CANCHO_REF" https://github.com/alpibrusl/cancho /tmp/cancho
           sh /tmp/cancho/scripts/build-standalone.sh --out /tmp/cancho-out --rev "$(git -C /tmp/cancho rev-parse HEAD)"
+      - name: cancho-ssh, at the commit this kernel was tried with
+        run: |
+          git clone https://github.com/alpibrusl/cancho-ssh /tmp/cancho-ssh
+          git -C /tmp/cancho-ssh checkout -q "$SSH_REF"
       - name: build
-        run: CANCHO=/tmp/cancho-out/cancho ./build.sh
+        # with a key made here as the one that may log in over SSH
+        run: |
+          ssh-keygen -q -t ed25519 -N "" -C "cancho-os CI" -f /tmp/sshkey
+          SSH=/tmp/cancho-ssh AUTHORIZED=/tmp/sshkey.pub CANCHO=/tmp/cancho-out/cancho ./build.sh
       - name: the network stack, on this machine
         # src/inet.cho holds no hardware, so its tests run here: published checksum vectors, packets a
         # second implementation built, and every one-byte damage to a packet (nothing traps)
@@ -28,7 +37,7 @@ jobs:
           # the gateway, datagrams, names and a given address
           /tmp/cancho-out/cancho test tests/addr_test.cho src/inet.cho --std
       - name: what the kernel can touch
-        run: CANCHO=/tmp/cancho-out/cancho ./authority.sh
+        run: SSH=/tmp/cancho-ssh CANCHO=/tmp/cancho-out/cancho ./authority.sh
       - name: boot and drive the shell
         run: |
           ./test.sh about 'echo ci' ticks crash about > out.txt
@@ -93,7 +102,7 @@ jobs:
       - name: ping, from Linux's own stack
         # not our packets this time: the kernel's SLIP driver on the other end of the line, and the system's ping
         run: |
-          sudo BYTES=16384 ./ping.sh > ping.txt 2>&1 || { cat ping.txt; exit 1; }
+          sudo SSHKEY=/tmp/sshkey BYTES=16384 ./ping.sh > ping.txt 2>&1 || { cat ping.txt; exit 1; }
           cat ping.txt
           grep -q " 0% packet loss" ping.txt
           grep -q "^udp echo: 'cancho-os over udp'" ping.txt
@@ -105,6 +114,8 @@ jobs:
           grep -qi "^tcp port 23, before: .*refused" ping.txt
           grep -q "^remote: > cancho-os .* no Linux underneath" ping.txt
           grep -q "^remote: .*r-x  kernel code" ping.txt
+          grep -q "^ssh: cancho-os .* no Linux underneath" ping.txt
+          grep -q "^ssh, another key: .*Permission denied" ping.txt
           grep -q "^exit: shell on port 23: nobody connected" ping.txt
           grep -q "^exit: the kernel said bye" ping.txt
           grep -q "^a page from linux, for cancho-os" ping.txt
@@ -154,6 +165,25 @@ jobs:
           # on the serial line there is nobody to ask
           ./test.sh 'net up' 'net dhcp' > nodhcp.txt; cat nodhcp.txt
           grep -q "^an address is asked for on a network card" nodhcp.txt
+          # SSH (docs/ssh.md): OpenSSH's client logs in with the key the image was built to allow, runs a
+          # command and gets its status; a shell session runs three and ends at `exit`; another key is refused
+          MACHINE=virt SSHKEY=/tmp/sshkey SSHCMD=about SSHIN='ticks\nmem\nexit\nabout\n' ./test.sh 'net up' 'net ssh on' net > ssh.txt; cat ssh.txt
+          grep -q "^ssh is on port 22; keys built into this image that may log in: 1" ssh.txt
+          grep -q "^ssh host key (it is another after every restart): ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI" ssh.txt
+          grep -q "^ssh: cancho-os .* no Linux underneath (QEMU virt)" ssh.txt
+          grep -q "^ssh: exit status 0" ssh.txt
+          grep -Eq "^ssh: > [1-9][0-9]* timer interrupts" ssh.txt
+          grep -q "^ssh:   0x40080000 - .*r-x  kernel code" ssh.txt
+          grep -q "^ssh: > bye" ssh.txt
+          test "$(grep -c "no Linux underneath" ssh.txt)" = 1
+          grep -q "^tcp: 0 open" ssh.txt
+          ssh-keygen -q -t ed25519 -N "" -f /tmp/stranger
+          MACHINE=virt SSHKEY=/tmp/stranger SSHCMD=about ./test.sh 'net up' 'net ssh on' net > nossh.txt; cat nossh.txt
+          grep -q "^ssh: .*Permission denied" nossh.txt
+          ! grep -q "no Linux underneath" nossh.txt
+          # and without a generator the port stays closed
+          NORNG=' ' MACHINE=virt ./test.sh 'net up' 'net ssh on' > norngssh.txt; cat norngssh.txt
+          grep -q "^not without random numbers" norngssh.txt
           # randomness: the virtual generator here, the Pi 3's own on that board, none on QEMU's Pi 4 (which
           # has no such device); two draws are 32 hex digits each and differ
           MACHINE=virt ./test.sh random random 'net up' net > rng.txt; cat rng.txt
@@ -179,7 +209,7 @@ jobs:
       - name: ping over Ethernet, from Linux's own stack
         # the card on a tap interface: Linux's ARP, the system's ping and nc, none of it ours
         run: |
-          sudo MACHINE=virt ./ping.sh > eping.txt 2>&1 || { cat eping.txt; exit 1; }
+          sudo SSHKEY=/tmp/sshkey MACHINE=virt ./ping.sh > eping.txt 2>&1 || { cat eping.txt; exit 1; }
           cat eping.txt
           grep -q " 0% packet loss" eping.txt
           grep -q "^udp echo: 'cancho-os over udp'" eping.txt
@@ -197,6 +227,8 @@ jobs:
           grep -qi "^tcp port 23, before: .*refused" eping.txt
           grep -q "^remote: > cancho-os .* no Linux underneath" eping.txt
           grep -q "^remote: .*r-x  kernel code" eping.txt
+          grep -q "^ssh: cancho-os .* no Linux underneath" eping.txt
+          grep -q "^ssh, another key: .*Permission denied" eping.txt
           grep -q "^exit: shell on port 23: nobody connected" eping.txt
           grep -q "^exit: the kernel said bye" eping.txt
           grep -q "^a page from linux, for cancho-os" eping.txt

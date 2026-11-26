@@ -352,7 +352,11 @@ and `http` take names. The kernel's network code moved from `src/kernel.cho` to 
 Seventh slice, in its own file: [`genet.md`](genet.md). The Pi 4's Ethernet controller, on a real board
 and a real network. Everything above the driver is the code the earlier sections describe.
 
-## 12. Next
+## 12. SSH
+
+Eighth slice, in its own file: [`ssh.md`](ssh.md). The shell behind SSH on port 22, with cancho-ssh.
+
+## 13. Next
 
 The order, the boards and what each driver is written from are in [`drivers.md`](drivers.md).
 

@@ -66,6 +66,10 @@
   for a wider one (cancho `docs/mmio.md` 3), not fixed yet.
 - `load` (docs/load.md): a kernel sent over the serial console replaces the running one. A tool for bringing up
   hardware on the real boards without moving the SD card for every build; `board/send.py` is the sender.
+- SSH (docs/ssh.md, 2026-11-26): the shell behind cancho-ssh on port 22, in QEMU (OpenSSH logs in, in CI) and
+  on the real Pi 4 from a Mac. Keys that may log in are built into the image; the host key is new at every
+  start. **Next: storage** (an SD card driver, then files), so that the host key, the allowed keys and a
+  new kernel have somewhere to live; and port 23 removed.
 - Pi 4, finished off on the board (2026-11-26): the card's real address from the firmware's mailbox (`board`
   prints what it says), the RNG200 generator (started by `net eth`), and the caches emptied in the boot stub.
 - Pi 4 Ethernet (docs/genet.md): **works on the real board, 2026-11-26**: `net eth`, an address from a home

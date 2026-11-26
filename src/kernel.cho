@@ -7,6 +7,8 @@ import safety;
 import inet;
 import base;
 import network;
+import sshd;
+import authorized;
 
 // cancho-os: the kernel. Every driver here is cancho. A register is reached through
 // an `Mmio`, a capability whose type names the addresses it holds: `main` is given
@@ -194,16 +196,17 @@ fn poll[&f, &mi, &s](cpu: &!f Cpu, irq: &!mi Mmio("0x8000000..0x8000420,0x801000
 // Sleep until a key arrives, handling whatever else wakes the core meanwhile. While the
 // network link is up the core does not sleep: nothing wakes it when a byte arrives on the
 // link (interrupts are polled, and the tick is every 10 ms), so it keeps looking.
-fn getc[&f, &mc, &mi, &mu, &mr, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), irq: &!mi Mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014,0x107fff9000..0x107fffa014"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), rng: &!mr Mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], rline: &!l [byte]) -> [cpu("cntfrq_el0"), cpu("cntv_cval_el0"), cpu("cntvct_el0"), cpu("wfi"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014,0x107fff9000..0x107fffa014"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
+fn getc[&f, &mc, &mi, &mu, &mr, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l, &si, &sb, &sx](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), irq: &!mi Mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014,0x107fff9000..0x107fffa014"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), rng: &!mr Mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], rline: &!l [byte], si: &!si [int], sb: &!sb [byte], sx: &!sx [byte]) -> [cpu("cntfrq_el0"), cpu("cntv_cval_el0"), cpu("cntvct_el0"), cpu("wfi"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014,0x107fff9000..0x107fffa014"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
     let uart = k[0];
     while mmio_read32(con, uart + 0x18) & 16 != 0 {
         if k[37] < 16 && k[34] != 0 {
             network.rng_fill(rng, vio, dma, k);
         }
         if k[10] != 0 {
-            let ready = network.net_poll(bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, rline, base.uptime_ms(cpu), cpu_read(cpu, "cntvct_el0"));
+            let ready = network.net_poll(bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, rline, si, sb, sx, base.uptime_ms(cpu), cpu_read(cpu, "cntvct_el0"));
             if ready != 0 {
-                // not a key: -2 a line from the network is ready, -3 a connection is to be greeted
+                // not a key: -2 a line from the network is ready, -3 a connection is to be greeted, -4 the
+                // SSH host key has just been made
                 return -1 - ready;
             }
         } else if k[4] != 0 {
@@ -804,9 +807,9 @@ fn run[&f, &mc, &mu, &mt, &mx, &mz, &s, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000
         return 0;
     }
     if same(line, n, "help") {
-        base.puts(con, k, "commands: help, about, echo <text>, uptime, ticks, mem, board, random, net [up|down|eth|dhcp], net shell [on|off], lookup <name>, ping <address or name>, http <address or name> <port>, servo scan, servo pos, arm zero, arm pose, arm check <5 angles>, crash [null|write], load <bytes>\r\n");
+        base.puts(con, k, "commands: help, about, echo <text>, uptime, ticks, mem, board, random, net [up|down|eth|dhcp], net shell [on|off], net ssh [on|off], lookup <name>, ping <address or name>, http <address or name> <port>, servo scan, servo pos, arm zero, arm pose, arm check <5 angles>, crash [null|write], load <bytes>\r\n");
     } else if same(line, n, "about") {
-        base.puts(con, k, "cancho-os 0.0.20: a kernel written in cancho, no Linux underneath (");
+        base.puts(con, k, "cancho-os 0.0.21: a kernel written in cancho, no Linux underneath (");
         if k[1] >= 3 {
             base.puts(con, k, "Raspberry Pi ");
             base.put_dec(con, k, k[1]);
@@ -851,6 +854,8 @@ fn run[&f, &mc, &mu, &mt, &mx, &mz, &s, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000
         base.puts(con, k, "only from the serial console\r\n");
     } else if same(line, n, "net shell on") {
         k[30] = 23;
+        k[4153] = 0;
+        k[29] = 0;
         base.puts(con, k, "the shell is on port 23: no password, not encrypted, for a cable you trust\r\n");
     } else if same(line, n, "net shell off") {
         k[30] = 0;
@@ -881,6 +886,51 @@ fn run[&f, &mc, &mu, &mt, &mx, &mz, &s, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000
         base.putc(con, k, int_of(line[n + 4096]));
     } else {
         base.puts(con, k, "unknown command\r\n");
+    }
+    return 0;
+}
+
+// The host key as OpenSSH writes one: base64 of "ssh-ed25519" and the 32 bytes, each after its length.
+fn put_host_key[&mc, &s, &x, &w](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), k: &!s [int], sx: &!x [byte], wire: &!w [byte]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048")] int {
+    wire[0] = byte_of(0);
+    wire[1] = byte_of(0);
+    wire[2] = byte_of(0);
+    wire[3] = byte_of(11);
+    var i = 0;
+    while i < 11 {
+        wire[4 + i] = "ssh-ed25519"[i];
+        i = i + 1;
+    }
+    wire[15] = byte_of(0);
+    wire[16] = byte_of(0);
+    wire[17] = byte_of(0);
+    wire[18] = byte_of(32);
+    i = 0;
+    while i < 32 {
+        wire[19 + i] = sx[32 + i];
+        i = i + 1;
+    }
+    // 51 bytes are 17 threes: 68 characters and no padding
+    i = 0;
+    while i < 51 {
+        let v = int_of(wire[i]) << 16 | int_of(wire[i + 1]) << 8 | int_of(wire[i + 2]);
+        var shift = 18;
+        while shift >= 0 {
+            let d = v >> shift & 63;
+            if d < 26 {
+                base.putc(con, k, 'A' + d);
+            } else if d < 52 {
+                base.putc(con, k, 'a' + d - 26);
+            } else if d < 62 {
+                base.putc(con, k, '0' + d - 52);
+            } else if d == 62 {
+                base.putc(con, k, '+');
+            } else {
+                base.putc(con, k, '/');
+            }
+            shift = shift - 6;
+        }
+        i = i + 3;
     }
     return 0;
 }
@@ -1018,13 +1068,28 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s](cpu: &!f
         let inbox = alloc_slice[r](4 * inet.tcp_inbox(), byte_of(0));
         let rline = alloc_slice[r](128, byte_of(0));
         let cmd = alloc_slice[r](128, byte_of(0));
+        // SSH (src/sshd.cho): cancho-ssh's state for one connection, and the keys
+        let si = alloc_slice[r](sshd.ints(), 0);
+        let sb = alloc_slice[r](sshd.bytes(), byte_of(0));
+        let sx = alloc_slice[r](sshd.extra(), byte_of(0));
+        k[4164] = authorized.fill(sx[352..480]);
         var n = 0;
         base.puts(con, k, "> ");
         while true {
-            let c = getc(cpu, con, irq, bus, rng, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, rline);
-            if c == -3 {
+            let c = getc(cpu, con, irq, bus, rng, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, rline, si, sb, sx);
+            if c == -4 {
+                // the host key's public half, as a line for a client's known_hosts
+                base.puts(con, k, "\r\nssh host key (it is another after every restart): ssh-ed25519 ");
+                put_host_key(con, k, sx, wire);
+                base.puts(con, k, "\r\n> ");
+                k[4160] = 2;
+            } else if c == -3 {
                 k[26] = 1;
-                base.puts(con, k, "cancho-os: the kernel's shell. One session, not encrypted. Type `help`.\r\n> ");
+                if k[4153] == 1 {
+                    base.puts(con, k, "cancho-os: the kernel's shell, over SSH. `help` lists the commands, `exit` leaves.\r\n> ");
+                } else {
+                    base.puts(con, k, "cancho-os: the kernel's shell. One session, not encrypted. Type `help`.\r\n> ");
+                }
                 k[26] = 0;
             } else if c == -2 {
                 // a line from the network: the same commands, and what they print goes back there
@@ -1081,7 +1146,7 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s](cpu: &!f
 
 fn kernel[&f, &mc, &mp, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &mq](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), pins: &!mp Mmio("0x3f200004..0x3f200008,0xfe200004..0xfe200008"), irq: &!mi Mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014,0x107fff9000..0x107fffa014"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), rng: &!mr Mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), fw: &!mw Mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), tab: &!mt Mmio("0x200000..0x208000,0x40200000..0x40208000"), code: &mx Mmio("0x80001..0x200000,0x40080001..0x40200000"), probe: &!mz Mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001"), fault: &mq Mmio("0x208000..0x208008,0x40208000..0x40208008")) -> [cpu("cntfrq_el0"), cpu("cntv_ctl_el0"), cpu("cntv_cval_el0"), cpu("cntv_tval_el0"), cpu("cntvct_el0"), cpu("elr_el1"), cpu("esr_el1"), cpu("far_el1"), cpu("mair_el1"), cpu("midr_el1"), cpu("sctlr_el1"), cpu("tcr_el1"), cpu("tlbi_vmalle1"), cpu("ttbr0_el1"), cpu("wfi"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x3f200004..0x3f200008,0xfe200004..0xfe200008"), mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014,0x107fff9000..0x107fffa014"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x200000..0x208000,0x40200000..0x40208000"), mmio("0x80001..0x200000,0x40080001..0x40200000"), mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001"), mmio("0x208000..0x208008,0x40208000..0x40208008"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), mmio("0x220000..0x420000,0x40220000..0x40420000"), mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4")] int {
     region r {
-        let k = alloc_slice[r](40 + 4096 + 16 + 8, 0);
+        let k = alloc_slice[r](40 + 4096 + 16 + 32, 0);
         // the address the kernel has until it is given another: 10.0.0.2 on a network of 256, gateway 10.0.0.1
         k[4154] = 0x0a000002;
         k[4155] = 0xffffff00;

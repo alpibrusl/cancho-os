@@ -8,13 +8,14 @@
 # Exit 0 if every ping was answered, a UDP datagram to port 7 came back, a TCP connection to it echoed a line
 # and then 64 KB (BYTES=n for another size), port 9 refused one, and the kernel's own ping of this machine
 # was answered; the kernel fetched a page from a web server here and was refused by a port with none; `exit`
-# over the shell's connection made the kernel hang up; on the card, dnsmasq gave the kernel an address and
+# over the shell's connection made the kernel hang up; with SSHKEY=path, OpenSSH logged in with that key and
+# another key was refused; on the card, dnsmasq gave the kernel an address and
 # answered its questions about names, and the kernel then reached 10.0.0.1 by the gateway; and port 23 refused a connection before `net shell on` and gave the kernel's shell after it.
 set -u
 cd "$(dirname "$0")"
 MACHINE=${MACHINE:-raspi3b}
 mkdir -p build
-rm -f build/uart.in build/ping-uart.out build/qemu.err
+rm -f build/uart.in build/ping-uart.out build/qemu.err build/strangerkey build/strangerkey.pub
 mkfifo build/uart.in
 if [ "$MACHINE" = virt ]; then
     # the network card, on a tap interface of this machine: Ethernet frames, so ARP comes first
@@ -119,6 +120,22 @@ if [ -n "$ready" ]; then
     if [ "$MACHINE" = virt ]; then
         # what this machine's own ARP table learned from the kernel's answer
         ip neigh show dev tap0
+    fi
+    if [ -n "${SSHKEY:-}" ]; then
+        # SSH (docs/ssh.md): Linux's own OpenSSH client logs in with the key the image was built to allow, runs
+        # a command and gets its exit status; a key that is not in the image is refused
+        printf 'net ssh on\r' >&3
+        sleep 4
+        sshopts="-o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=40"
+        said=$(timeout 90 ssh -i "$SSHKEY" $sshopts cancho@10.0.0.2 about < /dev/null 2>&1 | tr -d '\r')
+        echo "ssh: $said"
+        echo "$said" | grep -q "no Linux underneath" || status=1
+        ssh-keygen -q -t ed25519 -N "" -f build/strangerkey < /dev/null > /dev/null 2>&1
+        refused=$(timeout 90 ssh -i build/strangerkey $sshopts cancho@10.0.0.2 about < /dev/null 2>&1 | tr -d '\r' | tail -1)
+        echo "ssh, another key: $refused"
+        echo "$refused" | grep -q "Permission denied" || status=1
+        printf 'net ssh off\r' >&3
+        sleep 1
     fi
     if [ "$MACHINE" = virt ]; then
         # An address that is given, and names, from a server that is not ours: dnsmasq, on a second network
