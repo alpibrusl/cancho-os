@@ -1,6 +1,7 @@
 # Randomness
 
-> **Status: built for QEMU's `virt` and the Pi 3; not for the Pi 4** (below). In QEMU only.
+> **Status: built for QEMU's `virt`, the Pi 3 (both in QEMU) and the Pi 4 (on a real board, where
+> alone it can run).**
 
 ## What is wanted
 
@@ -16,16 +17,21 @@ A kernel has no randomness of its own; it must be given some by hardware. Each b
 |---|---|---|
 | QEMU `virt` | virtio-rng (device 4): the driver offers a buffer, the host fills it | the virtio slots and queue memory the network card already uses |
 | Pi 3 (BCM2837) | the BCM2835 generator at `0x3f104000` | control `+0`, status `+4` (words ready in its top byte), data `+8` |
-| Pi 4 (BCM2711) | the "RNG200" at `0xfe104000` | **not driven yet** (below) |
+| Pi 4 (BCM2711) | the "RNG200" at `0xfe104000` | control `+0`, discard count `+0x10`, FIFO data `+0x20`, FIFO count `+0x24` |
 
 The Pi 3's registers are the ones FreeBSD's `bcm2835_rng.c` (BSD-2-Clause) drives; the virtio device is
 from the VIRTIO specification, section 5.4.
 
-**The Pi 4 has no driver.** QEMU's Pi 4 does not have the RNG200 (`info mtree` on `-M raspi4b`, QEMU
+**The Pi 4's is started late.** (It had no driver at first, for the reason that follows; it has one
+since a real board was on a serial line to try it on.) QEMU's Pi 4 does not have the RNG200 (`info mtree` on `-M raspi4b`, QEMU
 11.1.3, shows nothing at `0xfe104000`), and reading the address there is a fault. A driver could only
-be tried on a real board, so it waits for one: on a Pi 4 the kernel has no randomness today, says so,
-and falls back to the counter. The same FreeBSD file drives that generator (control `+0`, FIFO data
-`+0x20`, FIFO count `+0x24`), and the driver is about fifteen lines when a board is here.
+be tried on a real board. So the kernel does not touch it at boot: `net eth`, which only a real Pi 4
+can run, starts the generator with the card, and until then `random` says so and connections begin at
+the counter. The registers are the ones FreeBSD's `bcm2835_rng.c` and Linux's `iproc-rng200.c` drive.
+
+On the real board (2026-11-26): before `net eth`, "not started"; after it, two draws, "random (the
+RNG200): cca9995b..." and "883d0505...", different; and `net` said "connections begin at a random
+number (the RNG200)".
 
 ## The shape
 

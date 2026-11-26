@@ -65,8 +65,11 @@ second). After that fix a loaded kernel starts from nothing: loaded once more by
 said "76644 timer interrupts" and "link up ... address 192.168.1.69" before anything was typed; loaded
 by the fixed stub, the same image said "105 timer interrupts", "link down", "0 packets answered".
 
-The same hazard exists at power-on, and is not fixed: the kernel turns the cache on without emptying it
-first, and relies on the firmware having left it clean.
+The same hazard existed at power-on: the kernel turned the cache on without emptying it first, and
+relied on the firmware having left it clean. The boot stub now empties every level of the data cache
+(by set and way, the architecture's recipe), the instruction cache and the TLB before `main`, on every
+start. That code has run on the real board each time a kernel was loaded since; **it has not yet run
+there at a real power-on**, where the kernel is entered a level higher. In QEMU it runs and does nothing.
 
 ## What it does not do
 

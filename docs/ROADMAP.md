@@ -66,6 +66,8 @@
   for a wider one (cancho `docs/mmio.md` 3), not fixed yet.
 - `load` (docs/load.md): a kernel sent over the serial console replaces the running one. A tool for bringing up
   hardware on the real boards without moving the SD card for every build; `board/send.py` is the sender.
+- Pi 4, finished off on the board (2026-11-26): the card's real address from the firmware's mailbox (`board`
+  prints what it says), the RNG200 generator (started by `net eth`), and the caches emptied in the boot stub.
 - Pi 4 Ethernet (docs/genet.md): **works on the real board, 2026-11-26**: `net eth`, an address from a home
   router, example.com fetched, pinged and used from another machine. The first driver here written against
   hardware QEMU does not have, brought up with `load` in five builds.

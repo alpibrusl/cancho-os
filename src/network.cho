@@ -205,13 +205,102 @@ pub fn vnet_recv[&mv, &md, &s, &a](vio: &!mv Mmio("0xa000000..0xa004000,0xfd5800
     return got;
 }
 
+// ---- the firmware ------------------------------------------------------------------------
+// A Pi's firmware keeps facts about the board and answers questions about them through a
+// "mailbox": the address of a message is written to one register and read back from
+// another when it has been answered in place. The message is in `dma` (at +0xc000, which
+// no card uses), where the firmware and the kernel see the same bytes. Three questions
+// are asked, and nothing is ever set: the board's revision (tag 0x10002), its card's
+// address (0x10003), its serial number (0x10004).
+// Registers, from 0x3f00b880 on a Pi 3 and 0xfe00b880 on a Pi 4: +0x00 read, +0x18 status
+// (bit 31 no room to write, bit 30 nothing to read), +0x20 write. Channel 8.
+
+// Ask `tag`. 0 when the firmware has answered, its answer's bytes then at `fw_byte`.
+fn fw_ask[&mw, &md, &s](fw: &!mw Mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], tag: int) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4")] int {
+    var m = 0;
+    if k[1] == 3 {
+        m = 0x3f00b880;
+    } else if k[1] == 4 {
+        m = 0xfe00b880;
+    } else {
+        return 1;
+    }
+    let b = k[14] + 0x21c000;
+    // 32 bytes in all, a request; one tag with room for 8 bytes of answer; the end
+    mmio_write32(dma, b, 32);
+    mmio_write32(dma, b + 4, 0);
+    mmio_write32(dma, b + 8, tag);
+    mmio_write32(dma, b + 12, 8);
+    mmio_write32(dma, b + 16, 0);
+    mmio_write32(dma, b + 20, 0);
+    mmio_write32(dma, b + 24, 0);
+    mmio_write32(dma, b + 28, 0);
+    var spins = 0;
+    while mmio_read32(fw, m + 0x18) >> 31 & 1 != 0 && spins < 1000000 {
+        spins = spins + 1;
+    }
+    mmio_write32(fw, m + 0x20, b | 8);
+    var answered = false;
+    spins = 0;
+    while !answered && spins < 1000000 {
+        if mmio_read32(fw, m + 0x18) >> 30 & 1 == 0 {
+            answered = mmio_read32(fw, m) & 15 == 8;
+        }
+        spins = spins + 1;
+    }
+    if !answered || mmio_read32(dma, b + 4) != 0x80000000 || mmio_read32(dma, b + 16) >> 31 & 1 == 0 {
+        return 1;
+    }
+    return 0;
+}
+
+fn fw_byte[&md, &s](dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], i: int) -> [mmio("0x210000..0x220000,0x40210000..0x40220000")] int {
+    return mmio_read8(dma, k[14] + 0x21c000 + 20 + i);
+}
+
+// `board`: what the firmware says this board is.
+fn put_board[&mc, &mw, &md, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), fw: &!mw Mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4")] int {
+    if fw_ask(fw, dma, k, 0x10002) != 0 {
+        return base.puts(con, k, "this board has no firmware to ask, or it did not answer\r\n");
+    }
+    base.puts(con, k, "revision ");
+    var i = 3;
+    while i >= 0 {
+        base.put_hex(con, k, fw_byte(dma, k, i) >> 4);
+        base.put_hex(con, k, fw_byte(dma, k, i) & 15);
+        i = i - 1;
+    }
+    if fw_ask(fw, dma, k, 0x10004) == 0 {
+        base.puts(con, k, ", serial ");
+        i = 7;
+        while i >= 0 {
+            base.put_hex(con, k, fw_byte(dma, k, i) >> 4);
+            base.put_hex(con, k, fw_byte(dma, k, i) & 15);
+            i = i - 1;
+        }
+    }
+    if fw_ask(fw, dma, k, 0x10003) == 0 {
+        base.puts(con, k, ", card address ");
+        i = 0;
+        while i < 6 {
+            base.put_hex(con, k, fw_byte(dma, k, i) >> 4);
+            base.put_hex(con, k, fw_byte(dma, k, i) & 15);
+            if i < 5 {
+                base.puts(con, k, ":");
+            }
+            i = i + 1;
+        }
+    }
+    return base.puts(con, k, "\r\n");
+}
+
 // ---- the Pi 4's network card: GENET ----------------------------------------------------
 // BCM2711's Ethernet controller (docs/genet.md), at 0xfd580000, version 5. Written from
 // NetBSD's bcmgenet.c and FreeBSD's if_genet.c (both BSD-2-Clause). Only a real board
 // has one: QEMU's Pi 4 does not, and reading its address there is a fault, so nothing
 // here runs until `net eth` is typed.
 // The card and the driver share `dma`, mapped uncached: sixteen receive buffers of 2 KB
-// at +0x0000, sixteen to send at +0x8000. The card finds them through descriptors that
+// at +0x0000, eight to send at +0x8000. The card finds them through descriptors that
 // are its own registers (three words each: length and flags, then the address), in two
 // rings the driver sizes: 16 of the 256 there are.
 //   +0x000 version     +0x004 port mode     +0x008 receive buffer reset     +0x08c RGMII
@@ -260,7 +349,7 @@ fn genet_phy_write[&mv](vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590
 
 // Reset the card, give it its rings and buffers, and tell the transceiver how the two are
 // wired. k[15] is the card afterwards and k[19] its address; 1 if it is not the card expected.
-pub fn genet_start[&f, &mv, &s](cpu: &!f Cpu, vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), k: &!s [int]) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
+pub fn genet_start[&f, &mv, &md, &mw, &s](cpu: &!f Cpu, vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), fw: &!mw Mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4"), k: &!s [int]) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4")] int {
     let g = 0xfd580000;
     if mmio_read32(vio, g) >> 24 & 15 != 6 {
         // version 5 says 6 here
@@ -268,9 +357,20 @@ pub fn genet_start[&f, &mv, &s](cpu: &!f Cpu, vio: &!mv Mmio("0xa000000..0xa0040
     }
     // the address the firmware gave the card, before the reset forgets it
     var mac = (mmio_read32(vio, g + 0x80c) & 0xffffffff) << 16 | mmio_read32(vio, g + 0x810) & 0xffff;
+    // the board's own address is the firmware's to say; an old firmware leaves the card's registers
+    // at zero. If neither is to be had: one of the kind anyone may make up, 02:63:61:6e:63:04
+    if fw_ask(fw, dma, k, 0x10003) == 0 {
+        var own = 0;
+        var b = 0;
+        while b < 6 {
+            own = own << 8 | fw_byte(dma, k, b);
+            b = b + 1;
+        }
+        if own != 0 {
+            mac = own;
+        }
+    }
     if mac == 0 {
-        // the firmware gave it none (the board's own is kept by the firmware, which is not asked
-        // yet): an address of the kind anyone may make up, 02:63:61:6e:63:04
         mac = 0x0263616e6304;
     }
     mmio_write32(vio, g + 0x008, 2);
@@ -308,7 +408,7 @@ pub fn genet_start[&f, &mv, &s](cpu: &!f Cpu, vio: &!mv Mmio("0xa000000..0xa0040
     while i < 16 {
         mmio_write32(vio, g + 0x2000 + i * 12 + 4, d + i * 0x800);
         mmio_write32(vio, g + 0x2000 + i * 12 + 8, 0);
-        mmio_write32(vio, g + 0x4000 + i * 12 + 4, d + 0x8000 + i * 0x800);
+        mmio_write32(vio, g + 0x4000 + i * 12 + 4, d + 0x8000 + (i & 7) * 0x800);
         mmio_write32(vio, g + 0x4000 + i * 12 + 8, 0);
         i = i + 1;
     }
@@ -393,7 +493,8 @@ fn genet_send[&mv, &md, &s, &b](vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000.
         return 1;
     }
     let slot = k[18] & 15;
-    let buf = k[14] + 0x218000 + slot * 0x800;
+    // (eight buffers for sixteen descriptors: a frame has left before the next is written)
+    let buf = k[14] + 0x218000 + (slot & 7) * 0x800;
     var i = 0;
     while i < n {
         mmio_write8(dma, buf + i, int_of(frame[i]));
@@ -449,15 +550,27 @@ fn card_recv[&mv, &md, &s, &a](vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..
 
 // `net eth` on a Pi 4: bring the card up, wait up to five seconds for the cable, and make
 // it the link.
-pub fn net_eth[&f, &mc, &mv, &s](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), k: &!s [int]) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
+pub fn net_eth[&f, &mc, &mv, &md, &mr, &mw, &s](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), rng: &!mr Mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), fw: &!mw Mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4"), k: &!s [int]) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4")] int {
     if k[1] != 4 {
         return base.puts(con, k, "`net eth` is for a Pi 4's own card; on this board `net up` is the link there is\r\n");
     }
     k[10] = 0;
-    if genet_start(cpu, vio, k) != 0 {
+    if genet_start(cpu, vio, dma, fw, k) != 0 {
         base.puts(con, k, "not the card expected: its version register says ");
         base.put_dec(con, k, mmio_read32(vio, 0xfd580000) >> 24 & 15);
         return base.puts(con, k, "\r\n");
+    }
+    // the board's generator too: like the card, only a real Pi 4 has one, so it is not touched at boot
+    if k[34] == 0 {
+        k[35] = 0xfe104000;
+        if mmio_read32(rng, k[35]) & 0x1fff == 0 {
+            // the first numbers are thrown away (this many bits); two words before it says it has any;
+            // then on, sampling at 1 MHz
+            mmio_write32(rng, k[35] + 0x10, 0x40000);
+            mmio_write32(rng, k[35] + 0x24, 2 << 8);
+            mmio_write32(rng, k[35], 3 << 13 | 0x1fff);
+        }
+        k[34] = 4;
     }
     base.puts(con, k, "GENET, transceiver ");
     var shift = 12;
@@ -498,7 +611,7 @@ pub fn net_eth[&f, &mc, &mv, &s](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000
 // k[34] says which (0: none), k[35] where. The virtio queue is in `dma`, after the
 // network card's: +0x6000 its three tables, +0x6400 the buffer.
 
-pub fn rng_start[&mr, &mv, &md, &s](rng: &!mr Mmio("0x3f104000..0x3f10400c"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int]) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f104000..0x3f10400c"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
+pub fn rng_start[&mr, &mv, &md, &s](rng: &!mr Mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int]) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
     if k[1] == 3 {
         k[35] = 0x3f104000;
         // the first words are to be thrown away: this many, the chip's own advice
@@ -553,8 +666,18 @@ pub fn rng_start[&mr, &mv, &md, &s](rng: &!mr Mmio("0x3f104000..0x3f10400c"), vi
 }
 
 // One word of 32 bits from the generator, or -1 if it gave none in time.
-pub fn rng_word[&mr, &mv, &md, &s](rng: &!mr Mmio("0x3f104000..0x3f10400c"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int]) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f104000..0x3f10400c"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
+pub fn rng_word[&mr, &mv, &md, &s](rng: &!mr Mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int]) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
     var spins = 0;
+    if k[34] == 4 {
+        // a Pi 4's RNG200: +0x24 says how many words wait (its low byte), +0x20 gives one
+        while mmio_read32(rng, k[35] + 0x24) & 255 == 0 && spins < 1000000 {
+            spins = spins + 1;
+        }
+        if mmio_read32(rng, k[35] + 0x24) & 255 == 0 {
+            return -1;
+        }
+        return mmio_read32(rng, k[35] + 0x20);
+    }
     if k[34] == 3 {
         while mmio_read32(rng, k[35] + 4) >> 24 == 0 && spins < 1000000 {
             spins = spins + 1;
@@ -592,7 +715,7 @@ pub fn rng_word[&mr, &mv, &md, &s](rng: &!mr Mmio("0x3f104000..0x3f10400c"), vio
 
 // Keep 16 words ready at k[4136..]; k[37] is how many there are. What needs one takes it
 // from there, and so needs no capability.
-pub fn rng_fill[&mr, &mv, &md, &s](rng: &!mr Mmio("0x3f104000..0x3f10400c"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int]) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f104000..0x3f10400c"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
+pub fn rng_fill[&mr, &mv, &md, &s](rng: &!mr Mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int]) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
     while k[34] != 0 && k[37] < 16 {
         let w = rng_word(rng, vio, dma, k);
         if w < 0 {
@@ -608,11 +731,17 @@ pub fn put_rng_name[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x
     if k[34] == 1 {
         return base.puts(con, k, "virtio-rng");
     }
+    if k[34] == 4 {
+        return base.puts(con, k, "the RNG200");
+    }
     return base.puts(con, k, "the BCM2835 generator");
 }
 
 // `random`: sixteen bytes straight from the generator, and which one it is.
-pub fn put_random[&mc, &mr, &mv, &md, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), rng: &!mr Mmio("0x3f104000..0x3f10400c"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f104000..0x3f10400c"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
+pub fn put_random[&mc, &mr, &mv, &md, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), rng: &!mr Mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
+    if k[34] == 0 && k[1] == 4 {
+        return base.puts(con, k, "not started: on a Pi 4 the generator is started with the card, by `net eth`\r\n");
+    }
     if k[34] == 0 {
         return base.puts(con, k, "this board gave the kernel no source of randomness\r\n");
     }
@@ -1285,7 +1414,11 @@ fn begins[&r, &w](text: &r [byte], n: int, word: &w [byte]) -> [] bool {
 // 1 if `text[0..n]` was one of them and has been run, 0 if it is another command.
 // `rline` is the line being typed over the shell's connection, which `http` must leave
 // alone while it waits; `text` is never that buffer.
-pub fn net_command[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], rline: &!l [byte], text: &r [byte], n: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
+pub fn net_command[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l, &r, &mr, &mw](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], rng: &!mr Mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), fw: &!mw Mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4"), rline: &!l [byte], text: &r [byte], n: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4")] int {
+    if n == 5 && begins(text, n, "board") {
+        put_board(con, fw, dma, k);
+        return 1;
+    }
     if n > 12 && begins(text, n, "net address ") {
         // an address by hand, on a network of 256, with no gateway: for a network that gives none
         let a = address(text, 12, n);
@@ -1301,7 +1434,7 @@ pub fn net_command[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l, &
         return 1;
     }
     if n == 7 && begins(text, n, "net eth") {
-        net_eth(cpu, con, vio, k);
+        net_eth(cpu, con, vio, dma, rng, fw, k);
         return 1;
     }
     if n == 8 && begins(text, n, "net dhcp") {

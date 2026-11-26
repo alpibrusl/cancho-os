@@ -38,6 +38,9 @@ Rules of the road
   faults there, so no test may type it. Change it only with the board on the serial link, and send builds
   with `board/send.py` (docs/load.md). `dma` is mapped as device memory on purpose: a card writes it.
   Never leave `net shell on` open on a real network after a test.
+- The firmware's mailbox (`fw`, docs/genet.md) can set things as well as answer: the kernel asks three tags
+  and sets nothing. A new tag is a decision, not a convenience. Never write a real board's serial number or
+  full card address into a doc, a test or a commit.
 - A real Pi 4 has booted it (README, "On a real Pi 4"): one board, one session. Say exactly that, and
   keep "measured in QEMU" on everything that was not seen on the board.
 - The Pi 5 (docs/pi5.md) is the one board whose code no test runs: QEMU has none. Do not describe it as

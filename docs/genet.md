@@ -17,7 +17,7 @@ offsets and the order of initialisation are theirs.
   wired (RGMII, with the receive clock delayed in the transceiver), negotiation restarted, then up to
   five seconds for the cable. The MAC is set to the speed the two ends agreed.
 - **Polled, like everything here.** Its interrupts are all masked.
-- **No new capability.** The card's registers were added to the bound of `vio`, which was "the virtio
+- **No new capability for the card.** The card's registers were added to the bound of `vio`, which was "the virtio
   slots" and is now "the network card's registers, whichever the board has". Its buffers are in `dma`,
   the 64 KB the virtio card already used.
 - **`dma` is now mapped as device memory**, on every board. A card writes that memory behind the
@@ -48,15 +48,29 @@ was sent with `load` (docs/load.md): five builds, about 12 s each.
 ## What it took, besides the driver
 
 - **The card had no address.** The firmware on this card (April 2021) leaves the controller's address
-  registers at zero. The board's real address is kept by the firmware, which this kernel does not talk
-  to yet, so the driver uses `02:63:61:6e:63:04`, an address of the kind anyone may make up. **Two
-  boards running this kernel on one network would collide.**
+  registers at zero, and the first version made one up (`02:63:61:6e:63:04`), so two such boards on
+  one network would have collided. The driver now asks the firmware (`fw_ask`, below) and the card
+  has the board's own: on the board tried, one in Raspberry Pi's range (`dc:a6:32:...`), under which
+  the router then lent it another address. The made-up one is kept for a firmware that does not answer.
 - **DHCP waited too little.** The router offered an address at once and took more than two seconds to
   acknowledge the request for it; the kernel now waits five. The message that found it ("192.168.1.69
   was offered ..., but asking for it got no answer") stays.
 - **A received frame's length.** The first guess took six bytes off what the card reports (two in
   front, four of the check behind); the driver now takes off the two and leaves any check as padding,
   which `inet` ignores.
+
+## The firmware, asked three things
+
+A Pi's firmware answers questions about the board through a "mailbox": the address of a message is
+written to one register and read from another when it has been answered in place. `fw_ask` does that,
+with the message in `dma`, and a new capability, `fw`, bounds the three registers it uses
+(`0x3f00b880..0x3f00b8a4` on a Pi 3, `0xfe00b880..0xfe00b8a4` on a Pi 4). The interface can also *set*
+things (clocks, power, the display); the kernel sends three tags, all questions: the board's revision,
+its serial number, its card's address. `board` prints them. QEMU's Pi 3 and Pi 4 answer too, so this
+part is tested in CI: "revision 00a02082 ... card address 52:54:00:12:34:57" as a Pi 3.
+
+On the real board `board` said revision `00c03111` (a Pi 4 Model B, 4 GB), a serial number, and the
+address the card then used.
 
 ## What it does not do
 
