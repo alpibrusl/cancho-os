@@ -69,8 +69,11 @@ chain:
     ldr     x7, [x4, #8]              // how many bytes
     // What this kernel wrote is partly still in the data cache: write it out, and empty the cache, so
     // that the next kernel does not find this one's data when it turns the cache on again.
+    // (All the RAM this kernel maps, to the end of its heap: its state lives in the heap, and what is
+    // left in the cache from there comes back over the next kernel's when the cache is on again. Seen
+    // on a real Pi 4, where a loaded kernel woke up with its predecessor's address and counters.)
     ldr     x0, =__mapped_start
-    ldr     x1, =__stage_end
+    ldr     x1, =__cancho_heap_end
 1:  dc      civac, x0
     add     x0, x0, #64
     cmp     x0, x1

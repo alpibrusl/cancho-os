@@ -1,6 +1,7 @@
 # Loading a kernel over the serial line
 
-> **Status: built; in QEMU on all three boards, and once on a real Pi 4.**
+> **Status: built; in QEMU on all three boards, and on a real Pi 4**, where it found a fault in itself
+> that QEMU could not (the end of this file).
 
 ## What is wanted
 
@@ -53,9 +54,19 @@ and executed there, and tested by nothing. That part is what a real board decide
 machine wired to its console, sent the 0.0.99 image: "sent 127464 bytes in 11.2 s; checksum ours
 bf805bc8, the kernel's bf805bc8", then "starting it", the boot message, and `about` said 0.0.99. `mem`
 printed the new image's map and `uptime` went on counting. So the cache handling in the stub did what
-it is for, once. One thing was not as in QEMU: `ticks` in the loaded kernel began some thousands too
-high and then rose by 100 a second as it should. The timer's old deadline seems to survive into the new
-kernel; not explained yet.
+it is for, once.
+
+**And then it was found not to.** `ticks` in a loaded kernel began some thousands too high, and a later
+one woke up with its predecessor's network address and packet counts. The stub emptied the cache only
+up to the end of the staging area, and the kernel's state is in the heap above it: the old kernel's
+cached lines were still there when the new kernel turned the cache on, and came back over its freshly
+zeroed memory. The stub now empties the cache for all the RAM the kernel maps (960 MB, a fraction of a
+second). After that fix a loaded kernel starts from nothing: loaded once more by the old stub, a kernel
+said "76644 timer interrupts" and "link up ... address 192.168.1.69" before anything was typed; loaded
+by the fixed stub, the same image said "105 timer interrupts", "link down", "0 packets answered".
+
+The same hazard exists at power-on, and is not fixed: the kernel turns the cache on without emptying it
+first, and relies on the firmware having left it clean.
 
 ## What it does not do
 
