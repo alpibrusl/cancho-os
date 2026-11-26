@@ -129,7 +129,7 @@ jobs:
           for i in 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20; do set -- "$@" "write F$i.TXT file $i"; done
           for img in fat32 fat16 part; do
             cp $img.img w-$img.img
-            MACHINE=virt DISKRW=w-$img.img ./test.sh "$@" 'copy BIG.BIN COPY.BIN' 'copy BIG.BIN NOTES.TXT' 'write bad/name x' 'sum COPY.BIN' ls disk > w-$img.txt; tail -40 w-$img.txt
+            MACHINE=virt DISKRW=w-$img.img ./test.sh "$@" 'copy BIG.BIN COPY.BIN' 'copy BIG.BIN NOTES.TXT' 'write bad:name x' 'sum COPY.BIN' ls disk > w-$img.txt; tail -40 w-$img.txt
             grep -q "^copied: 300000 bytes" w-$img.txt
             grep -q "^there is something of that name already" w-$img.txt
             grep -q "^not a short name" w-$img.txt
