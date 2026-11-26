@@ -931,7 +931,7 @@ fn reading[&r](line: &r [byte], n: int) -> [] bool {
     if same(line, n, "help") || same(line, n, "about") || same(line, n, "uptime") || same(line, n, "ticks") || same(line, n, "mem") || same(line, n, "board") {
         return true;
     }
-    if same(line, n, "net") || same(line, n, "disk") || same(line, n, "ls") || same(line, n, "exit") || same(line, n, "arm zero") || n == 0 {
+    if same(line, n, "net") || same(line, n, "disk") || same(line, n, "ls") || same(line, n, "versions") || same(line, n, "exit") || same(line, n, "arm zero") || n == 0 {
         return true;
     }
     return n > 4 && (same(line, 4, "cat ") || same(line, 4, "sum ")) || n > 5 && same(line, 5, "echo ");
@@ -1169,7 +1169,7 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s](cpu: &!f
                     base.puts(con, k, "this key may only read: that needs an owner's key\r\n");
                 } else if same(cmd, k[31], "random") {
                     network.put_random(con, rng, vio, dma, k);
-                } else if disk.command(con, vio, dma, k, cmd, k[31]) != 0 {
+                } else if disk.command(con, vio, dma, k, cmd, k[31], false) != 0 {
                     // (run: a command that uses the disk; one that may have changed who may log in)
                     if k[31] > 7 && (same(cmd, 7, "append ") || same(cmd, 6, "write ")) {
                         load_keys(vio, dma, k, sx);
@@ -1201,7 +1201,7 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s](cpu: &!f
                     load(cpu, con, stage, probe, k, line, n);
                 } else if same(line, n, "random") {
                     network.put_random(con, rng, vio, dma, k);
-                } else if disk.command(con, vio, dma, k, line, n) != 0 {
+                } else if disk.command(con, vio, dma, k, line, n, true) != 0 {
                     // (a file was added or added to: it may be the one that says who may log in)
                     if n > 7 && (same(line, 7, "append ") || same(line, 6, "write ")) {
                         load_keys(vio, dma, k, sx);
