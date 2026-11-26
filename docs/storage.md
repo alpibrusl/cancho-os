@@ -1,6 +1,6 @@
 # Storage
 
-> **Status: design, first slice.** What was measured is at the end.
+> **Status: reading works, in QEMU.** No writing yet, and no real card: slices 1 to 3 of the order below.
 
 ## What is wanted
 
@@ -45,6 +45,21 @@ has no journal and no permissions; what it has is that the card is already speak
 - **Commands:** `disk` (what is there), `ls`, `cat <name>`, and `sum <name>`, which reads a whole file
   and says its length and Adler-32, so that a file of any size can be compared with the same file on
   another machine.
+
+## What was measured
+
+At the commit that adds this file, QEMU 11.1.3. `./authority.sh` says "as recorded": the disk is reached
+through capabilities the network card already used.
+
+| | what | result |
+|---|---|---|
+| `cancho test tests/fat_test.cho src/fat.cho --std` | 11 tests, on sectors of three volumes macOS made (`hdiutil create -fs "MS-DOS FAT32"`, `FAT16`, and FAT32 behind a partition table), their meaning read by a second implementation (Python's `struct`) | the partition's start, each volume's ten numbers, five files' names, clusters and lengths, a chain of 586 clusters followed to its end; 57,856 damaged sectors, none traps |
+| `MACHINE=virt DISK=fat32.img ./test.sh disk ls 'sum BIG.BIN' ...` | the kernel reading those volumes through virtio-blk | "a FAT32 volume at sector 0, 129022 clusters of 512 bytes"; ten files listed; `sum BIG.BIN`: "300000 bytes, adler32 2832a702", which is what Python's `zlib` says of the file that was copied in |
+| the same on the FAT16 volume (clusters of 2,048 bytes) and behind the partition table (volume at sector 1) | | the same three checksums |
+| in CI | three volumes made there by Linux's tools (`mkfs.fat`, `mcopy`, `sfdisk`): a third implementation | the same checks, the checksum computed on the runner; and `ssh host 'sum BIG.BIN'` gives it over SSH |
+
+A file with a long name was there too: it is listed as `A-LONG~9.TEX` and reads correctly under that
+name. macOS also left its own `._` files beside each, which `ls` shows as it finds them.
 
 ## What it does not do, yet
 

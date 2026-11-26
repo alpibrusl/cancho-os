@@ -11,7 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: tools
-        run: sudo apt-get update && sudo apt-get install -y clang lld llvm qemu-system-arm net-tools netcat-openbsd iputils-ping dnsmasq-base openssh-client
+        run: sudo apt-get update && sudo apt-get install -y clang lld llvm qemu-system-arm net-tools netcat-openbsd iputils-ping dnsmasq-base openssh-client dosfstools mtools fdisk
       - name: cancho, built from its seed by itself
         # The bare-metal target (cancho docs/freestanding.md) is newer than the committed seed, so the
         # compiler is built from source: the seed builds stage 1, which builds the cancho used here.
@@ -34,6 +34,8 @@ jobs:
           /tmp/cancho-out/cancho test tests/inet_test.cho src/inet.cho --std
           # TCP: whole conversations against segments the second implementation built, with the time made up
           /tmp/cancho-out/cancho test tests/tcp_test.cho src/inet.cho --std
+          # the file system: sectors of volumes macOS's tools made, read by a second implementation
+          /tmp/cancho-out/cancho test tests/fat_test.cho src/fat.cho --std
           # the gateway, datagrams, names and a given address
           /tmp/cancho-out/cancho test tests/addr_test.cho src/inet.cho --std
       - name: what the kernel can touch
@@ -77,6 +79,38 @@ jobs:
           grep -Eq "^revision 00a02082, serial [0-9a-f]{16}, card address ([0-9a-f]{2}:){5}[0-9a-f]{2}$" board.txt
           MACHINE=virt ./test.sh board > noboard.txt; cat noboard.txt
           grep -q "^this board has no firmware to ask" noboard.txt
+      - name: files on a disk
+        # docs/storage.md. Three volumes made here by Linux's tools (mkfs.fat, mcopy, sfdisk), none of them
+        # ours: FAT32, FAT16, and FAT32 behind a partition table. The kernel reads them through virtio-blk,
+        # and a file of 300,000 random bytes must have the checksum this machine gives it.
+        run: |
+          head -c 300000 /dev/urandom > big.bin
+          printf 'hello from a file, to cancho-os\n' > hello.txt
+          want=$(python3 -c 'import zlib,sys; print("%08x" % zlib.adler32(open("big.bin","rb").read()))')
+          mkfs.fat -F 32 -s 1 -C fat32.img 65536 > /dev/null
+          mkfs.fat -F 16 -C fat16.img 16384 > /dev/null
+          truncate -s 66M part.img
+          echo 'start=2048, type=c' | sfdisk -q part.img
+          mkfs.fat -F 32 -s 1 --offset 2048 part.img $(( (66 * 1024 * 1024 - 2048 * 512) / 1024 )) > /dev/null
+          mcopy -i fat32.img big.bin hello.txt ::
+          mcopy -i fat16.img big.bin hello.txt ::
+          mcopy -i part.img@@1M big.bin hello.txt ::
+          for img in fat32 fat16 part; do
+            MACHINE=virt DISK=$img.img ./test.sh disk ls 'cat hello.txt' 'sum BIG.BIN' 'cat nothere.txt' > disk-$img.txt; cat disk-$img.txt
+            grep -q "^300000 bytes, adler32 $want" disk-$img.txt
+            grep -q "^hello from a file, to cancho-os" disk-$img.txt
+            grep -Eq "^BIG.BIN +300000" disk-$img.txt
+            grep -q "^no such file in the top directory" disk-$img.txt
+          done
+          grep -q "a FAT32 volume at sector 0," disk-fat32.txt
+          grep -q "a FAT16 volume at sector 0," disk-fat16.txt
+          grep -q "a FAT32 volume at sector 2048," disk-part.txt
+          # the same file over SSH, from the disk to another machine's screen
+          MACHINE=virt DISK=fat32.img SSHKEY=/tmp/sshkey SSHCMD='sum BIG.BIN' ./test.sh 'net up' 'net ssh on' net > sshdisk.txt; cat sshdisk.txt
+          grep -q "^ssh: 300000 bytes, adler32 $want" sshdisk.txt
+          # and with no disk, the commands say so
+          MACHINE=virt ./test.sh disk > nodisk.txt; ./test.sh ls >> nodisk.txt; cat nodisk.txt
+          test "$(grep -c "^no disk" nodisk.txt)" = 2
       - name: a kernel loaded over the serial console
         # the running kernel takes another (this build, renamed 0.0.99) and starts it: a wrong checksum
         # must forget it, the right one must run it, and the fault report must still work afterwards

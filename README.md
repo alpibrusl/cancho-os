@@ -21,6 +21,9 @@ src/feetech.cho  the Feetech servo protocol, read side only        } vendored fr
 src/calibration.cho, kinematics.cho, so101.cho  ticks to degrees,  } cancho-robot,
                  and the SO-101's forward kinematics               } unchanged
 src/safety.cho   the safety core: one `approve` every motion must pass }
+src/fat.cho      a FAT volume's sectors, read; holds no hardware
+src/disk.cho     a disk (virtio-blk), and the commands that read files from it
+src/sshd.cho     the loop between cancho-ssh and the shell
 src/inet.cho     the network's packets: SLIP, Ethernet, IPv4, UDP, TCP, DHCP, DNS; holds no hardware
 sim/servos.cho   six simulated servos for QEMU: a program for the host, not in the image
 sim/expect.cho   what `arm pose` must print for them, computed on the host
@@ -261,6 +264,16 @@ Raspberry Pi's Debug Probe has one). The 40-pin header's pins are not the consol
 A Pi 5 tries the SD card before its other disks by default (`BOOT_ORDER=0xf461`: check yours with
 `rpi-eeprom-config`). So what is installed on an NVMe drive is not touched, and boots again when the
 card is taken out.
+
+## Files
+
+On QEMU's `virt` machine the kernel reads a FAT16 or FAT32 disk ([docs/storage.md](docs/storage.md)):
+`disk`, `ls`, `cat <name>`, `sum <name>`. Reading only, the top directory only, short names only; a
+real Pi's SD card has no driver yet.
+
+```
+MACHINE=virt DISK=some-fat.img ./test.sh disk ls 'sum KERNEL8.IMG'
+```
 
 ## SSH
 

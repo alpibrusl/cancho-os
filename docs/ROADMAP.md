@@ -66,6 +66,10 @@
   for a wider one (cancho `docs/mmio.md` 3), not fixed yet.
 - `load` (docs/load.md): a kernel sent over the serial console replaces the running one. A tool for bringing up
   hardware on the real boards without moving the SD card for every build; `board/send.py` is the sender.
+- Storage (docs/storage.md, 2026-11-26), first slice: `src/fat.cho` (pure) reads FAT16 and FAT32, through
+  virtio-blk on QEMU's virt: `disk`, `ls`, `cat`, `sum`, checked against volumes made by macOS's and Linux's
+  tools. Next: writing; the Pi 4's SD controller on the real board; then the host key, the allowed keys and
+  the kernel kept on the card.
 - SSH (docs/ssh.md, 2026-11-26): the shell behind cancho-ssh on port 22, in QEMU (OpenSSH logs in, in CI) and
   on the real Pi 4 from a Mac. Keys that may log in are built into the image; the host key is new at every
   start. **Next: storage** (an SD card driver, then files), so that the host key, the allowed keys and a
