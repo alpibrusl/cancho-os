@@ -46,6 +46,7 @@ import authorized;
 //   k[28] bytes of a telnet option still to skip   k[29] its connection, plus one (0: none)   k[30] its port (0: closed)
 //   randomness: k[34] the generator (0 none, 1 virtio-rng, 3 the Pi 3's)   k[35] its registers   k[36] its queue's counter
 //   k[4154] our address   k[4155] the mask of our network   k[4156] the gateway   k[4157] the name server (0: none)   k[4158] the lease, s
+//   k[4174] a port that was just closed, whose connections are to be hung up on
 //   k[39] a command is waiting on the network (the shell's connection is not read)   k[4152] `exit` was typed over the connection
 //   k[37] words ready, at k[4136..]   k[38] words used to begin connections
 //   k[31] the length of the line typed there   k[32] its last byte was a carriage return   k[33] bytes printed and not kept
@@ -859,6 +860,7 @@ fn run[&f, &mc, &mu, &mt, &mx, &mz, &s, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000
         k[29] = 0;
         base.puts(con, k, "the shell is on port 23: no password, not encrypted, for a cable you trust\r\n");
     } else if same(line, n, "net shell off") {
+        k[4174] = k[30];
         k[30] = 0;
         base.puts(con, k, "port 23 is closed\r\n");
     } else if same(line, n, "net") {
