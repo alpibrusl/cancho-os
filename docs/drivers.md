@@ -52,7 +52,7 @@ any Linux, answers both cells: `lspci -nn | grep -Ei 'net|wireless|ethernet'` (a
 Why this order:
 
 1. **virtio-net first**, because it is the only Ethernet device a CI run can exercise. Ethernet framing,
-   ARP and, later, TCP are built and tested there, under the stack `src/inet.cho` already is. It needs a
+   ARP and TCP are built and tested there, under the stack `src/inet.cho` already is. It needs a
    new board in the kernel: QEMU's `virt` machine (another UART address, another interrupt controller).
 2. **GENET second**, on a Pi 4 that boots. It is the first driver the controller reads and writes memory
    for on its own (DMA), which needs two things the kernel does not have: memory for packets at addresses

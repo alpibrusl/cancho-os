@@ -11,6 +11,10 @@ edition 5;
 //     an echo request of odd length, with SLIP's two special bytes in its data -> the echo reply
 //     a datagram to UDP port 7                         -> the same data back
 //
+// Then it stays on the line as the machine 10.0.0.1 and answers what the kernel sends first (`ping 10.0.0.1`
+// in the kernel's shell), with `inet.answer`: that part checks the kernel's link and its reading of a reply,
+// not `inet` against anything but itself.
+//
 // The packets and the replies it insists on were not built by `inet`: a second implementation in another
 // language (Python's `struct`, with its own checksum) wrote them, and they are pasted here as hex, the same
 // vectors as tests/inet_test.cho. What this program shares with the kernel is the SLIP framing, which
@@ -100,6 +104,44 @@ fn say[&i, &s](io: &!i Io, what: &s [byte], verdict: int) -> [err_write] int {
     return write_err(io, ": NO REPLY before the line closed\n");
 }
 
+// Answer every packet until the line closes. How many were answered.
+fn serve[&i](io: &!i Io) -> [io_read, io_write] int {
+    var answered = 0;
+    region a {
+        let frame = alloc_slice[a](1100, byte_of(0));
+        let out = alloc_slice[a](1100, byte_of(0));
+        let wire = alloc_slice[a](2202, byte_of(0));
+        let state = alloc_slice[a](inet.slip_state(), 0);
+        var c = getchar(io);
+        while c >= 0 {
+            let n = inet.slip_feed(state, frame, c);
+            if n > 0 {
+                let m = inet.answer(frame, n, 10 * 16777216 + 1, out);
+                if m > 0 {
+                    let w = inet.slip_encode(out, m, wire);
+                    var k = 0;
+                    while k < w {
+                        putchar(io, int_of(wire[k]));
+                        k = k + 1;
+                    }
+                    match flush_out(io) {
+                        Done::Ok(done) => {
+                            answered = answered + 1;
+                        }
+                        Done::Failed(e) => {
+                            c = -1;
+                        }
+                    }
+                }
+            }
+            if c >= 0 {
+                c = getchar(io);
+            }
+        }
+    }
+    return answered;
+}
+
 fn run[&i](io: &!i Io) -> [err_write, io_read, io_write] int {
     send(io, "4500002cbeef00004001a7df0a0000010a00000208002c0912340001303132333435363738393a3b3c3d3e3f");
     let a = expect(io, "4500002c00000000400166cf0a0000020a0000010000340912340001303132333435363738393a3b3c3d3e3f");
@@ -114,6 +156,9 @@ fn run[&i](io: &!i Io) -> [err_write, io_read, io_write] int {
     say(io, "udp echo", c);
     if a == 1 && b == 1 && c == 1 {
         write_err(io, "peer: 3 replies to 4 packets, as it should be\n");
+        if serve(io) > 0 {
+            write_err(io, "peer: and it answered what the kernel sent first\n");
+        }
         return 0;
     }
     return 1;

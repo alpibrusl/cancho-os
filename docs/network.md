@@ -1,9 +1,9 @@
 # The network: IPv4 over a serial line first
 
-> **Status: built, two slices.** The kernel answers `ping` and a UDP echo over two links: SLIP on the
-> second serial port of a Pi 3 or Pi 4, and Ethernet through a virtio network card on QEMU's `virt`
-> machine (section 7). All of it in QEMU. No TCP. Every number below was produced by the command
-> next to it, at the commit that adds this file. Nothing here has run on a real board.
+> **Status: built, three slices.** The kernel answers `ping`, a UDP echo and a TCP echo over two links:
+> SLIP on the second serial port of a Pi 3 or Pi 4, and Ethernet through a virtio network card on QEMU's
+> `virt` machine (section 6). It can ping (section 7). All of it in QEMU. Every number below was produced
+> by the command next to it, at the commit that adds its section. Nothing here has run on a real board.
 
 ## 1. What was wanted, and what is in the way
 
@@ -136,10 +136,88 @@ Limits of this slice:
 - **One frame at a time, copied byte by byte, and sending waits for the card.** Nothing was timed.
 - **The address is still fixed, and the kernel still only answers.**
 
-## 7. Next
+## 7. TCP, and the kernel speaking first
+
+*(Third slice. Sections 5 and 6 say "no TCP" and "the kernel only answers" of the slices they describe.)*
+
+### What is wanted
+
+A connection: bytes that arrive in order or not at all, which is what everything above a ping needs. And
+the kernel starting an exchange instead of only answering one, which so far it could not.
+
+### The shape
+
+- **TCP is in `inet`, and `inet` stays pure.** A connection is state, and a pure function cannot keep
+  any, so the caller owns it: a slice of ints (16 per connection) and a slice of bytes (one segment per
+  connection). The clock is an argument too. So the same file is still tested on the machine that
+  builds it, a whole conversation at a time, with the time made up.
+- **Passive only, one service.** The kernel listens on port 7 and sends back what it is sent (RFC 862).
+  It opens no connection of its own. Four connections at once.
+- **One segment in flight, each way.** A connection holds at most one segment of its own that the other
+  end has not acknowledged, and keeps it to send again. While it holds one it advertises a window of
+  zero, so the other end waits; when the acknowledgement comes it says the window is open again. That is
+  the whole of flow control here: correct, and slow.
+- **Sent again on a timer.** 1 s, then 2, 4, 8, 16; after that the connection is dropped. No round-trip
+  measurement, no congestion window: with one segment in flight there is nothing to congest.
+- **Only the next byte is taken.** A segment that does not start where the last one ended gets an
+  acknowledgement saying what is expected, and is otherwise dropped: no reassembly queue.
+- **A segment to anything else gets a reset** (RFC 9293 section 3.10.7.1), so the other end hears "no"
+  at once instead of waiting.
+
+### Speaking first
+
+`ping <address>` in the shell: the kernel sends an echo request and reports the time to the reply. Over
+Ethernet it must first ask who has that address (an ARP request, to every card) and remember the answer:
+a table of one neighbour.
+
+### What it will not do
+
+- No connection opened from the kernel, no listening on other ports, no urgent data, no options but the
+  maximum segment size, no window scaling, no selective acknowledgement, no timestamps.
+- **The first sequence number is a counter's value, not a secret.** RFC 6528 wants one nobody can guess,
+  and the kernel has no source of randomness yet. Someone who can guess it can forge a segment.
+- **A reset is believed if its sequence number is the next one expected**, and ignored otherwise; the
+  challenge acknowledgement of RFC 5961 is not sent.
+- **A connection that goes silent stays** until a fifth one is asked for and it has been idle a minute.
+
+### What is built, and how it is checked
+
+`src/inet.cho`: `serve` and `eth_serve` (what `answer` and `eth_answer` do, and TCP), `tcp_tick` and
+`eth_tick` (time passing), `echo_request`, `is_echo_reply`, `arp_request`, `arp_answer_from`. It still
+holds no capability and its functions still have the empty row. In `src/kernel.cho` the two links are now
+one pair of functions (`link_recv`, `link_send`), and `net_ping` is the shell's `ping`. The connections'
+state is two slices the shell allocates. No new register is touched: `./authority.sh` says "as recorded".
+
+| | what | against |
+|---|---|---|
+| `cancho test tests/tcp_test.cho src/inet.cho --std` | 20 tests | segments built by the second implementation (Python's `struct`, its own checksum), a conversation at a time: open, echo, close; data and FIN together; a segment from further on; a segment seen before; resets; a fifth connection; the timer, with the time made up, to the second it gives up. Both first sequence numbers are just under 2^32, so every conversation wraps |
+| the same, two tests | 58,880 damaged data segments and 12,288 damaged SYNs | none traps: each is answered, taken or dropped |
+| `MACHINE=virt TCP=... TCPFILE=big.bin ./test.sh 'net up' 'ping 10.0.0.1' net` | the kernel on `virt`, the connection opened by QEMU's own TCP (libslirp) | a line back unchanged, then 200,000 random bytes back unchanged over one connection; "tcp: 0 open ... 0 sent again" after it; "reply from 10.0.0.1" to the kernel's ping, which had to ask who has that address first |
+| `NET=1 ./test.sh 'net up' ... 'ping 10.0.0.1' net` | the kernel as a Pi 3, the serial peer | the kernel's ping answered over SLIP |
+| `sudo ./ping.sh`, `sudo MACHINE=virt ./ping.sh` (Linux, CI) | both links against Linux's own TCP | LINUX_ROWS |
+
+**What the first real stack found.** All the vectors passed, and the first connection from QEMU's TCP
+still took a second too long to close. The other end sent its FIN before our echo had reached it, then
+sent the FIN again with the acknowledgement of the echo. A FIN seen before was "not the next byte", so
+the segment was dropped whole, acknowledgement and all, and the kernel sent its data again after the
+timer. A segment seen before is now not taken twice but its acknowledgement counts; two tests hold that
+exchange. The vectors could not have found it: they were written from the same reading of the
+specification as the code.
+
+Limits of this slice, besides "What it will not do" above:
+
+- **Slow by construction.** One segment each way, and the other end's acknowledgement of our echo may
+  be delayed by its own timer before the window reopens. The times in the table are the measure.
+- **`ping` goes only to a machine on the same network**: there is no route and no gateway. On the card
+  it asks for the address itself and gives up after a second.
+- **While `ping` waits, the shell does not read keys** (packets are still answered).
+- **The echo service is the only one.** Nothing useful listens yet.
+- **Not on a real board,** like everything here.
+
+## 8. Next
 
 The order, the boards and what each driver is written from are in [`drivers.md`](drivers.md).
 
-1. The kernel sending first (a datagram, an echo request), then TCP: both testable on `virt`.
+1. Something worth connecting to: the shell over a connection. Then connections opened from the kernel.
 2. A link the console does not share pins with (another UART), so the serial line works on a real Pi 4.
 3. The Pi 4's Ethernet controller as a third link; only testable on the board.

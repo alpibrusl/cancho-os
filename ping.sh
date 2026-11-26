@@ -5,7 +5,9 @@
 #   sudo ./ping.sh            boots build/kernel8.img in QEMU with its second serial port on a pty, types
 #                             `net up`, attaches the pty as sl0 (10.0.0.1, the kernel is 10.0.0.2), and pings
 #   sudo MACHINE=virt ./ping.sh   the same over Ethernet: QEMU's virt machine, its network card on a tap interface
-# Exit 0 if every ping was answered and a UDP datagram to port 7 came back.
+# Exit 0 if every ping was answered, a UDP datagram to port 7 came back, a TCP connection to it echoed a line
+# and then 64 KB (BYTES=n for another size), port 9 refused one, and the kernel's own ping of this machine
+# was answered.
 set -u
 cd "$(dirname "$0")"
 MACHINE=${MACHINE:-raspi3b}
@@ -50,7 +52,7 @@ if [ -n "$ready" ]; then
     sleep 1
     if [ -n "${TRACE:-}" ] && [ "$MACHINE" = virt ]; then
         # what is on the wire, both ways, for when the answer is not what was expected
-        tcpdump -i tap0 -n -e -XX -c 12 > build/trace.txt 2>&1 &
+        tcpdump -i tap0 -n -e -c 400 > build/trace.txt 2>&1 &
         sleep 1
     fi
     ping -c 5 -i 0.3 -W 2 10.0.0.2 && status=0
@@ -58,12 +60,34 @@ if [ -n "$ready" ]; then
     back=$(printf 'cancho-os over udp' | timeout 3 nc -u -w 1 10.0.0.2 7)
     echo "udp echo: '$back'"
     [ "$back" = "cancho-os over udp" ] || status=1
+    # a connection to the same port: Linux's TCP opens it, sends, closes, and reads what comes back
+    back=$(printf 'cancho-os over tcp' | timeout 10 nc -N -w 5 10.0.0.2 7)
+    echo "tcp echo: '$back'"
+    [ "$back" = "cancho-os over tcp" ] || status=1
+    # and enough to need many segments, each of which must be acknowledged before the next is taken
+    head -c "${BYTES:-65536}" /dev/urandom > build/tcp.sent
+    start=$(date +%s)
+    timeout 120 nc -N -w 30 10.0.0.2 7 < build/tcp.sent > build/tcp.back
+    if cmp -s build/tcp.sent build/tcp.back; then
+        echo "tcp echo: $(wc -c < build/tcp.back) bytes came back the same, in $(( $(date +%s) - start )) s"
+    else
+        echo "tcp echo: $(wc -c < build/tcp.back) bytes came back, NOT the $(wc -c < build/tcp.sent) sent"
+        status=1
+    fi
+    # a port nothing listens on: the kernel must say no at once (a reset), not leave Linux waiting
+    refused=$(timeout 5 nc -w 3 10.0.0.2 9 < /dev/null 2>&1)
+    echo "tcp port 9: ${refused:-no answer}"
+    echo "$refused" | grep -qi refused || status=1
     if [ "$MACHINE" = virt ]; then
         # what this machine's own ARP table learned from the kernel's answer
         ip neigh show dev tap0
     fi
+    # the kernel speaks first: it asks who 10.0.0.1 is (on the card) and pings it; Linux answers both
+    printf 'ping 10.0.0.1\r' >&3
+    sleep 2
     printf 'net\r' >&3
     sleep 1
+    grep -q "reply from 10.0.0.1 in" build/ping-uart.out || status=1
     [ -n "$SLIP" ] && kill $SLIP 2>/dev/null
 fi
 exec 3>&-
