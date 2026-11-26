@@ -19,7 +19,8 @@ The same as the network's, for the same reasons:
    people's tools.
 2. **A disk QEMU has**, so every change is tried in CI: virtio-blk on the `virt` machine.
 3. **Reading**, then **writing**.
-4. **The real card**: the SD controller of the Pi 4, which only a board can try.
+4. **The real card**: the SD controller of the Pi 4, which only a board can try. Built, and tried on
+   one: [`sdcard.md`](sdcard.md).
 5. **Using it**: the host key kept, the allowed keys read, a new kernel written to the card.
 
 This file is slices 1 to 3, reading only.
@@ -103,6 +104,5 @@ the shell may add files).
 
 ## What it does not do, yet
 
-- **Writing.** Nothing here changes a disk.
 - **Directories below the top, long names, FAT12, exFAT.**
-- **The SD card.** On a real Pi there is no disk until its controller has a driver.
+- **Writing a kernel to the card.** Files come in as one line of text or as a copy of another file.

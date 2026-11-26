@@ -3,7 +3,7 @@
 > **Status: design, with three slices built**, in QEMU: adding a file and adding to one
 > ([`storage.md`](storage.md)); the host key kept, the keys file read, and two roles; and versions and
 > the record ("What is built" below, twice). Grants for agents and approval by a key are not built, and
-> nothing here has run on a real card. It was written before the kernel could write a single byte to a
+> only the driver's own session ([`sdcard.md`](sdcard.md)) has run it on a real card. It was written before the kernel could write a single byte to a
 > disk, because it decides how writing must work.
 
 ## What is wanted
@@ -192,5 +192,5 @@ What it does not do:
 2. **The host key and the keys file**, the two things SSH is waiting for. Two roles, owner and reader,
    checked for every command of an SSH session.
 3. **Versions and the record**, before any agent is let near a write.
-4. **The real card**: the Pi 4's SD controller, on the board.
+4. **The real card**: the Pi 4's SD controller, on the board. Built: [`sdcard.md`](sdcard.md).
 5. **Grants for agents, and approval.**

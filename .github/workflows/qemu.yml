@@ -190,6 +190,28 @@ jobs:
           grep -q "^written: 15 bytes" v-broken.txt
           grep -Eq "^T.TXT +15" v-broken.txt
           if grep -Eq "^S.TXT " v-broken.txt; then exit 1; fi
+      - name: an SD card
+        # docs/sdcard.md. The same volumes as a Pi 3's card (this runner's QEMU has no Pi 4): read, then
+        # written, and the written image judged by fsck.fat, mcopy and the record's checker.
+        run: |
+          want=$(python3 -c 'import zlib,sys; print("%08x" % zlib.adler32(open("big.bin","rb").read()))')
+          for img in fat32 fat16; do
+            cp $img.img sd-$img.img
+            SD=sd-$img.img ./test.sh disk 'sum BIG.BIN' 'write A.TXT one' 'write A.TXT two' 'copy BIG.BIN C.BIN' 'remove BIG.BIN' 'sum OLD/00000002.V' record > sd-$img.txt; cat sd-$img.txt
+            grep -q "^an SD card of " sd-$img.txt
+            test "$(grep -c "^300000 bytes, adler32 $want" sd-$img.txt)" = 2
+            grep -q "^written: 4 bytes; what was there is OLD/00000001.V" sd-$img.txt
+            grep -q "^the record: 4 lines, each following from the one before" sd-$img.txt
+            fsck.fat -n sd-$img.img
+            rm -rf sdout; mkdir sdout
+            mcopy -i sd-$img.img ::LOG.TXT sdout/LOG.TXT
+            mcopy -i sd-$img.img ::C.BIN sdout/C.BIN && cmp sdout/C.BIN big.bin
+            python3 tests/checklog.py sdout/LOG.TXT sdout
+          done
+          # with no card in, the shell says so and goes on
+          ./test.sh disk about > nosd.txt; cat nosd.txt
+          grep -q "^no disk: the SD card did not start" nosd.txt
+          grep -q "a kernel written in cancho" nosd.txt
       - name: who may log in, and the host key kept
         # docs/permissions.md, slice 2, with OpenSSH's own client and three keys made here. The owner's is
         # built into the image; the reader's is put in KEYS.TXT at the console; the third is in neither.

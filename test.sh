@@ -9,6 +9,7 @@
 #   MACHINE=virt TCPFILE=path ./test.sh 'net up' net  a whole file over one, and whether it came back the same
 #   MACHINE=virt DISK=image ./test.sh disk ls 'sum BIG.BIN'
 #   MACHINE=virt DISKRW=image ./test.sh 'write NEW.TXT hello' 'copy BIG.BIN COPY.BIN'
+#   SD=image ./test.sh disk ls           a Pi's SD card (the image is written to; its size must be a power of two)
 #                                        the same, and the kernel may write to it: the file is changed
 #                                        with that file as the machine's disk, read-only (docs/storage.md)
 #   MACHINE=virt SSHKEY=key SSHCMD=about ./test.sh 'net up' 'net ssh on' net
@@ -51,7 +52,7 @@ if [ "$MACHINE" = virt ]; then
     KERNEL=build/kernel-virt.elf
     BUS=
 fi
-qemu-system-aarch64 -M $MACHINE -kernel $KERNEL -serial stdio $BUS -display none -monitor none \
+qemu-system-aarch64 -M $MACHINE -kernel $KERNEL -serial stdio $BUS ${SD:+-drive file=$SD,format=raw,if=sd} -display none -monitor none \
     < build/uart.in > build/uart.out 2>&1 &
 QEMU=$!
 exec 3> build/uart.in

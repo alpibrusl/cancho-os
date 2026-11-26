@@ -1,0 +1,271 @@
+edition 14;
+
+module sdcard;
+
+// sdcard.cho -- an SD card behind an SDHCI controller (docs/sdcard.md): "read one sector", "write one sector".
+//
+// The controller is the standard one (SD Host Controller Simplified Specification, version 3): on a Pi 4 the
+// card slot's is at 0xfe340000 ("emmc2"); on a Pi 3, as QEMU builds one, the card is on the controller at
+// 0x3f300000. Every register is read and written as 32 bits, which is what these two take.
+//
+//   +0x04 block size (bits 0..11) and count (16..31)     +0x08 a command's argument
+//   +0x0c the command (bits 24..29) and how it is carried   +0x10..0x1c the card's answer
+//   +0x20 data, four bytes at a time     +0x24 state: bit 0 a command is on its way, bit 1 the data lines are busy
+//   +0x28 bits 8..11: the card's power    +0x2c the clock (bit 0 on, bit 1 steady, bit 2 to the card,
+//         bits 8..15 and 6..7 the divider), bits 16..19 the longest wait, bits 24..26 resets
+//   +0x30 what has happened: bit 0 command done, bit 1 data done, bit 4 room to write, bit 5 data to read,
+//         bit 15 an error   +0x34 which of those are noted   +0x38 which interrupt (none: they are polled)
+//
+// One data line, one block a command, no DMA: the slowest way the card has, and the one with least to get
+// wrong. In the kernel's state: k[4172] the registers   k[4253] the controller's clock, in Hz, as the
+// firmware gave it   k[4255] the step at which starting failed   k[4256] the card's address
+// k[4257] whether it counts in sectors (1) or in bytes (0)
+
+// Wait until none of `mask` is set in the register at `at`. 0, or 1 if that never came.
+fn clear[&mv](vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), at: int, mask: int, turns: int) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+    var spins = 0;
+    while mmio_read32(vio, at) & mask != 0 {
+        spins = spins + 1;
+        if spins > turns {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// Wait until one of `mask` is set in what has happened. What was read, or 0 if nothing came.
+fn happened[&mv](vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), b: int, mask: int, turns: int) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+    var spins = 0;
+    while spins <= turns {
+        let got = mmio_read32(vio, b + 0x30);
+        if got & mask != 0 {
+            return got;
+        }
+        spins = spins + 1;
+    }
+    return 0;
+}
+
+// After a command or a transfer went wrong: that part of the controller is reset (bit 25 the command's,
+// bit 26 the data's), and what has happened is forgotten.
+fn again[&mv](vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), b: int, bit: int) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+    mmio_write32(vio, b + 0x2c, mmio_read32(vio, b + 0x2c) | 1 << bit);
+    clear(vio, b + 0x2c, 1 << bit, 1000000);
+    mmio_write32(vio, b + 0x30, 0xffffffff);
+    return 0;
+}
+
+// The clock to the card, at `hz` or the nearest below it the divider gives: a power of two, which both
+// versions of the controller take.
+fn clock[&mv, &s](vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), k: &!s [int], hz: int) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+    let b = k[4172];
+    var n = 1;
+    while k[4253] / (2 * n) > hz && n < 512 {
+        n = n * 2;
+    }
+    let v = 0xe0000 | (n & 0xff) << 8 | (n >> 8 & 3) << 6 | 1;
+    mmio_write32(vio, b + 0x2c, v);
+    var spins = 0;
+    while mmio_read32(vio, b + 0x2c) & 2 == 0 {
+        spins = spins + 1;
+        if spins > 1000000 {
+            return 1;
+        }
+    }
+    mmio_write32(vio, b + 0x2c, v | 4);
+    return 0;
+}
+
+// One command. `code` is the whole of register +0x0c for it. 0 when the card has answered.
+fn command[&mv, &s](vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), k: &!s [int], code: int, arg: int) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+    let b = k[4172];
+    // a command that uses the data lines (bit 21), or after which the card is busy (answer kind 3), waits for them
+    var busy = 1;
+    if code >> 21 & 1 == 1 || code >> 16 & 3 == 3 {
+        busy = 3;
+    }
+    if clear(vio, b + 0x24, busy, 5000000) != 0 {
+        return 1;
+    }
+    mmio_write32(vio, b + 0x30, 0xffffffff);
+    mmio_write32(vio, b + 0x08, arg);
+    mmio_write32(vio, b + 0x0c, code);
+    let got = happened(vio, b, 0x8001, 5000000);
+    if got == 0 || got & 0x8000 != 0 {
+        again(vio, b, 25);
+        return 1;
+    }
+    mmio_write32(vio, b + 0x30, 1);
+    return 0;
+}
+
+// Find the card and bring it up. 0; else the step that failed, which is kept in k[4255].
+pub fn start[&mv, &s](vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), k: &!s [int]) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+    k[4255] = step(vio, k);
+    return k[4255];
+}
+
+fn step[&mv, &s](vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), k: &!s [int]) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+    var b = 0;
+    if k[1] == 4 {
+        b = 0xfe340000;
+    } else if k[1] == 3 {
+        b = 0x3f300000;
+    } else {
+        return 1;
+    }
+    if k[4253] < 800000 {
+        // the firmware did not say how fast the controller's clock is
+        return 2;
+    }
+    k[4172] = b;
+    // the whole controller reset; then power to the card at 3.3 V, one data line
+    mmio_write32(vio, b + 0x2c, 1 << 24);
+    if clear(vio, b + 0x2c, 1 << 24, 1000000) != 0 {
+        return 3;
+    }
+    mmio_write32(vio, b + 0x28, 0x0f00);
+    if clock(vio, k, 400000) != 0 {
+        return 4;
+    }
+    mmio_write32(vio, b + 0x34, 0xffffffff);
+    mmio_write32(vio, b + 0x38, 0);
+    mmio_write32(vio, b + 0x30, 0xffffffff);
+    // the card wants 74 turns of the clock before its first command: far fewer than this
+    clear(vio, b + 0x30, 0xffffffff, 200000);
+    mmio_write32(vio, b + 0x30, 0xffffffff);
+    // CMD0: every card to its first state
+    if command(vio, k, 0, 0) != 0 {
+        return 5;
+    }
+    // CMD8: a card of the second version of the specification repeats the 0x1aa; an older one does not answer
+    var high = 0;
+    if command(vio, k, 0x081a0000, 0x1aa) == 0 && mmio_read32(vio, b + 0x10) & 0xfff == 0x1aa {
+        high = 0x40000000;
+    }
+    // ACMD41, again and again until the card says it is ready (bit 31): 3.2 to 3.4 V, and whether this side
+    // can address a card in sectors
+    var ocr = 0;
+    var tries = 0;
+    while ocr >> 31 & 1 == 0 {
+        tries = tries + 1;
+        if tries > 20000 || command(vio, k, 0x371a0000, 0) != 0 || command(vio, k, 0x29020000, 0x00ff8000 | high) != 0 {
+            return 6;
+        }
+        ocr = mmio_read32(vio, b + 0x10);
+    }
+    k[4257] = ocr >> 30 & 1;
+    // CMD2, CMD3: the card names itself, and takes an address
+    if command(vio, k, 0x02090000, 0) != 0 {
+        return 7;
+    }
+    if command(vio, k, 0x031a0000, 0) != 0 {
+        return 8;
+    }
+    k[4256] = mmio_read32(vio, b + 0x10) >> 16 & 0xffff;
+    // CMD9: how big it is. The answer is the card's 128 bits less the last eight, from +0x10 upwards.
+    if command(vio, k, 0x09090000, k[4256] << 16) != 0 {
+        return 9;
+    }
+    let r1 = mmio_read32(vio, b + 0x14);
+    let r2 = mmio_read32(vio, b + 0x18);
+    let r3 = mmio_read32(vio, b + 0x1c);
+    var sectors = 0;
+    if r3 >> 22 & 3 == 0 {
+        // the first layout: a count, a multiplier and a block length
+        let size = (r2 & 3) << 10 | r1 >> 22 & 0x3ff;
+        let mult = r1 >> 7 & 7;
+        let block = r2 >> 8 & 15;
+        if block < 9 || block > 11 {
+            return 10;
+        }
+        sectors = (size + 1) << mult + 2 << block - 9;
+    } else {
+        // the second: a count of 512 KB
+        sectors = ((r1 >> 8 & 0x3fffff) + 1) * 1024;
+    }
+    // CMD7: the card chosen, which makes it ready to move data
+    if command(vio, k, 0x071b0000, k[4256] << 16) != 0 || clear(vio, b + 0x24, 2, 5000000) != 0 {
+        return 11;
+    }
+    mmio_write32(vio, b + 0x30, 0xffffffff);
+    if clock(vio, k, 25000000) != 0 {
+        return 12;
+    }
+    // CMD16: a card that counts in bytes is told a block is 512 of them
+    if k[4257] == 0 && command(vio, k, 0x101a0000, 512) != 0 {
+        return 13;
+    }
+    k[4171] = sectors;
+    k[4170] = 2;
+    return 0;
+}
+
+// Sector `n`, into `into`. 0, or 1.
+pub fn read[&mv, &s, &b](vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), k: &!s [int], n: int, into: &!b [byte]) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+    let b = k[4172];
+    var at = n;
+    if k[4257] == 0 {
+        at = n * 512;
+    }
+    mmio_write32(vio, b + 0x04, 1 << 16 | 512);
+    // CMD17: one block, from the card
+    if command(vio, k, 0x113a0010, at) != 0 {
+        return 1;
+    }
+    var got = happened(vio, b, 0x8020, 50000000);
+    if got == 0 || got & 0x8000 != 0 {
+        again(vio, b, 26);
+        return 1;
+    }
+    mmio_write32(vio, b + 0x30, 0x20);
+    var i = 0;
+    while i < 512 {
+        let w = mmio_read32(vio, b + 0x20);
+        into[i] = byte_of(w & 255);
+        into[i + 1] = byte_of(w >> 8 & 255);
+        into[i + 2] = byte_of(w >> 16 & 255);
+        into[i + 3] = byte_of(w >> 24 & 255);
+        i = i + 4;
+    }
+    got = happened(vio, b, 0x8002, 50000000);
+    if got == 0 || got & 0x8000 != 0 {
+        again(vio, b, 26);
+        return 1;
+    }
+    mmio_write32(vio, b + 0x30, 2);
+    return 0;
+}
+
+// Sector `n`, written from `from`. 0 when the card has finished storing it, or 1.
+pub fn write[&mv, &s, &b](vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), k: &!s [int], n: int, from: &!b [byte]) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+    let b = k[4172];
+    var at = n;
+    if k[4257] == 0 {
+        at = n * 512;
+    }
+    mmio_write32(vio, b + 0x04, 1 << 16 | 512);
+    // CMD24: one block, to the card
+    if command(vio, k, 0x183a0000, at) != 0 {
+        return 1;
+    }
+    var got = happened(vio, b, 0x8010, 50000000);
+    if got == 0 || got & 0x8000 != 0 {
+        again(vio, b, 26);
+        return 1;
+    }
+    mmio_write32(vio, b + 0x30, 0x10);
+    var i = 0;
+    while i < 512 {
+        mmio_write32(vio, b + 0x20, int_of(from[i]) | int_of(from[i + 1]) << 8 | int_of(from[i + 2]) << 16 | int_of(from[i + 3]) << 24);
+        i = i + 4;
+    }
+    // the card says it is done when it has stored the block, which can take a good part of a second
+    got = happened(vio, b, 0x8002, 500000000);
+    if got == 0 || got & 0x8000 != 0 {
+        again(vio, b, 26);
+        return 1;
+    }
+    mmio_write32(vio, b + 0x30, 2);
+    return 0;
+}
