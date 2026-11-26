@@ -97,6 +97,10 @@ Rules of the road
 - Paths (docs/storage.md, "Directories"): `files.folder` walks a path and refuses a part that begins with a dot
   (`..` would reach the kernel's own names); the kernel's names are checked for names of the TOP directory only,
   and nothing is written under `OLD` (`under_old`). A new command that takes a name must go through `paths`.
+- Long names (docs/storage.md, "Long names"): `disk.place` decides short or long and leaves the short form in the
+  `name` buffer and the number of pieces in o[9]; `disk.named_at` writes the pieces and the entry into ONE sector.
+  A sector passed over while looking for a row must get `fat.close_end`, or the directory ends before the new
+  name (macOS's checker found that). A name is taken away with `disk.unname`, pieces first.
 - BOOT.TXT (docs/boot.md): `src/boot.cho` (pure) holds the list of lines the kernel may type to itself at its
   start. Adding a command to that list is a decision: nothing that changes the disk, loads a kernel or restarts.
   The file is written at the console only (`files.boot_name`, `files.put_name`). A key in the first second stops it.
