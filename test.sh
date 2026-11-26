@@ -5,6 +5,8 @@
 #   MACHINE=raspi4b ./test.sh about      the same image as a Pi 4 (QEMU >= 9)
 #   MACHINE=virt ./test.sh about         QEMU's virt machine (build/kernel-virt.elf), with a network card
 #   MACHINE=virt UDP=hello ./test.sh 'net up' net     and a datagram sent to the kernel's echo port from here
+#   MACHINE=virt TCP=hello ./test.sh 'net up' net     the same over a TCP connection (the host's stack opens it)
+#   MACHINE=virt TCPFILE=path ./test.sh 'net up' net  a whole file over one, and whether it came back the same
 #   SERVOS=1 ./test.sh 'servo scan'      with six simulated servos on the board's second serial
 #                                        port (build/servos, from sim/servos.cho: see build.sh)
 #   NET=1 ./test.sh 'net up' net         with the network peer on that port instead (build/netpeer, from
@@ -34,8 +36,8 @@ KERNEL=build/kernel8.img
 if [ "$MACHINE" = virt ]; then
     # QEMU's own board: one serial port (no servo bus), RAM at 1 GB. A Cortex-A57 is how the kernel knows it.
     # A network card on QEMU's own user-mode network: the host is 10.0.0.1, the kernel 10.0.0.2, and a
-    # datagram sent to this machine's port 5507 reaches the kernel's port 7.
-    MACHINE="virt -cpu cortex-a57 -m 1G -global virtio-mmio.force-legacy=false -netdev user,id=n0,net=10.0.0.0/24,host=10.0.0.1,hostfwd=udp:127.0.0.1:5507-10.0.0.2:7 -device virtio-net-device,netdev=n0"
+    # datagram sent to this machine's port 5507 reaches the kernel's port 7, and so does a connection.
+    MACHINE="virt -cpu cortex-a57 -m 1G -global virtio-mmio.force-legacy=false -netdev user,id=n0,net=10.0.0.0/24,host=10.0.0.1,hostfwd=udp:127.0.0.1:5507-10.0.0.2:7,hostfwd=tcp:127.0.0.1:5507-10.0.0.2:7 -device virtio-net-device,netdev=n0 ${DUMP:+-object filter-dump,id=f0,netdev=n0,file=$DUMP}"
     KERNEL=build/kernel-virt.elf
     BUS=
 fi
@@ -51,6 +53,17 @@ for line in "$@"; do
     if [ -n "$first" ] && [ -n "${UDP:-}" ]; then
         # after the first line (`net up`): a datagram from this machine to the kernel's echo port
         printf "udp echo: '%s'\n" "$(printf '%s' "$UDP" | nc -u -w 1 127.0.0.1 5507)" > build/peer.txt
+    fi
+    if [ -n "$first" ] && [ -n "${TCP:-}" ]; then
+        printf "tcp echo: '%s'\n" "$(printf '%s' "$TCP" | nc -w 5 127.0.0.1 5507)" >> build/peer.txt
+    fi
+    if [ -n "$first" ] && [ -n "${TCPFILE:-}" ]; then
+        nc -w 20 127.0.0.1 5507 < "$TCPFILE" > build/tcp.echo
+        if cmp -s "$TCPFILE" build/tcp.echo; then
+            echo "tcp echo: $(wc -c < build/tcp.echo | tr -d ' ') bytes came back the same" >> build/peer.txt
+        else
+            echo "tcp echo: $(wc -c < build/tcp.echo | tr -d ' ') bytes came back, NOT what was sent" >> build/peer.txt
+        fi
     fi
     first=
 done

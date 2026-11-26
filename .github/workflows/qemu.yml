@@ -21,7 +21,10 @@ jobs:
       - name: the network stack, on this machine
         # src/inet.cho holds no hardware, so its tests run here: published checksum vectors, packets a
         # second implementation built, and every one-byte damage to a packet (nothing traps)
-        run: /tmp/cancho-out/cancho test tests/inet_test.cho src/inet.cho --std
+        run: |
+          /tmp/cancho-out/cancho test tests/inet_test.cho src/inet.cho --std
+          # TCP: whole conversations against segments the second implementation built, with the time made up
+          /tmp/cancho-out/cancho test tests/tcp_test.cho src/inet.cho --std
       - name: what the kernel can touch
         run: CANCHO=/tmp/cancho-out/cancho ./authority.sh
       - name: boot and drive the shell
@@ -60,17 +63,24 @@ jobs:
         run: |
           # sim/netpeer.cho on the second serial port: three replies it insists on byte for byte, and one
           # corrupted packet the kernel must not answer
-          NET=1 ./test.sh 'net up' 'echo wait' 'echo wait' net 'servo scan' > net.txt; cat net.txt
+          # then the kernel speaks first: its ping of the peer is answered
+          NET=1 ./test.sh 'net up' 'echo wait' 'echo wait' 'ping 10.0.0.1' net 'servo scan' > net.txt; cat net.txt
           grep -q "^peer: 3 replies to 4 packets, as it should be" net.txt
+          grep -q "^reply from 10.0.0.1 in " net.txt
           grep -q "^3 packets answered, 1 dropped (the last: checksum)" net.txt
           grep -q "the second serial port is the network link" net.txt
       - name: ping, from Linux's own stack
         # not our packets this time: the kernel's SLIP driver on the other end of the line, and the system's ping
         run: |
-          sudo ./ping.sh > ping.txt 2>&1 || { cat ping.txt; exit 1; }
+          sudo BYTES=16384 ./ping.sh > ping.txt 2>&1 || { cat ping.txt; exit 1; }
           cat ping.txt
           grep -q " 0% packet loss" ping.txt
           grep -q "^udp echo: 'cancho-os over udp'" ping.txt
+          # TCP over the same line, opened and closed by Linux; the kernel's own ping, answered by Linux
+          grep -q "^tcp echo: 'cancho-os over tcp'" ping.txt
+          grep -q "^tcp echo: 16384 bytes came back the same" ping.txt
+          grep -qi "^tcp port 9: .*refused" ping.txt
+          grep -q "^reply from 10.0.0.1 in " ping.txt
       - name: QEMU's virt machine, and its network card
         run: |
           # the same kernel linked for a board whose RAM starts at 1 GB: the shell, the timer, the MMU, a fault
@@ -84,6 +94,14 @@ jobs:
           grep -q "^link up: virtio-net, card 52:54:00:12:34:56, address 10.0.0.2" ether.txt
           grep -q "^udp echo: 'hello from the host'" ether.txt
           grep -q "^2 packets answered, 0 dropped" ether.txt
+          # a connection: the host's TCP (QEMU's own, here) opens it, sends 200 KB and reads them back;
+          # then the kernel asks who 10.0.0.1 is and pings it
+          head -c 200000 /dev/urandom > big.bin
+          MACHINE=virt TCP='hello over tcp' TCPFILE=big.bin ./test.sh 'net up' 'ping 10.0.0.1' net > tcp.txt; cat tcp.txt
+          grep -q "^tcp echo: 'hello over tcp'" tcp.txt
+          grep -q "^tcp echo: 200000 bytes came back the same" tcp.txt
+          grep -q "^reply from 10.0.0.1 in " tcp.txt
+          grep -q "^tcp: 0 open" tcp.txt
       - name: ping over Ethernet, from Linux's own stack
         # the card on a tap interface: Linux's ARP, the system's ping and nc, none of it ours
         run: |
@@ -92,3 +110,7 @@ jobs:
           grep -q " 0% packet loss" eping.txt
           grep -q "^udp echo: 'cancho-os over udp'" eping.txt
           grep -q "10.0.0.2 lladdr 52:54:00:12:34:56" eping.txt
+          grep -q "^tcp echo: 'cancho-os over tcp'" eping.txt
+          grep -q "^tcp echo: 65536 bytes came back the same" eping.txt
+          grep -qi "^tcp port 9: .*refused" eping.txt
+          grep -q "^reply from 10.0.0.1 in " eping.txt

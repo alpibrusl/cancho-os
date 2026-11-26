@@ -128,16 +128,19 @@ UART); the protocol, and everything built on it, does not. Not verified in QEMU:
 
 ## The network
 
-The kernel answers `ping` and a UDP echo over two links: a serial line (SLIP) on the second
-serial port of a Pi, and Ethernet, with ARP, through a virtio network card on QEMU's `virt`
-machine. No TCP yet, and no real network card: QEMU's Pi 4 has no Ethernet controller, so the
-Pi's own is for the day a board boots. [docs/network.md](docs/network.md) has the reasoning and
-what is checked; [docs/drivers.md](docs/drivers.md) the order of the drivers.
+The kernel answers `ping`, a UDP echo and a TCP echo (port 7) over two links: a serial line
+(SLIP) on the second serial port of a Pi, and Ethernet, with ARP, through a virtio network card
+on QEMU's `virt` machine. It can also speak first: `ping 10.0.0.1` in its shell. TCP here is small
+on purpose: connections are opened from the other end only, and at most one segment's worth of
+data (966 bytes) is unacknowledged at a time. No real network card yet: QEMU's Pi 4 has no Ethernet controller, so the Pi's own is
+for the day a board boots. [docs/network.md](docs/network.md) has the reasoning and what is
+checked; [docs/drivers.md](docs/drivers.md) the order of the drivers.
 
 ```
 NET=1 ./test.sh 'net up' 'echo wait' 'echo wait' net   # sim/netpeer.cho is the other end of the line
 sudo ./ping.sh                                          # Linux: the system's own ping, over a pty
 MACHINE=virt UDP=hello ./test.sh 'net up' net           # Ethernet: a datagram from this machine to the kernel
+MACHINE=virt TCP=hello ./test.sh 'net up' 'ping 10.0.0.1' net   # a TCP connection, and the kernel's own ping
 sudo MACHINE=virt ./ping.sh                             # Linux: ping over a tap interface, ARP first
 ```
 
