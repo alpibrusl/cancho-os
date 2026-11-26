@@ -13,11 +13,13 @@ import std.ed25519;
 //
 // State, besides the kernel's `k`: `si` and `sb` are cancho-ssh's own; `sx` is this file's:
 //    0..32 the host key's seed   32..64 its public half   64..96 a connection's 32 random bytes
-//    96..352 what was read from the connection and not yet taken   352..480 the keys that may log in
+//    96..352 what was read from the connection and not yet taken   352..608 the keys that may log in (8)
 // In `k`: k[29] the connection that has the shell, plus one   k[30] the port (22)   k[4153] 1: the port is SSH's
 //    k[4160] the host key: 0 not made, 1 made and not yet shown, 2 shown   k[4161] k[4162] the unread bytes
 //    k[4163] the session running (cancho-ssh's count; 0: none)   k[4164] how many keys may log in
 //    k[4152] the session is to end when its output has gone
+//    k[4177] which of the keys are owners' (a bit each; the others may only read)
+//    k[4179] what the key that logged in may do: 2 an owner's, 1 a reader's
 
 pub fn ints() -> [] int {
     return ssh.ints_len();
@@ -28,7 +30,20 @@ pub fn bytes() -> [] int {
 }
 
 pub fn extra() -> [] int {
-    return 480;
+    return 608;
+}
+
+// The host key was read from the disk into `sx[0..32]`, not drawn: its public half is made, and it is to
+// be shown like one that was.
+pub fn adopt[&s, &x, &w](k: &!s [int], sx: &!x [byte], wire: &!w [byte]) -> [] int {
+    ed25519.public_key_from_seed(sx[0..32], wire[0..32]);
+    var p = 0;
+    while p < 32 {
+        sx[32 + p] = wire[p];
+        p = p + 1;
+    }
+    k[4160] = 1;
+    return 0;
 }
 
 // One byte for the client, by the same queue `putc` fills.
@@ -92,6 +107,10 @@ pub fn step[&s, &t, &g, &h, &l, &w, &i, &b, &x](k: &!s [int], tcp: &!t [int], bu
         k[4160] = 1;
         return 3;
     }
+    if k[4160] == 1 {
+        // made, or read from the disk (`adopt`), and not yet shown on the console
+        return 3;
+    }
     if k[29] != 0 && inet.tcp_state(tcp, k[29] - 1) != 2 && inet.tcp_state(tcp, k[29] - 1) != 3 {
         forget(k, si, sb);
     }
@@ -148,6 +167,21 @@ pub fn step[&s, &t, &g, &h, &l, &w, &i, &b, &x](k: &!s [int], tcp: &!t [int], bu
             k[4163] = 0;
         } else if k[4163] != ssh.session_count(si) {
             k[4163] = ssh.session_count(si);
+            // whose session: the key the last request named is the one that logged in
+            k[4179] = 1;
+            var who = 0;
+            while who < k[4164] {
+                var same = true;
+                var b = 0;
+                while b < 32 && same {
+                    same = int_of(sx[352 + who * 32 + b]) == int_of(ssh.auth_key(si, sb)[b]);
+                    b = b + 1;
+                }
+                if same && k[4177] >> who & 1 == 1 {
+                    k[4179] = 2;
+                }
+                who = who + 1;
+            }
             k[27] = 0;
             k[31] = 0;
             k[32] = 0;

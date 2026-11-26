@@ -1451,7 +1451,16 @@ pub fn net_command[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l, &
             k[4153] = 1;
             k[29] = 0;
             base.puts(con, k, "ssh is on port 22; keys built into this image that may log in: ");
-            base.put_dec(con, k, k[4164]);
+            base.put_dec(con, k, k[4180]);
+            if k[4164] > k[4180] {
+                base.puts(con, k, ", and from KEYS.TXT on the disk: ");
+                base.put_dec(con, k, k[4164] - k[4180]);
+            }
+            if k[4182] != 0 {
+                base.puts(con, k, " (");
+                base.put_dec(con, k, k[4182]);
+                base.puts(con, k, " lines of it are not keys, or there was no room)");
+            }
             if k[4164] == 0 {
                 base.puts(con, k, " (so nobody can: AUTHORIZED=key.pub ./build.sh)");
             }

@@ -66,6 +66,9 @@
   for a wider one (cancho `docs/mmio.md` 3), not fixed yet.
 - `load` (docs/load.md): a kernel sent over the serial console replaces the running one. A tool for bringing up
   hardware on the real boards without moving the SD card for every build; `board/send.py` is the sender.
+- Keys and two roles (2026-11-26, permissions.md slice 2): HOSTKEY.BIN kept on the disk, KEYS.TXT read
+  (src/keys.cho, pure), an owner's key runs anything and a reader's only what changes nothing. In QEMU.
+  Next: versions and the record; then the Pi 4's SD controller, so that a real board has a disk at all.
 - Writing, first slice (2026-11-26): a file added, added to, or copied, in QEMU, in the order permissions.md
   sets; judged by macOS's and Linux's own checkers. Next slice: the SSH host key and a keys file with two roles.
 - Who may do what (docs/permissions.md, 2026-11-26, design only): keys instead of users, grants instead of

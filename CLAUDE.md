@@ -46,6 +46,10 @@ Rules of the road
   that is on the disk is changed in place, and a write is believed only when another system's checker
   (`fsck.fat -n`, macOS `fsck_msdos -n`) finds nothing wrong and another system reads the bytes back.
   Do not add replacing or removing a file before versions exist.
+- Who may do what (docs/permissions.md): a session's role is k[4179] (2 an owner's key, 1 a reader's); a
+  new shell command must be put on the reader's list in `reading` (kernel.cho) only if it changes nothing
+  and reaches nowhere. `HOSTKEY.BIN` is never shown, copied or changed by the shell (`secret` in disk.cho).
+  `./keys.sh` is the test, with OpenSSH and three keys.
 - SSH (docs/ssh.md) is cancho-ssh, pinned by `SSH_REF` in the workflow and taken from `../cancho-ssh` (or
   `SSH=`) by build.sh: change it there, never copy it here. `src/sshd.cho` is the loop and must keep its two
   rules (read the connection only when nothing else moved; keep what `feed` and `tcp_write` did not take).

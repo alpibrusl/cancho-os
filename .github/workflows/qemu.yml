@@ -34,6 +34,8 @@ jobs:
           /tmp/cancho-out/cancho test tests/inet_test.cho src/inet.cho --std
           # TCP: whole conversations against segments the second implementation built, with the time made up
           /tmp/cancho-out/cancho test tests/tcp_test.cho src/inet.cho --std
+          # who may log in: lines of a keys file, with keys ssh-keygen made
+          /tmp/cancho-out/cancho test tests/keys_test.cho src/keys.cho --std
           # the file system: sectors of volumes macOS's tools made, read by a second implementation
           /tmp/cancho-out/cancho test tests/fat_test.cho src/fat.cho --std
           # the gateway, datagrams, names and a given address
@@ -137,6 +139,21 @@ jobs:
             mcopy -i $vol ::F20.TXT f20.out && test "$(cat f20.out)" = "file 20"
             test "$(mdir -i $vol :: | grep -c '^F[0-9][0-9] *TXT')" = 20
             rm -f copy.out big.out log.out f20.out
+          done
+      - name: who may log in, and the host key kept
+        # docs/permissions.md, slice 2, with OpenSSH's own client and three keys made here. The owner's is
+        # built into the image; the reader's is put in KEYS.TXT at the console; the third is in neither.
+        # The owner writes; the reader lists and is refused a write, a ping and the host key's file; the
+        # third is not let in; and after a restart the host key on the disk is the host key.
+        run: |
+          ssh-keygen -q -t ed25519 -N "" -C "a reader" -f /tmp/readerkey
+          for img in fat32 fat16; do
+            cp $img.img k-$img.img
+            ./keys.sh k-$img.img /tmp/sshkey /tmp/readerkey /tmp/stranger > keys-$img.txt 2>&1 || { cat keys-$img.txt; exit 1; }
+            cat keys-$img.txt
+            grep -q "^the host key is the same after the restart" keys-$img.txt
+            fsck.fat -n k-$img.img
+            mcopy -i k-$img.img ::HOSTKEY.BIN hostkey.out && test "$(wc -c < hostkey.out)" = 32 && rm hostkey.out
           done
       - name: a kernel loaded over the serial console
         # the running kernel takes another (this build, renamed 0.0.99) and starts it: a wrong checksum
