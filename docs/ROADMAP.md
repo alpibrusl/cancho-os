@@ -66,6 +66,10 @@
   for a wider one (cancho `docs/mmio.md` 3), not fixed yet.
 - `load` (docs/load.md): a kernel sent over the serial console replaces the running one. A tool for bringing up
   hardware on the real boards without moving the SD card for every build; `board/send.py` is the sender.
+- A heap (2026-11-26): cancho's bare target got `malloc` and `free` (cancho docs/freestanding.md 8), asked for
+  here so that cancho-tools, whose answers are JSON written through `std.json`, can be built into the kernel.
+  `heap` tries it: JSON made and printed, 600 buffers checked, a 64 KiB block reused 20,000 times. In QEMU.
+  Next: the tools themselves, with keys and grants for agents.
 - The servo bus through another machine (2026-11-26, docs/netbus.md): `servo via <address> <port>` and
   `board/busbridge.py`, which passes on only packets that read. For reading real arms before the kernel has
   USB or the bus on its own pins. In QEMU against a made-up bus.

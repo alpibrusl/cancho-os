@@ -385,11 +385,13 @@ Context and decisions: [`docs/ROADMAP.md`](docs/ROADMAP.md). Compiler issues to 
 
 ## Next
 
-1. A heap for the kernel, so that cancho's own libraries (`std.json`, `std.buffer`) build for it.
-2. The tools an agent calls ([cancho-tools](https://github.com/alpibrusl/cancho-tools)) built in, and keys for
+1. The tools an agent calls ([cancho-tools](https://github.com/alpibrusl/cancho-tools)) built in, and keys for
    agents with grants: which names a key may read, add to or write.
-3. USB on the Pi 4, so that the kernel holds the arms' bus itself.
-4. Separate programs; the Pi 5's first boot; the safety core's side that sends.
+2. USB on the Pi 4, so that the kernel holds the arms' bus itself.
+3. Separate programs; the Pi 5's first boot; the safety core's side that sends.
+
+The kernel has a heap since 0.0.31 (`heap` tries it), so cancho's own libraries (`std.json`, `std.buffer`)
+build for it: that is what the tools need first.
 
 [docs/ROADMAP.md](docs/ROADMAP.md) has the decisions and the order they were taken in.
 

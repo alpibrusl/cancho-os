@@ -90,6 +90,10 @@ Rules of the road
 - The servo bus through another machine (docs/netbus.md): `servo via` sets k[4262] (address) and k[4263] (port);
   `transact` then calls `network.bus_exchange`. `board/busbridge.py` must keep passing on ONLY packets that read
   (instructions 1, 2, 0x82): it is the one thing between a network and the arm's motors. Never add a write there.
+- The heap (cancho docs/freestanding.md, section 8): the compiler's bare runtime has `malloc` and `free` over the
+  memory the regions use, so `std.buffer`, `std.vec`, `std.json` build here. `heap` in the shell tries it. The kernel
+  holds the `Heap` capability and lends it only to what needs it: keep regions for anything with a known size, and
+  never use the heap in a path that must not fail (no memory left is a trap, not an answer).
 - `restart` (docs/restart.md) holds the `pm` capability, the watchdog's two registers; no other function may.
   It is due 50 ticks after it is asked (k[4261]; `getc` answers -6), so that what was said has left.
 - All shell output goes through `putc`: never write to the UART elsewhere. Over SSH it is queued in `k`.
