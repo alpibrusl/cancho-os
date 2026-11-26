@@ -2,10 +2,11 @@
 
 Site: https://alpibrusl.github.io/cancho-os/
 
-[![A 37-second recording: SSH into cancho-os on a real Raspberry Pi 4](docs/demo/pi4-ssh.poster.jpg)](docs/demo/pi4-ssh.mp4)
-*A real session, 2026-11-26: a Mac logs in over SSH to the kernel on a Raspberry Pi 4 on a home network. Only
-the typing is scripted ([`docs/demo/session.py`](docs/demo/session.py)); re-render with `agg` and `ffmpeg` from
-[`docs/demo/pi4-ssh.cast`](docs/demo/pi4-ssh.cast).*
+[![A one-minute recording: cancho-os on a real Raspberry Pi 4 reads its card and a robot arm, takes a new kernel over SSH and restarts](docs/demo/pi4-arm.poster.jpg)](docs/demo/pi4-arm.mp4)
+*A real session, 2026-11-26: a Mac logs in over SSH to the kernel on a Raspberry Pi 4, which writes a file to its
+own card and shows the version it kept, reads a real robot arm, takes a new kernel over SSH and restarts into it.
+Only the typing is scripted ([`docs/demo/session.py`](docs/demo/session.py)); re-render with `agg` and `ffmpeg` from
+[`docs/demo/pi4-arm.cast`](docs/demo/pi4-arm.cast).*
 
 **Where it stands** (2026-11-26):
 
