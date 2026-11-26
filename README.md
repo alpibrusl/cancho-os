@@ -45,6 +45,7 @@ src/base.cho     the console's output, the clock, bytes on the second serial por
 src/network.cho  the kernel's side of the network: both links, the generator, the commands
 src/sdcard.cho   a Pi's SD card, one sector at a time
 src/keys.cho     who may log in: the lines of a keys file; holds no hardware
+src/boot.cho     which lines of BOOT.TXT are run at the start; holds no hardware
 src/feetech.cho  the Feetech servo protocol, read side only        } vendored from
 src/calibration.cho, kinematics.cho, so101.cho  ticks to degrees,  } cancho-robot,
                  and the SO-101's forward kinematics               } unchanged
@@ -322,7 +323,8 @@ checks the chain; so does `tests/checklog.py`, with Python alone). Only `purge <
 console, gives a version up. Short names only. A whole file, a new kernel among them, comes in over
 SSH with `board/put.sh` ([docs/update.md](docs/update.md)): it is kept only if the bytes that came and
 the bytes the disk gives back have the SHA-256 the sender gave. `restart` then starts the board again
-from the card ([docs/restart.md](docs/restart.md)).
+from the card ([docs/restart.md](docs/restart.md)), and `BOOT.TXT` on the card says what it does at
+its start: the network, SSH, where the servo bus is ([docs/boot.md](docs/boot.md)).
 
 ```
 MACHINE=virt DISK=some-fat.img ./test.sh disk ls 'sum KERNEL8.IMG'

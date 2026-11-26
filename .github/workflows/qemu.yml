@@ -40,6 +40,8 @@ jobs:
           /tmp/cancho-out/cancho test tests/fat_test.cho src/fat.cho --std
           # the record: lines Python's hashlib chained, and every damage to them (nothing traps)
           /tmp/cancho-out/cancho test tests/record_test.cho src/record.cho /tmp/cancho-ssh/src/sha256.cho --std
+          # BOOT.TXT: which lines are run at the start, and every damage to the file (nothing traps)
+          /tmp/cancho-out/cancho test tests/boot_test.cho src/boot.cho --std
           # the gateway, datagrams, names and a given address
           /tmp/cancho-out/cancho test tests/addr_test.cho src/inet.cho --std
       - name: what the kernel can touch
@@ -262,6 +264,22 @@ jobs:
           print("the bridge passed two reads and dropped five that were not")'
           kill %1
           test "$(grep -c "dropped a packet" bridge.txt)" = 5
+      - name: what the board does at its start
+        # docs/boot.md. BOOT.TXT is written at the console; the same disk is started again and nothing is typed
+        # that the file says: the link must be up and SSH on, the line that restarts must not have run, and
+        # OpenSSH, which can then log in, must not be able to change the file.
+        run: |
+          cp fat16.img b.img
+          MACHINE=virt DISKRW=b.img ./test.sh 'write BOOT.TXT # at the start' 'append BOOT.TXT net up' 'append BOOT.TXT restart' 'append BOOT.TXT net ssh on' 'append BOOT.TXT echo the board is up' > boot1.txt; tail -4 boot1.txt
+          MACHINE=virt DISKRW=b.img SSHKEY=/tmp/sshkey SSHCMD='write BOOT.TXT from ssh' ./test.sh 'echo a' 'echo b' net 'cat BOOT.TXT' > boot2.txt; cat boot2.txt
+          grep -q "^BOOT.TXT: 3 lines to run, 1 not run" boot2.txt
+          grep -q "^the board is up" boot2.txt
+          grep -q "^link up: virtio-net" boot2.txt
+          grep -q "^ssh on port 22" boot2.txt
+          test "$(grep -c "^cancho-os booted" boot2.txt)" = 1
+          grep -q "^ssh: a file the board starts from" boot2.txt
+          grep -q "^echo the board is up" boot2.txt
+          fsck.fat -n b.img
       - name: the heap
         # cancho docs/freestanding.md, section 8: a JSON object made on the heap and printed, growing buffers read
         # back, and a block made and given back so many times that it must have been used again.

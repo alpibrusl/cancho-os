@@ -94,6 +94,9 @@ Rules of the road
   memory the regions use, so `std.buffer`, `std.vec`, `std.json` build here. `heap` in the shell tries it. The kernel
   holds the `Heap` capability and lends it only to what needs it: keep regions for anything with a known size, and
   never use the heap in a path that must not fail (no memory left is a trap, not an answer).
+- BOOT.TXT (docs/boot.md): `src/boot.cho` (pure) holds the list of lines the kernel may type to itself at its
+  start. Adding a command to that list is a decision: nothing that changes the disk, loads a kernel or restarts.
+  The file is written at the console only (`files.boot_name`, `files.put_name`). A key in the first second stops it.
 - `restart` (docs/restart.md) holds the `pm` capability, the watchdog's two registers; no other function may.
   It is due 50 ticks after it is asked (k[4261]; `getc` answers -6), so that what was said has left.
 - All shell output goes through `putc`: never write to the UART elsewhere. Over SSH it is queued in `k`.
