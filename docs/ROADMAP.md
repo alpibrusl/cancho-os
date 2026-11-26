@@ -25,6 +25,9 @@
   reads the record, holds the off switch.
 - **Board for the robot: Pi 5.** Developed in QEMU on the Pi 3/4 models with a simulated servo bus, then
   moved. Needs from hardware: the debug UART for the console, a header UART behind RP1 for the bus.
+  (2026-11-26, read from the robot's own Pi 5: its two servo adapters are USB devices, QinHeng CH343, behind
+  a hub on RP1's USB controller. So the bus is not a header UART as assumed here. Either the adapters are
+  rewired to a header UART, or the kernel needs a USB host stack: a decision still to be made, docs/pi5.md.)
 - **The model stays on another machine** (cancho-gpu needs Metal or CUDA, which need macOS or Linux).
 
 ### Robot steps
@@ -61,8 +64,8 @@
 - Next in the compiler: a rule that refuses a hosted builtin on the bare target instead of leaving it to
   clang; interrupt entry (issue 04) when preemption needs it. Found on the way: in cancho a narrowed `Fs` passes
   for a wider one (cancho `docs/mmio.md` 3), not fixed yet.
-- Pi 5: the SoC debug UART, GIC and timer would work the same way; needs its addresses from the
-  BCM2712 documentation and a board to test on (QEMU has no model). Not started.
+- Pi 5: written 2026-11-26 from a running board's device tree (docs/pi5.md): console, GIC, timer, MMU, shell.
+  Never run: QEMU has no model, and the first boot needs a cable for the debug connector and an SD card.
 
 ## Milestones
 1. ✅ UART shell (help/about/echo) — boots in QEMU; not yet tried on real hardware.

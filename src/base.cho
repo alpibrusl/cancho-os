@@ -10,7 +10,7 @@ module base;
 // k[9] the second serial port's; k[26], k[27], k[33] and k[40..] are where `putc` writes
 // while a line from the network is being run (docs/network.md, section 8).
 
-pub fn putc[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], c: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
+pub fn putc[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), k: &!s [int], c: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048")] int {
     if k[26] != 0 {
         // a line from the network is being run: what it prints waits here for the connection
         if k[27] < 4096 {
@@ -27,7 +27,7 @@ pub fn putc[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048
     return mmio_write32(con, uart, c);
 }
 
-pub fn puts[&mc, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], s: &r [byte]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
+pub fn puts[&mc, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), k: &!s [int], s: &r [byte]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048")] int {
     var i = 0;
     while i < len(s) {
         putc(con, k, int_of(s[i]));
@@ -36,21 +36,21 @@ pub fn puts[&mc, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f20
     return 0;
 }
 
-pub fn put_dec[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], v: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
+pub fn put_dec[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), k: &!s [int], v: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048")] int {
     if v >= 10 {
         put_dec(con, k, v / 10);
     }
     return putc(con, k, 48 + v % 10);
 }
 
-pub fn put_digit[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], d: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
+pub fn put_digit[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), k: &!s [int], d: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048")] int {
     if d < 10 {
         return putc(con, k, 48 + d);
     }
     return putc(con, k, 87 + d);
 }
 
-pub fn put_hex[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048"), k: &!s [int], v: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048")] int {
+pub fn put_hex[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), k: &!s [int], v: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048")] int {
     if v >= 16 {
         put_hex(con, k, v >> 4);
     }

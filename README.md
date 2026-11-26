@@ -222,6 +222,28 @@ What QEMU does not model, so where a real board may differ:
   header pins are the two the console uses. It has to move to another PL011 (UART3, on
   GPIO4/5) before a real arm can be read.
 
+## On a real Pi 5
+
+**Written, never run.** QEMU has no Pi 5, so this code has not executed anywhere:
+[docs/pi5.md](docs/pi5.md) says where every address came from and what is not known. On a Pi 5 the
+kernel has its console, the timer, the memory map and the shell; no servo bus, no network, no randomness.
+
+You need a microSD card and a cable for the **debug connector** (three pins, between the HDMI ports;
+Raspberry Pi's Debug Probe has one). The 40-pin header's pins are not the console here.
+
+1. `./build.sh`.
+2. Format the card FAT32 and copy three files to it: `build/kernel8.img`, `board/config.txt`, and
+   `bcm2712-rpi-5-b.dtb` from https://github.com/raspberrypi/firmware/tree/master/boot (the kernel does
+   not read it; the boot loader may want it there). A Pi 5 needs no `start.elf`: its firmware is in the
+   board's own memory.
+3. Connect the cable, open the console at 115200 baud, put the card in and power the Pi. The boot
+   loader prints first, on the same port. Then: ``cancho-os booted. type `help`.``, and `about` should
+   say `(Raspberry Pi 5)`.
+
+A Pi 5 tries the SD card before its other disks by default (`BOOT_ORDER=0xf461`: check yours with
+`rpi-eeprom-config`). So what is installed on an NVMe drive is not touched, and boots again when the
+card is taken out.
+
 ## How it is built, and what is left to remove
 
 - `cancho build --target aarch64-none-elf --emit obj` writes an ELF object with no libc in
