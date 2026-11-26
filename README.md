@@ -36,7 +36,9 @@ src/calibration.cho, kinematics.cho, so101.cho  ticks to degrees,  } cancho-robo
                  and the SO-101's forward kinematics               } unchanged
 src/safety.cho   the safety core: one `approve` every motion must pass }
 src/fat.cho      a FAT volume's sectors, read; holds no hardware
-src/disk.cho     a disk (virtio-blk), and the commands that read files from it
+src/disk.cho     a disk (virtio-blk, or a Pi's SD card: src/sdcard.cho), its table and its directories
+src/ledger.cho   the record on the disk; src/record.cho makes and checks its lines
+src/files.cho    the commands that read and change files, and a file that comes over SSH
 src/sshd.cho     the loop between cancho-ssh and the shell
 src/inet.cho     the network's packets: SLIP, Ethernet, IPv4, UDP, TCP, DHCP, DNS; holds no hardware
 sim/servos.cho   six simulated servos for QEMU: a program for the host, not in the image

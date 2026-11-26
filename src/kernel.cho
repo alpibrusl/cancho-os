@@ -9,6 +9,8 @@ import base;
 import network;
 import sshd;
 import disk;
+import ledger;
+import files;
 import keys;
 import authorized;
 
@@ -901,7 +903,7 @@ fn load_keys[&mv, &md, &s, &x](vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..
         }
         k[4164] = k[4180];
         k[4182] = 0;
-        let n = disk.get(vio, dma, k, "KEYS.TXT", file);
+        let n = files.get(vio, dma, k, "KEYS.TXT", file);
         if n > 0 {
             k[4164] = keys.load(file, n, sx[352..608], roles, k[4180], skipped);
             k[4182] = skipped[0];
@@ -955,7 +957,7 @@ fn put_begin[&mc, &s, &r, &p](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0
         base.puts(con, k, "usage, over SSH: put <name> <bytes> <sha256>, and then the file's bytes (board/put.sh does it)\r\n");
         return 1;
     }
-    if !disk.put_name(line, 4, a) {
+    if !files.put_name(line, 4, a) {
         base.puts(con, k, "not a name `put` may use: a short name, and not OLD, LOG.TXT or HOSTKEY.BIN\r\n");
         return 1;
     }
@@ -1011,7 +1013,7 @@ fn restart_soon[&mc, &mv, &md, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f2010
         base.puts(con, k, "restart is a Pi 3's and a Pi 4's: this machine has no such watchdog here\r\n");
         return 1;
     }
-    disk.note(con, vio, dma, k, who, "restart", "board");
+    ledger.note(con, vio, dma, k, who, "restart", "board");
     base.puts(con, k, "restarting: the firmware starts the board again, and loads the kernel from the card\r\n");
     k[4261] = k[5] + 50;
     return 0;
@@ -1212,7 +1214,7 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s, &mk](cpu
                 // the host key's public half, as a line for a client's known_hosts
                 // a key that was drawn is kept, if there is a disk to keep it on: then it is the same key
                 // after a restart, and a client that remembered it is not told the host has changed
-                if k[4176] == 0 && disk.keep(con, vio, dma, k, "HOSTKEY.BIN", sx, 32) == 0 {
+                if k[4176] == 0 && files.keep(con, vio, dma, k, "HOSTKEY.BIN", sx, 32) == 0 {
                     k[4176] = 2;
                 }
                 if k[4176] == 1 {
@@ -1250,7 +1252,7 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s, &mk](cpu
                 if k[4258] == 0 {
                     k[26] = 1;
                     let pn = int_of(pend[0]);
-                    disk.store(con, vio, dma, stage, k, pend, 1, 1 + pn, k[14] + 0x220000 + 16, k[4259], pend[16..80], 1);
+                    files.store(con, vio, dma, stage, k, pend, 1, 1 + pn, k[14] + 0x220000 + 16, k[4259], pend[16..80], 1);
                     load_keys(vio, dma, k, sx);
                     k[4152] = 1;
                     k[26] = 0;
@@ -1277,7 +1279,7 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s, &mk](cpu
                     put_begin(con, k, cmd, k[31], pend);
                 } else if same(cmd, k[31], "random") {
                     network.put_random(con, rng, vio, dma, k);
-                } else if disk.command(con, vio, dma, k, cmd, k[31], false) != 0 {
+                } else if files.command(con, vio, dma, k, cmd, k[31], false) != 0 {
                     // (run: a command that uses the disk; one that may have changed who may log in)
                     if k[31] > 7 && (same(cmd, 7, "append ") || same(cmd, 6, "write ") || same(cmd, 7, "remove ") || same(cmd, 5, "copy ")) {
                         load_keys(vio, dma, k, sx);
@@ -1300,7 +1302,7 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s, &mk](cpu
                 if same(line, n, "net ssh on") {
                     // who may log in, and the host key if the disk has kept one, before the port opens
                     load_keys(vio, dma, k, sx);
-                    if k[4160] == 0 && disk.get(vio, dma, k, "HOSTKEY.BIN", sx[0..32]) == 32 {
+                    if k[4160] == 0 && files.get(vio, dma, k, "HOSTKEY.BIN", sx[0..32]) == 32 {
                         sshd.adopt(k, sx, wire);
                         k[4176] = 1;
                     }
@@ -1311,7 +1313,7 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s, &mk](cpu
                     load(cpu, con, stage, probe, k, line, n);
                 } else if same(line, n, "random") {
                     network.put_random(con, rng, vio, dma, k);
-                } else if disk.command(con, vio, dma, k, line, n, true) != 0 {
+                } else if files.command(con, vio, dma, k, line, n, true) != 0 {
                     // (a file was changed: it may be the one that says who may log in)
                     if n > 7 && (same(line, 7, "append ") || same(line, 6, "write ") || same(line, 7, "remove ") || same(line, 5, "copy ")) {
                         load_keys(vio, dma, k, sx);
