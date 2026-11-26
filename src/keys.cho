@@ -1,0 +1,165 @@
+edition 5;
+
+module keys;
+
+// `keys` -- the file that says who may log in (docs/permissions.md): KEYS.TXT, a line a key,
+//
+//     owner ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... a name for people to read
+//     reader ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...
+//
+// the role, then the key as `ssh-keygen` writes it. Pure, like `inet` and `fat`: it is given the file's
+// bytes, never traps on any of them, and reads no disk. A line that is not a key is counted and skipped; so
+// are an empty line and one that begins with `#`.
+
+pub fn reader() -> [] int {
+    return 1;
+}
+
+pub fn owner() -> [] int {
+    return 2;
+}
+
+// What a character of base64 stands for, or -1.
+fn six(c: int) -> [] int {
+    if c >= 65 && c <= 90 {
+        return c - 65;
+    }
+    if c >= 97 && c <= 122 {
+        return c - 71;
+    }
+    if c >= 48 && c <= 57 {
+        return c + 4;
+    }
+    if c == 43 {
+        return 62;
+    }
+    if c == 47 {
+        return 63;
+    }
+    return -1;
+}
+
+// Byte `i` of the 51 that the 68 characters at `text[at..]` stand for.
+fn decoded[&t](text: &t [byte], at: int, i: int) -> [] int {
+    let g = at + i / 3 * 4;
+    let v = six(int_of(text[g])) * 262144 + six(int_of(text[g + 1])) * 4096 + six(int_of(text[g + 2])) * 64 + six(int_of(text[g + 3]));
+    if i % 3 == 0 {
+        return v / 65536;
+    }
+    if i % 3 == 1 {
+        return v / 256 % 256;
+    }
+    return v % 256;
+}
+
+fn is[&t, &w](text: &t [byte], at: int, end: int, word: &w [byte]) -> [] bool {
+    if at + len(word) > end {
+        return false;
+    }
+    var i = 0;
+    while i < len(word) {
+        if int_of(text[at + i]) != int_of(word[i]) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// The line `text[from..to]`: a role and an ed25519 key. Its role, with the key's 32 bytes in `key`; 0 for a
+// line with nothing to say (empty, or a comment); -1 for one that is not a key.
+pub fn line[&t, &k](text: &t [byte], from: int, to: int, key: &!k [byte]) -> [] int {
+    if from < 0 || to > len(text) || len(key) < 32 {
+        return -1;
+    }
+    var at = from;
+    while at < to && (int_of(text[at]) == 32 || int_of(text[at]) == 9) {
+        at = at + 1;
+    }
+    if at >= to || int_of(text[at]) == 35 || int_of(text[at]) == 13 {
+        return 0;
+    }
+    var role = 0;
+    if is(text, at, to, "owner ") {
+        role = owner();
+        at = at + 6;
+    } else if is(text, at, to, "reader ") {
+        role = reader();
+        at = at + 7;
+    } else {
+        return -1;
+    }
+    if !is(text, at, to, "ssh-ed25519 ") {
+        return -1;
+    }
+    at = at + 12;
+    // an ed25519 key is 51 bytes: 68 characters of base64, none of them padding
+    if at + 68 > to {
+        return -1;
+    }
+    var i = 0;
+    while i < 68 {
+        if six(int_of(text[at + i])) < 0 {
+            return -1;
+        }
+        i = i + 1;
+    }
+    if at + 68 < to && int_of(text[at + 68]) != 32 && int_of(text[at + 68]) != 9 && int_of(text[at + 68]) != 13 {
+        return -1;
+    }
+    // "ssh-ed25519" after its length, 11, then the key after its length, 32
+    let kind = "ssh-ed25519";
+    if decoded(text, at, 0) != 0 || decoded(text, at, 1) != 0 || decoded(text, at, 2) != 0 || decoded(text, at, 3) != 11 {
+        return -1;
+    }
+    i = 0;
+    while i < 11 {
+        if decoded(text, at, 4 + i) != int_of(kind[i]) {
+            return -1;
+        }
+        i = i + 1;
+    }
+    if decoded(text, at, 15) != 0 || decoded(text, at, 16) != 0 || decoded(text, at, 17) != 0 || decoded(text, at, 18) != 32 {
+        return -1;
+    }
+    i = 0;
+    while i < 32 {
+        key[i] = byte_of(decoded(text, at, 19 + i));
+        i = i + 1;
+    }
+    return role;
+}
+
+// Every key of the file `text[0..n]`, added to `table` (32 bytes each, end to end) after the `have` it
+// holds already, with its role in `roles`. Answers how many the table holds afterwards; `skipped[0]` gets
+// how many lines were not keys, and how many keys there was no room for.
+pub fn load[&t, &b, &r, &s](text: &t [byte], n: int, table: &!b [byte], roles: &!r [int], have: int, skipped: &!s [int]) -> [] int {
+    var count = have;
+    if len(skipped) < 1 {
+        return count;
+    }
+    skipped[0] = 0;
+    if n < 0 || n > len(text) || have < 0 || have * 32 > len(table) || have > len(roles) {
+        return count;
+    }
+    var from = 0;
+    while from < n {
+        var to = from;
+        while to < n && int_of(text[to]) != 10 {
+            to = to + 1;
+        }
+        if count < len(roles) && (count + 1) * 32 <= len(table) {
+            let role = line(text, from, to, table[count * 32..count * 32 + 32]);
+            if role > 0 {
+                roles[count] = role;
+                count = count + 1;
+            } else if role < 0 {
+                skipped[0] = skipped[0] + 1;
+            }
+        } else {
+            skipped[0] = skipped[0] + 1;
+        }
+        from = to + 1;
+    }
+    return count;
+}
