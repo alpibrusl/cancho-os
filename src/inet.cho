@@ -405,18 +405,18 @@ fn eth_wrap[&o](out: &!o [byte], length: int, to: int, mac: int, kind: int) -> [
 // there can be is how many of both fit. The clock is the caller's too: `now`, in milliseconds.
 //
 // What a connection does (docs/network.md, section 7): it is opened from the other end, to port 7, and what
-// arrives is sent back. It holds at most one segment of its own that is not yet acknowledged, and while it
-// does it advertises a window of zero, so the other end waits. `tcp_tick` sends that segment again when it
-// has waited too long. Only the next byte expected is taken; anything else is told what is expected.
+// arrives is sent back. What it has sent and not had acknowledged it keeps, in one buffer of one segment's
+// size; the window it advertises is the room left in that buffer, so it never takes what it could not send
+// back, and never takes back room it has offered. `tcp_tick` sends the buffer again when it has waited too
+// long. Only the next byte expected is taken; anything else is told what is expected.
 //
 // The ints of connection c, at tcp[c * 16 ..]:
-//    0 state: 0 free, 1 opening (our SYN is out), 2 open, 3 the other end has finished and data of ours is
-//      still out, 4 our FIN is out
+//    0 state: 0 free, 1 opening (our SYN is out), 2 open, 4 the other end has finished and our FIN is out
 //    1 the other end's address   2 its port   3 our port
 //    4 the first sequence number of ours not acknowledged   5 the next we would send   6 the next we expect
-//    7 how many bytes of data are out (they are in `bufs`)   8 what else is out: 1 a FIN, 2 a SYN
-//    9 when it was last sent   10 how many times it has been sent again
-//    11 the most this connection takes or sends at once   12 the card to send to (0 on a line with none)
+//    7 how many bytes of data are out (they are in `bufs`)   8 what else is out: 1 a FIN after them, 2 a SYN
+//    9 when the oldest of it was last sent   10 how many times it has been sent again
+//    11 the most this connection holds or sends at once   12 the card to send to (0 on a line with none)
 //    13 when the other end was last heard
 
 pub fn tcp_conn() -> [] int {
@@ -496,15 +496,17 @@ fn segment[&b, &o](out: &!o [byte], o: int, from: int, to: int, sport: int, dpor
     return total;
 }
 
-// What connection `c` has to say. `again`: the segment that is out (its SYN, its data, its FIN), from the
-// first byte not acknowledged. Otherwise nothing but where it stands: an acknowledgement and a window.
-fn tcp_say[&t, &b, &o](tcp: &!t [int], bufs: &!b [byte], c: int, ours: int, again: bool, out: &!o [byte], o: int) -> [] int {
+// What connection `c` has to say. `from` is where in its unacknowledged data the segment starts: 0 sends all
+// that is out again (its SYN, its data, its FIN), more than 0 sends only what was added since. -1: nothing but
+// where it stands, an acknowledgement and a window.
+fn tcp_say[&t, &b, &o](tcp: &!t [int], bufs: &!b [byte], c: int, ours: int, from: int, out: &!o [byte], o: int) -> [] int {
     let b = c * 16;
     var window = 0;
-    if tcp[b] <= 2 && tcp[b + 7] == 0 {
-        window = tcp[b + 11];
+    if tcp[b] <= 2 {
+        // the room left for what arrives: it is echoed from the same buffer, so what is out takes from it
+        window = tcp[b + 11] - tcp[b + 7];
     }
-    if !again {
+    if from < 0 || from > tcp[b + 7] {
         return segment(out, o, ours, tcp[b + 1], tcp[b + 3], tcp[b + 2], tcp[b + 5], tcp[b + 6], 16, window, 0, bufs, 0, 0);
     }
     var flags = 16;
@@ -516,10 +518,10 @@ fn tcp_say[&t, &b, &o](tcp: &!t [int], bufs: &!b [byte], c: int, ours: int, agai
     if tcp[b + 8] == 1 {
         flags = 17;
     }
-    if tcp[b + 7] > 0 {
+    if tcp[b + 7] > from {
         flags = flags + 8;
     }
-    return segment(out, o, ours, tcp[b + 1], tcp[b + 3], tcp[b + 2], tcp[b + 4], tcp[b + 6], flags, window, mss, bufs, c * tcp_segment_max(), tcp[b + 7]);
+    return segment(out, o, ours, tcp[b + 1], tcp[b + 3], tcp[b + 2], plus(tcp[b + 4], from), tcp[b + 6], flags, window, mss, bufs, c * tcp_segment_max() + from, tcp[b + 7] - from);
 }
 
 // The most the other end takes in a segment, from the options of its SYN at `pkt[from + 20..from + doff]`;
@@ -643,7 +645,7 @@ fn tcp_at[&p, &t, &b, &o](pkt: &p [byte], at: int, ours: int, tcp: &!t [int], bu
         tcp[b + 11] = room;
         tcp[b + 12] = via;
         tcp[b + 13] = now;
-        return tcp_say(tcp, bufs, slot, ours, true, out, o);
+        return tcp_say(tcp, bufs, slot, ours, 0, out, o);
     }
     let b = found * 16;
     if rst != 0 {
@@ -653,19 +655,19 @@ fn tcp_at[&p, &t, &b, &o](pkt: &p [byte], at: int, ours: int, tcp: &!t [int], bu
         }
         return 0;
     }
-    if syn != 0 || past(seq, tcp[b + 6]) > 0 && past(seq, tcp[b + 6]) < 2147483648 {
-        // from further on than what comes next: say what does
-        return tcp_say(tcp, bufs, found, ours, false, out, o);
+    if syn != 0 {
+        return tcp_say(tcp, bufs, found, ours, -1, out, o);
     }
     if acks == 0 {
         return 0;
     }
-    // A segment from before what comes next has been taken already and is here again. What it carries is
-    // not taken twice, but what it acknowledges counts, and it is told where we stand.
-    let again = seq != tcp[b + 6];
+    // Only the next byte expected is taken. A segment from before it has been taken already and is here
+    // again; one from after it has overtaken another. What either carries is not taken, but what it
+    // acknowledges counts, and it is told where we stand.
+    let aside = seq != tcp[b + 6];
     var n = body - doff;
     var fin = flags % 2;
-    if again {
+    if aside {
         n = 0;
         fin = 0;
     }
@@ -677,85 +679,80 @@ fn tcp_at[&p, &t, &b, &o](pkt: &p [byte], at: int, ours: int, tcp: &!t [int], bu
         if tcp[b] == 1 {
             return segment(out, o, ours, peer, dport, sport, ack, 0, 4, 0, 0, bufs, 0, 0);
         }
-        return tcp_say(tcp, bufs, found, ours, false, out, o);
+        return tcp_say(tcp, bufs, found, ours, -1, out, o);
     }
-    var opened = false;
-    if out_now > 0 && acked == out_now {
-        // all that was out has arrived (a part of it is not counted: the whole is sent again)
-        opened = tcp[b + 7] > 0;
-        tcp[b + 4] = tcp[b + 5];
-        tcp[b + 7] = 0;
-        tcp[b + 8] = 0;
+    let base = found * tcp_segment_max();
+    var freed = 0;
+    if acked > 0 {
+        // some of what was out has arrived: the rest moves to the front, and its timer starts again
+        freed = acked;
+        if freed > tcp[b + 7] {
+            freed = tcp[b + 7];
+        }
+        var i = freed;
+        while i < tcp[b + 7] {
+            bufs[base + i - freed] = bufs[base + i];
+            i = i + 1;
+        }
+        tcp[b + 7] = tcp[b + 7] - freed;
+        tcp[b + 4] = plus(tcp[b + 4], acked);
+        tcp[b + 9] = now;
         tcp[b + 10] = 0;
+        if acked == out_now {
+            tcp[b + 8] = 0;
+            if tcp[b] == 4 {
+                // our FIN has arrived: the connection is over
+                tcp[b] = 0;
+                return 0;
+            }
+        }
         if tcp[b] == 1 {
             tcp[b] = 2;
-        } else if tcp[b] == 4 {
-            // our FIN has arrived: the connection is over
-            tcp[b] = 0;
-            return 0;
         }
     } else if tcp[b] == 1 {
         // the opening is not acknowledged by this
         return segment(out, o, ours, peer, dport, sport, ack, 0, 4, 0, 0, bufs, 0, 0);
     }
-    let busy = tcp[b + 5] != tcp[b + 4];
-    if tcp[b] == 2 {
-        if n > 0 && !busy {
-            // the echo: what arrived is what goes out, and it is kept until it is acknowledged
-            var take = n;
-            if take > tcp[b + 11] {
-                take = tcp[b + 11];
-            }
-            var i = 0;
-            while i < take {
-                bufs[found * tcp_segment_max() + i] = pkt[from + doff + i];
-                i = i + 1;
-            }
-            tcp[b + 6] = plus(tcp[b + 6], take);
-            tcp[b + 7] = take;
-            tcp[b + 5] = plus(tcp[b + 5], take);
-            if fin != 0 && take == n {
-                tcp[b + 6] = plus(tcp[b + 6], 1);
-                tcp[b + 8] = 1;
-                tcp[b + 5] = plus(tcp[b + 5], 1);
-                tcp[b] = 4;
-            }
-            tcp[b + 9] = now;
-            return tcp_say(tcp, bufs, found, ours, true, out, o);
+    if tcp[b] == 2 && (n > 0 || fin != 0) {
+        // the echo: what arrives goes after what is still out, as much of it as there is room for, and it
+        // is kept there until it is acknowledged
+        let start = tcp[b + 7];
+        var take = n;
+        if take > tcp[b + 11] - start {
+            take = tcp[b + 11] - start;
         }
-        if n > 0 {
-            // no room until our own segment is acknowledged: the window, zero, says so
-            return tcp_say(tcp, bufs, found, ours, false, out, o);
+        if take < 0 {
+            take = 0;
         }
-        if fin != 0 {
+        var i = 0;
+        while i < take {
+            bufs[base + start + i] = pkt[from + doff + i];
+            i = i + 1;
+        }
+        tcp[b + 6] = plus(tcp[b + 6], take);
+        tcp[b + 7] = start + take;
+        tcp[b + 5] = plus(tcp[b + 5], take);
+        let closing = fin != 0 && take == n;
+        if closing {
+            // the other end has finished, so we do: our FIN goes after the last of the data
             tcp[b + 6] = plus(tcp[b + 6], 1);
-            if busy {
-                tcp[b] = 3;
-                return tcp_say(tcp, bufs, found, ours, false, out, o);
-            }
             tcp[b + 8] = 1;
             tcp[b + 5] = plus(tcp[b + 5], 1);
             tcp[b] = 4;
+        }
+        if take == 0 && !closing {
+            // no room: the window, zero, says so
+            return tcp_say(tcp, bufs, found, ours, -1, out, o);
+        }
+        if start == 0 {
             tcp[b + 9] = now;
-            return tcp_say(tcp, bufs, found, ours, true, out, o);
         }
-        if opened || again {
-            // the window was zero while our data was out: it is open again
-            return tcp_say(tcp, bufs, found, ours, false, out, o);
-        }
-        return 0;
+        return tcp_say(tcp, bufs, found, ours, start, out, o);
     }
-    if tcp[b] == 3 && !busy {
-        // the other end had finished, and now our last data has arrived: we finish too
-        tcp[b + 8] = 1;
-        tcp[b + 5] = plus(tcp[b + 5], 1);
-        tcp[b] = 4;
-        tcp[b + 9] = now;
-        return tcp_say(tcp, bufs, found, ours, true, out, o);
-    }
-    if n > 0 || fin != 0 || again {
-        // after its FIN the other end has nothing more to send
-        return tcp_say(tcp, bufs, found, ours, false, out, o);
+    if freed > 0 || aside || n > 0 || fin != 0 {
+        // room was made, so the window is wider; or the segment was not the next one; or it came after
+        // the other end's FIN, when there is nothing more for it to send
+        return tcp_say(tcp, bufs, found, ours, -1, out, o);
     }
     return 0;
 }
@@ -816,7 +813,7 @@ pub fn tcp_tick[&t, &b, &o](tcp: &!t [int], bufs: &!b [byte], c: int, now: int, 
     }
     tcp[b + 10] = tcp[b + 10] + 1;
     tcp[b + 9] = now;
-    let m = tcp_say(tcp, bufs, c, ours, true, out, o);
+    let m = tcp_say(tcp, bufs, c, ours, 0, out, o);
     if m < 0 {
         return 0;
     }

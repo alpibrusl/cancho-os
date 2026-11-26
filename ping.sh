@@ -75,7 +75,7 @@ if [ -n "$ready" ]; then
         status=1
     fi
     # a port nothing listens on: the kernel must say no at once (a reset), not leave Linux waiting
-    refused=$(timeout 5 nc -w 3 10.0.0.2 9 < /dev/null 2>&1)
+    refused=$(timeout 5 nc -v -w 3 10.0.0.2 9 < /dev/null 2>&1 | tr "\n" " ")
     echo "tcp port 9: ${refused:-no answer}"
     echo "$refused" | grep -qi refused || status=1
     if [ "$MACHINE" = virt ]; then
