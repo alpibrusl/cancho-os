@@ -1,6 +1,6 @@
 # Loading a kernel over the serial line
 
-> **Status: built; in QEMU on all three boards.** On the real Pi 4: see the end.
+> **Status: built; in QEMU on all three boards.** Not yet tried on the real Pi 4.
 
 ## What is wanted
 
@@ -48,7 +48,7 @@ At the commit that adds this file, QEMU 11.1.3, `./load.sh` (and `MACHINE=raspi4
 QEMU has no caches, so the part of the stub that empties them and turns them off has been assembled
 and executed there, and tested by nothing. That part is what a real board decides.
 
-REAL_BOARD
+**On the real Pi 4: not tried yet.** The kernel on the card there is 0.0.17, which has no `load`.
 
 ## What it does not do
 
