@@ -2,11 +2,22 @@
 
 Site: https://alpibrusl.github.io/cancho-os/
 
-Raspberry Pi first: that is the board it boots on today (Pi 3 and Pi 4 in QEMU, and QEMU's own
-`virt` machine, which is where the network card is; a Pi 5 is the
-robot's board and is next). Nothing in the design is tied to it: the shell, the servo
+[![A 37-second recording: SSH into cancho-os on a real Raspberry Pi 4](docs/demo/pi4-ssh.poster.jpg)](docs/demo/pi4-ssh.mp4)
+*A real session, 2026-11-26: a Mac logs in over SSH to the kernel on a Raspberry Pi 4 on a home network. Only
+the typing is scripted ([`docs/demo/session.py`](docs/demo/session.py)); re-render with `agg` and `ffmpeg` from
+[`docs/demo/pi4-ssh.cast`](docs/demo/pi4-ssh.cast).*
+
+**Where it stands** (2026-11-26):
+
+- **On a real Raspberry Pi 4:** it boots, gets an address from a home router through its own Ethernet card,
+  resolves names, and gives its shell over SSH. One board, one network.
+- **In QEMU, on every change:** all of that, as a Pi 3, a Pi 4 and QEMU's `virt` machine; and a FAT disk read.
+- **Not yet:** writing files, the SD card on a real board, separate programs, moving a servo, the Pi 5
+  (its code is written from the board's device tree and has never run).
+
+Raspberry Pi first. Nothing in the design is tied to it: the shell, the servo
 protocol, the kinematics and the safety core are plain cancho, and what is specific to the
-board is the boot assembly, three drivers and the page-table format. A PC with UEFI is the
+board is the boot assembly, the drivers and the page-table format. A PC with UEFI is the
 planned second target (docs/ROADMAP.md).
 
 No Linux and no C: the firmware loads `kernel8.img`, a page of assembly

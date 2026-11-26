@@ -63,6 +63,9 @@ code { font-family: var(--mono); font-size: .9em; background: var(--soft); paddi
 .term .bar i { width: .65rem; height: .65rem; border-radius: 50%; background: #2d3440; display: block; }
 .term .c { color: #8b95a5; } .term .r { color: #ff9a92; }
 .term pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.vid { max-width: 46rem; margin: 1.2rem auto 0; }
+.vid video { width: 100%; height: auto; display: block; border-radius: 12px; border: 1px solid var(--line); background: #0d1117; }
+.vid .caption { margin-top: .6rem; color: var(--muted); font-size: .88rem; }
 
 .three { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); margin-top: 3rem; }
 .three div { border-top: 3px solid var(--accent); padding-top: .8rem; }
@@ -145,38 +148,49 @@ ul.why span { color: var(--muted); font-size: .95rem; }
 
 <section class="hero" style="padding-top:3.5rem">
   <div>
-    <p class="badge"><i></i>Research &middot; boots in QEMU &middot; not yet run on a real board</p>
+    <p class="badge"><i></i>Research &middot; runs on a real Raspberry Pi 4 &middot; every change booted in QEMU</p>
     <h1>An operating system written in cancho, with no Linux and no C.</h1>
     <p class="lead">A kernel for the Raspberry Pi: the firmware loads one image, a page of assembly calls <code>main</code>, and everything after that is cancho, drivers included.</p>
     <p class="sub">The question it exists to answer: can the compiler say, before the kernel runs, every address and every processor register it is able to touch, and which function holds which device?</p>
-    <div class="cta"><a class="btn primary" href="#pi4">Put it on a Pi 4</a><a class="btn ghost" href="https://github.com/alpibrusl/cancho-os">Source</a></div>
+    <div class="cta"><a class="btn primary" href="#video">Watch it on a real Pi 4 (37 s)</a><a class="btn ghost" href="#pi4">Put it on yours</a><a class="btn ghost" href="https://github.com/alpibrusl/cancho-os">Source</a></div>
   </div>
-  <div class="term" role="img" aria-label="A session on the kernel's serial console in QEMU"><div class="bar"><i></i><i></i><i></i></div>
-<pre><span class="c"># ./test.sh about uptime 'servo scan' 'crash null'   (QEMU, six simulated servos)</span>
-cancho-os booted. type `help`.
+  <div class="term" role="img" aria-label="A session over SSH on a real Raspberry Pi 4"><div class="bar"><i></i><i></i><i></i></div>
+<pre><span class="c"># a Mac, and on the same network a Raspberry Pi 4 running cancho-os</span>
+$ ssh cancho@192.168.1.24
+cancho-os: the kernel's shell, over SSH. `help` lists the commands, `exit` leaves.
 &gt; about
-cancho-os 0.0.9: a kernel written in cancho, no Linux underneath (Raspberry Pi 3)
-&gt; uptime
-2.943 s
-&gt; servo scan
-servo 1: present
-<span class="c">...</span>
-6 servos found
-&gt; crash null
-
-<span class="r">*** data abort: address not mapped (vector 4)</span>
-    esr 0x0000000096000007
-    elr 0x0000000000089aa8
-    far 0x0000000000000000
-halted.</pre></div>
+cancho-os 0.0.22: a kernel written in cancho, no Linux underneath (Raspberry Pi 4)
+&gt; random
+random (the RNG200): a3cecc93f141bf4bf2425ab65f24a3f6
+&gt; ping example.com
+reply from 104.20.23.154 in 2060 us
+&gt; arm zero
+gripper at x 391361 y -9 z 226469 um
+&gt; disk
+<span class="r">no disk: QEMU's virt machine has one when it is given one; a Pi's card has no driver yet</span>
+&gt; exit
+bye</pre></div>
 </section>
 
 <div class="stats">
   <div><b>0</b><span>lines of C, and no foreign function the kernel calls</span></div>
-  <div><b>64 KB</b><span>the whole image, <code>kernel8.img</code>, for Pi 3 and Pi 4</span></div>
-  <div><b>15 + 10</b><span>processor registers and address ranges it can touch, each listed</span></div>
-  <div><b>0</b><span>real boards it has run on so far</span></div>
+  <div><b>300 KB</b><span>the whole image, <code>kernel8.img</code>, SSH and its cryptography included</span></div>
+  <div><b>15 + 32</b><span>processor registers and address ranges it can touch, each listed</span></div>
+  <div><b>1</b><span>real board it has run on, a Pi 4; the Pi 5's code has never run</span></div>
 </div>
+
+<section id="video">
+  <h2>On a real board</h2>
+  <p class="sub">A Mac logs in over SSH to the kernel on a Raspberry Pi 4, cabled to a home router. The board got its address from the router, looked a name up and pinged it; the random numbers are the chip's own.</p>
+  <div class="vid">
+    <video controls preload="none" playsinline poster="demo/pi4-ssh.poster.jpg" aria-label="A 37-second recording of an SSH session on cancho-os on a Raspberry Pi 4">
+      <source src="demo/pi4-ssh.mp4" type="video/mp4">
+      <source src="demo/pi4-ssh.webm" type="video/webm">
+      Your browser cannot play this video: <a href="demo/pi4-ssh.mp4">download the recording</a>.
+    </video>
+    <p class="caption">A real session, recorded on 2026-11-26 (<a href="demo/pi4-ssh.mp4">download</a>, or the <a href="demo/pi4-ssh.cast">asciinema cast</a> it was rendered from). What the kernel answers is whatever it answered; only the typing is scripted (<a href="https://github.com/alpibrusl/cancho-os/blob/main/docs/demo/session.py"><code>session.py</code></a>), and the ssh options that skip the host-key question are not shown: the kernel's key is new at every start, because it has nowhere to keep one yet.</p>
+  </div>
+</section>
 
 <section id="why">
   <h2>Why an operating system, and why cancho</h2>
@@ -191,7 +205,7 @@ halted.</pre></div>
 
 <section id="today">
   <h2>What it does today</h2>
-  <p class="sub">Booted on a real Raspberry Pi 4 on 2026-11-26, and put on a home network through its own Ethernet card the same day. The rest in QEMU: as a Pi 3 and a Pi 4 from one image, and on QEMU's own <code>virt</code> board for the network card.</p>
+  <p class="sub">On a real Raspberry Pi 4 (since 2026-11-26): it boots, joins a home network through its own Ethernet card, and is logged in to over SSH. Everything is also booted in QEMU on every change, as a Pi 3, a Pi 4 and QEMU's own <code>virt</code> board, which is the only place the disk is so far.</p>
   <div class="cols">
     <div><h3>Built</h3><ul>
       <li>A serial console and a small shell</li>
@@ -209,10 +223,12 @@ halted.</pre></div>
     </ul></div>
     <div class="no"><h3>Not built</h3><ul>
       <li>Moving a servo (waits for the safety core's actuation side)</li>
-      <li>Separate programs, an SD card driver, files</li>
+      <li>Separate programs: one image does everything</li>
       <li>Preemption, and more than one core</li>
       <li>The Pi 5, which is the robot's board: its console, timer and memory map are written from the board's own device tree and have never run</li>
-      <li>Storage, Wi-Fi, USB, display</li>
+      <li>Writing files, and the SD card on a real board</li>
+      <li>Users and permissions (keys, grants and a record: designed, not built)</li>
+      <li>Wi-Fi, USB, display</li>
     </ul></div>
   </div>
 </section>
@@ -259,27 +275,29 @@ never touches
 
 <section id="pi4">
   <h2>Put it on a Pi 4</h2>
-  <p class="sub"><strong>Nobody has done this yet.</strong> Everything above was measured in QEMU. These are the steps that should boot it on a board; if you run them, what the console prints is worth an <a href="https://github.com/alpibrusl/cancho-os/issues">issue</a>.</p>
+  <p class="sub"><strong>Done on one board</strong> (a Pi 4 Model B, 4 GB, with firmware of 2021). These are the steps; if you run them on another, what the console prints is worth an <a href="https://github.com/alpibrusl/cancho-os/issues">issue</a>.</p>
   <p class="sub">You need a Raspberry Pi 4, a microSD card and a USB-serial cable with <strong>3.3 V</strong> levels. A 5 V cable damages the pins.</p>
   <div class="tasks">
     <div><h3 class="task">1. Build the image</h3><p>The compiler is built from cancho's <code>main</code> with <code>clang</code> alone; then the kernel. LLVM's <code>ld.lld</code> and <code>llvm-objcopy</code> must be on the path.</p>
 <pre class="code" tabindex="0">git clone https://github.com/alpibrusl/cancho &amp;&amp; cd cancho
 sh scripts/build-standalone.sh --out /tmp/cancho-out --rev $(git rev-parse HEAD)
-cd .. &amp;&amp; git clone https://github.com/alpibrusl/cancho-os &amp;&amp; cd cancho-os
-CANCHO=/tmp/cancho-out/cancho ./build.sh        <span class="c"># writes build/kernel8.img</span></pre></div>
+cd .. &amp;&amp; git clone https://github.com/alpibrusl/cancho-ssh
+git clone https://github.com/alpibrusl/cancho-os &amp;&amp; cd cancho-os
+AUTHORIZED=~/.ssh/id_ed25519.pub CANCHO=/tmp/cancho-out/cancho ./build.sh   <span class="c"># writes build/kernel8.img; that key may log in over SSH</span></pre></div>
     <div><h3 class="task">2. Put the firmware on the card</h3><p>The Pi's own firmware loads the kernel and is not part of this repository. Flash Raspberry Pi OS Lite with Raspberry Pi Imager, which leaves the firmware on the card's FAT partition (<code>bootfs</code>); or format the card FAT32 and copy <code>start4.elf</code> and <code>fixup4.dat</code> from <a href="https://github.com/raspberrypi/firmware/tree/master/boot">raspberrypi/firmware</a>.</p></div>
-    <div><h3 class="task">3. Copy two files</h3><p>The kernel and a four-line <code>config.txt</code>: 64-bit, this kernel, the UART on, and the PL011 on the header pins instead of the Bluetooth chip.</p>
+    <div><h3 class="task">3. Copy two files</h3><p>The kernel and a short <code>config.txt</code>: 64-bit, this kernel, the UART on, and the PL011 on the header pins instead of the Bluetooth chip.</p>
 <pre class="code" tabindex="0">cp build/kernel8.img board/config.txt /Volumes/bootfs/     <span class="c"># macOS, card mounted as bootfs</span>
 diskutil eject /Volumes/bootfs</pre></div>
     <div><h3 class="task">4. Wire the cable</h3><p>On the 40-pin header: GND to pin 6, the cable's RX to pin 8 (GPIO14), the cable's TX to pin 10 (GPIO15). Leave the cable's power wire unconnected.</p></div>
-    <div><h3 class="task">5. Open the console, then power the Pi</h3><p>115200 baud, 8N1. It should print the banner, and <code>about</code> should say <code>(Raspberry Pi 4)</code>.</p>
+    <div><h3 class="task">5. Open the console, then power the Pi</h3><p>115200 baud, 8N1. It prints the banner, and <code>about</code> says <code>(Raspberry Pi 4)</code>. With an Ethernet cable in: <code>net eth</code>, <code>net dhcp</code>, <code>net ssh on</code>, and then <code>ssh</code> from another machine.</p>
 <pre class="code" tabindex="0">screen /dev/cu.usbserial-XXXX 115200      <span class="c"># macOS; the name depends on the cable</span>
 picocom -b 115200 /dev/ttyUSB0            <span class="c"># Linux</span></pre></div>
   </div>
   <h3 style="margin-top:2.2rem">Where a real board may differ from QEMU</h3>
   <ul class="why">
-    <li><b>The data cache</b><span>The kernel turns it on with the MMU and does not invalidate it first. QEMU has no cache. A hang right after boot points here.</span></li>
+    <li><b>The data cache</b><span>The boot stub empties the caches before the kernel turns them on. QEMU has no cache; a real board showed what happens without that. A hang right after boot would still point here.</span></li>
     <li><b>The UART clock</b><span>The divisor is for 48 MHz, the Pi 4's default. Garbage on the console points here.</span></li>
+    <li><b>No second cable needed</b><span>A second Pi can be the serial cable: three wires between the two headers (pin 6 to pin 6, pins 8 and 10 crossed). That is how the board above was reached.</span></li>
     <li><b>The servo bus</b><span>It does not work on a Pi 4 header yet: it is the mini UART, whose only header pins are the two the console uses. It has to move to another UART before a real arm can be read.</span></li>
   </ul>
   <p class="note">To try it without a board: <code>./run.sh</code> boots the same image in QEMU (<code>qemu-system-aarch64</code>, version 9 or later for the Pi 4 model).</p>
@@ -288,8 +306,10 @@ picocom -b 115200 /dev/ttyUSB0            <span class="c"># Linux</span></pre></
 <section class="status" id="status" style="padding:1.3rem 1.5rem">
   <h2>Status</h2>
   <ul>
-    <li><strong>Research.</strong> One kernel image that boots, reads and reports. It does not load programs yet, so it is not an operating system in the sense most people mean.</li>
-    <li>Measured in QEMU only, as a Pi 3 and a Pi 4. No real board has run it.</li>
+    <li><strong>Research.</strong> One kernel image that boots, answers on a network and gives a shell over SSH. It does not load programs yet, so it is not an operating system in the sense most people mean.</li>
+    <li>It runs on one real board, a Raspberry Pi 4, on one home network. The Pi 5's code has never run. Everything else is measured in QEMU, on every change.</li>
+    <li>Its SSH is <a href="https://github.com/alpibrusl/cancho-ssh">cancho-ssh</a>, which nobody but its author has read: for a network you trust.</li>
+    <li>It reads a FAT disk in QEMU and writes nothing anywhere; on a real board it has no disk.</li>
     <li>It cannot move a servo, by design, until the safety core's actuation side exists in cancho-robot.</li>
     <li>What is next and why is in the <a href="https://github.com/alpibrusl/cancho-os/blob/main/docs/ROADMAP.md">roadmap</a>.</li>
   </ul>
