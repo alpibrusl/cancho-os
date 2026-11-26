@@ -171,3 +171,19 @@ in CI, on a volume where another system made the first long name):
 | 12 files with names of 35 characters in one directory of a FAT32 volume with 512-byte clusters, one removed, one added | the directory grew over several clusters; all read back; nothing wrong |
 | over SSH: `src/calibration.cho` of this repository sent with `board/put.sh` to `compiler/calibration.cho` | kept; `sum` gives Python's checksum |
 | `write bad:name.txt x`, `write trailing. x` | "not a name" |
+
+## On the real card
+
+The same day, on the Raspberry Pi 4 and the card it boots from, over SSH; the kernel (0.0.34) had been
+sent to that card with `board/put.sh` and the board restarted into it, with nobody at it:
+
+| what | result |
+|---|---|
+| `mkdir sources`, `write sources/a-note-with-a-long-name.text ...`, `cat` of it | made; written; read back |
+| `src/calibration.cho` of this repository sent with `board/put.sh` to `sources/calibration.cho`, then `sum` | kept; 5,542 bytes, the checksum Python gives the file |
+| `write` over the note, then `remove` of it | a version each time; `ls sources` then lists `calibration.cho` alone |
+| the firmware's own long names, which another system wrote: `ls overlays`, `cat overlays/README`, `sum bcm2711-rpi-4-b.dtb` | listed under their long names; the README's first lines; 49,090 bytes |
+| `record` | 26 lines, each following |
+
+Not done there: no other system has checked the card since. The last time one did (Linux's `fsck.fat`,
+[`sdcard.md`](sdcard.md)) was before directories and long names existed.
