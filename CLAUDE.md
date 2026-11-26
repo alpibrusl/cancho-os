@@ -33,6 +33,9 @@ Rules of the road
   A change to TCP is tried against a real stack before it is believed: `MACHINE=virt TCPFILE=... ./test.sh`
   (QEMU's own TCP) here, `sudo ./ping.sh` (Linux's) in CI. Twice every test passed and a real stack
   showed the code wrong (docs/network.md, section 7): never take back window that was offered.
+- The shell on port 23 (`net shell on`, docs/network.md section 8) has no password and no encryption. It must
+  stay off by default and openable only from the serial console, and it must be removed or put behind SSH
+  before any command can move a servo. All shell output goes through `putc`: never write to the UART elsewhere.
 - Three boards, two links. `MACHINE=virt` is QEMU's own board (RAM at 1 GB: every RAM address in the kernel
   is `k[14] +` an offset, and each capability's bound lists the Pi's addresses and virt's). build.sh links
   `build/kernel-virt.elf` for it. The virtio card's memory is the `dma` capability, 64 KB the link script

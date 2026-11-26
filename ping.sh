@@ -7,7 +7,7 @@
 #   sudo MACHINE=virt ./ping.sh   the same over Ethernet: QEMU's virt machine, its network card on a tap interface
 # Exit 0 if every ping was answered, a UDP datagram to port 7 came back, a TCP connection to it echoed a line
 # and then 64 KB (BYTES=n for another size), port 9 refused one, and the kernel's own ping of this machine
-# was answered.
+# was answered; and port 23 refused a connection before `net shell on` and gave the kernel's shell after it.
 set -u
 cd "$(dirname "$0")"
 MACHINE=${MACHINE:-raspi3b}
@@ -78,6 +78,18 @@ if [ -n "$ready" ]; then
     refused=$(timeout 5 nc -v -w 3 10.0.0.2 9 < /dev/null 2>&1 | tr "\n" " ")
     echo "tcp port 9: ${refused:-no answer}"
     echo "$refused" | grep -qi refused || status=1
+    # the shell's port is closed until the console opens it
+    closed=$(timeout 5 nc -v -w 3 10.0.0.2 23 < /dev/null 2>&1 | tr "\n" " ")
+    echo "tcp port 23, before: ${closed:-no answer}"
+    echo "$closed" | grep -qi refused || status=1
+    printf 'net shell on\r' >&3
+    sleep 1
+    # the kernel's shell from Linux: two lines a second apart, answered while the connection is open, then
+    # Linux finishes and the kernel does
+    (printf 'about\n'; sleep 1; printf 'mem\n'; sleep 1) | timeout 15 nc -N -w 5 10.0.0.2 23 | tr -d '\r' | sed 's/^/remote: /' > build/remote.txt
+    cat build/remote.txt
+    grep -q "^remote: > cancho-os .* no Linux underneath" build/remote.txt || status=1
+    grep -q "r-x  kernel code" build/remote.txt || status=1
     if [ "$MACHINE" = virt ]; then
         # what this machine's own ARP table learned from the kernel's answer
         ip neigh show dev tap0

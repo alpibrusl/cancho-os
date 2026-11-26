@@ -130,7 +130,9 @@ UART); the protocol, and everything built on it, does not. Not verified in QEMU:
 
 The kernel answers `ping`, a UDP echo and a TCP echo (port 7) over two links: a serial line
 (SLIP) on the second serial port of a Pi, and Ethernet, with ARP, through a virtio network card
-on QEMU's `virt` machine. It can also speak first: `ping 10.0.0.1` in its shell. TCP here is small
+on QEMU's `virt` machine. It can also speak first: `ping 10.0.0.1` in its shell. And `net shell on`, typed at the serial
+console, gives that shell to whoever connects to port 23 (`nc 10.0.0.2 23`): no password and no
+encryption, so only on a cable you trust, and only until SSH replaces it. TCP here is small
 on purpose: connections are opened from the other end only, and at most one segment's worth of
 data (966 bytes) is unacknowledged at a time. No real network card yet: QEMU's Pi 4 has no Ethernet controller, so the Pi's own is
 for the day a board boots. [docs/network.md](docs/network.md) has the reasoning and what is
@@ -141,6 +143,7 @@ NET=1 ./test.sh 'net up' 'echo wait' 'echo wait' net   # sim/netpeer.cho is the 
 sudo ./ping.sh                                          # Linux: the system's own ping, over a pty
 MACHINE=virt UDP=hello ./test.sh 'net up' net           # Ethernet: a datagram from this machine to the kernel
 MACHINE=virt TCP=hello ./test.sh 'net up' 'ping 10.0.0.1' net   # a TCP connection, and the kernel's own ping
+MACHINE=virt RSH='about\nmem\n' ./test.sh 'net up' 'net shell on' net   # the kernel's shell, over a connection
 sudo MACHINE=virt ./ping.sh                             # Linux: ping over a tap interface, ARP first
 ```
 

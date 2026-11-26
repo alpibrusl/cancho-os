@@ -7,6 +7,9 @@
 #   MACHINE=virt UDP=hello ./test.sh 'net up' net     and a datagram sent to the kernel's echo port from here
 #   MACHINE=virt TCP=hello ./test.sh 'net up' net     the same over a TCP connection (the host's stack opens it)
 #   MACHINE=virt TCPFILE=path ./test.sh 'net up' net  a whole file over one, and whether it came back the same
+#   MACHINE=virt RSH='about\nticks\n' ./test.sh 'net up' 'net shell on' net
+#                                        those lines typed into the kernel's shell over a connection to port 23
+#                                        (after the second line given here), and what it answered
 #   SERVOS=1 ./test.sh 'servo scan'      with six simulated servos on the board's second serial
 #                                        port (build/servos, from sim/servos.cho: see build.sh)
 #   NET=1 ./test.sh 'net up' net         with the network peer on that port instead (build/netpeer, from
@@ -37,7 +40,7 @@ if [ "$MACHINE" = virt ]; then
     # QEMU's own board: one serial port (no servo bus), RAM at 1 GB. A Cortex-A57 is how the kernel knows it.
     # A network card on QEMU's own user-mode network: the host is 10.0.0.1, the kernel 10.0.0.2, and a
     # datagram sent to this machine's port 5507 reaches the kernel's port 7, and so does a connection.
-    MACHINE="virt -cpu cortex-a57 -m 1G -global virtio-mmio.force-legacy=false -netdev user,id=n0,net=10.0.0.0/24,host=10.0.0.1,hostfwd=udp:127.0.0.1:5507-10.0.0.2:7,hostfwd=tcp:127.0.0.1:5507-10.0.0.2:7 -device virtio-net-device,netdev=n0 ${DUMP:+-object filter-dump,id=f0,netdev=n0,file=$DUMP}"
+    MACHINE="virt -cpu cortex-a57 -m 1G -global virtio-mmio.force-legacy=false -netdev user,id=n0,net=10.0.0.0/24,host=10.0.0.1,hostfwd=udp:127.0.0.1:5507-10.0.0.2:7,hostfwd=tcp:127.0.0.1:5507-10.0.0.2:7,hostfwd=tcp:127.0.0.1:5523-10.0.0.2:23 -device virtio-net-device,netdev=n0 ${DUMP:+-object filter-dump,id=f0,netdev=n0,file=$DUMP}"
     KERNEL=build/kernel-virt.elf
     BUS=
 fi
@@ -47,9 +50,15 @@ QEMU=$!
 exec 3> build/uart.in
 sleep 2
 first=1
+typed=0
 for line in "$@"; do
     printf '%s\r' "$line" >&3
     sleep 1
+    typed=$((typed + 1))
+    if [ "$typed" = 2 ] && [ -n "${RSH:-}" ]; then
+        # the kernel's shell from this machine: the lines go in, the connection is closed, the answers come back
+        printf "$RSH" | nc -w 5 127.0.0.1 5523 | tr -d '\r' | sed 's/^/remote: /' >> build/peer.txt
+    fi
     if [ -n "$first" ] && [ -n "${UDP:-}" ]; then
         # after the first line (`net up`): a datagram from this machine to the kernel's echo port
         printf "udp echo: '%s'\n" "$(printf '%s' "$UDP" | nc -u -w 1 127.0.0.1 5507)" > build/peer.txt
