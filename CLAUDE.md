@@ -87,6 +87,9 @@ Rules of the road
 - Randomness (docs/random.md): `rng_word` reads the generator, the pool at k[4136..] is what other code takes
   from. QEMU's raspi4b has no RNG200 and reading 0xfe104000 there faults: do not add the Pi 4 driver without
   a real board to try it on. Never print or reuse a word taken from the pool.
+- The servo bus through another machine (docs/netbus.md): `servo via` sets k[4262] (address) and k[4263] (port);
+  `transact` then calls `network.bus_exchange`. `board/busbridge.py` must keep passing on ONLY packets that read
+  (instructions 1, 2, 0x82): it is the one thing between a network and the arm's motors. Never add a write there.
 - `restart` (docs/restart.md) holds the `pm` capability, the watchdog's two registers; no other function may.
   It is due 50 ticks after it is asked (k[4261]; `getc` answers -6), so that what was said has left.
 - All shell output goes through `putc`: never write to the UART elsewhere. Over SSH it is queued in `k`.
