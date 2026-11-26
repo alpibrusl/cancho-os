@@ -1,0 +1,298 @@
+edition 14;
+
+module sshd;
+
+import inet;
+import ssh_server as ssh;
+import std.ed25519;
+
+// sshd.cho -- the kernel's shell over SSH (docs/ssh.md). SSH itself is cancho-ssh, which is given bytes and
+// gives bytes back; this file is the loop between it and three things the kernel already had: a connection
+// (`inet.tcp_read`, `tcp_write`), the line being typed over it (`rline`, k[31] bytes of it) and the queue of
+// what the shell printed (k[40..], k[27] of it, which `putc` fills). It holds no hardware.
+//
+// State, besides the kernel's `k`: `si` and `sb` are cancho-ssh's own; `sx` is this file's:
+//    0..32 the host key's seed   32..64 its public half   64..96 a connection's 32 random bytes
+//    96..352 what was read from the connection and not yet taken   352..480 the keys that may log in
+// In `k`: k[29] the connection that has the shell, plus one   k[30] the port (22)   k[4153] 1: the port is SSH's
+//    k[4160] the host key: 0 not made, 1 made and not yet shown, 2 shown   k[4161] k[4162] the unread bytes
+//    k[4163] the session running (cancho-ssh's count; 0: none)   k[4164] how many keys may log in
+//    k[4152] the session is to end when its output has gone
+
+pub fn ints() -> [] int {
+    return ssh.ints_len();
+}
+
+pub fn bytes() -> [] int {
+    return ssh.bytes_len(4096);
+}
+
+pub fn extra() -> [] int {
+    return 480;
+}
+
+// One byte for the client, by the same queue `putc` fills.
+fn say[&s](k: &!s [int], c: int) -> [] int {
+    if k[27] < 4096 {
+        k[40 + k[27]] = c;
+        k[27] = k[27] + 1;
+    }
+    return 0;
+}
+
+// Thirty-two bytes from the pool of random words (eight of them, used once), into `into`.
+fn draw[&s, &d](k: &!s [int], into: &!d [byte]) -> [] int {
+    var i = 0;
+    while i < 8 {
+        k[37] = k[37] - 1;
+        let w = k[4136 + k[37]];
+        k[4136 + k[37]] = 0;
+        into[i * 4] = byte_of(w >> 24 & 255);
+        into[i * 4 + 1] = byte_of(w >> 16 & 255);
+        into[i * 4 + 2] = byte_of(w >> 8 & 255);
+        into[i * 4 + 3] = byte_of(w & 255);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn forget[&s, &i, &b](k: &!s [int], si: &!i [int], sb: &!b [byte]) -> [] int {
+    ssh.forget(si, sb);
+    k[29] = 0;
+    k[27] = 0;
+    k[28] = 0;
+    k[31] = 0;
+    k[32] = 0;
+    k[4152] = 0;
+    k[4161] = 0;
+    k[4162] = 0;
+    k[4163] = 0;
+    return 0;
+}
+
+// One turn of the loop. Answers 1 when a whole line is in `rline` for the shell to run, 2 when a session has
+// begun and should be greeted, 3 when the host key has just been made and should be shown on the console, 0
+// otherwise.
+pub fn step[&s, &t, &g, &h, &l, &w, &i, &b, &x](k: &!s [int], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], rline: &!l [byte], wire: &!w [byte], si: &!i [int], sb: &!b [byte], sx: &!x [byte], now: int) -> [] int {
+    if k[30] == 0 || k[39] != 0 {
+        return 0;
+    }
+    if k[4160] == 0 {
+        // the host key: 32 bytes nobody else has, and the public half that goes with them
+        if k[37] < 8 {
+            return 0;
+        }
+        draw(k, sx[0..32]);
+        ed25519.public_key_from_seed(sx[0..32], wire[0..32]);
+        var p = 0;
+        while p < 32 {
+            sx[32 + p] = wire[p];
+            p = p + 1;
+        }
+        k[4160] = 1;
+        return 3;
+    }
+    if k[29] != 0 && inet.tcp_state(tcp, k[29] - 1) != 2 && inet.tcp_state(tcp, k[29] - 1) != 3 {
+        forget(k, si, sb);
+    }
+    if k[29] == 0 {
+        var found = -1;
+        var c = 0;
+        while c < inet.tcp_count(tcp, bufs, inbox) && found < 0 {
+            if inet.tcp_port(tcp, c) == k[30] && (inet.tcp_state(tcp, c) == 2 || inet.tcp_state(tcp, c) == 3) {
+                found = c;
+            }
+            c = c + 1;
+        }
+        // a connection waits unread until the pool has the 32 bytes it is owed
+        if found < 0 || k[37] < 8 {
+            return 0;
+        }
+        forget(k, si, sb);
+        draw(k, sx[64..96]);
+        if ssh.start(si, sb, sx[0..32], sx[32..64], sx[64..96]) != 0 {
+            inet.tcp_close(tcp, found);
+            return 0;
+        }
+        k[29] = found + 1;
+    }
+    let c = k[29] - 1;
+    var rounds = 0;
+    while rounds < 8 {
+        rounds = rounds + 1;
+        // the rule of the loop (cancho-ssh, docs/cancho-os.md): the connection is read only when nothing else moved
+        var moved = false;
+        if k[4161] < k[4162] {
+            let took = ssh.feed(si, sb, sx[96 + k[4161]..96 + k[4162]]);
+            if took > 0 {
+                k[4161] = k[4161] + took;
+                moved = true;
+            } else if took < 0 {
+                k[4161] = k[4162];
+            }
+        }
+        let waiting = len(ssh.pending(si, sb));
+        if waiting > 0 {
+            // only what the connection had room for is said to have gone
+            let went = inet.tcp_write(tcp, bufs, c, ssh.pending(si, sb), 0, waiting);
+            if went > 0 {
+                ssh.sent(si, sb, went);
+                moved = true;
+            }
+        }
+        if ssh.wants(si) == ssh.want_auth() {
+            ssh.auth_decide(si, sb, ssh.key_listed(sx[352..352 + k[4164] * 32], ssh.auth_key(si, sb)));
+            moved = true;
+        }
+        if ssh.session(si) == ssh.session_none() {
+            k[4163] = 0;
+        } else if k[4163] != ssh.session_count(si) {
+            k[4163] = ssh.session_count(si);
+            k[27] = 0;
+            k[31] = 0;
+            k[32] = 0;
+            k[4152] = 0;
+            if ssh.session(si) == ssh.session_command() {
+                // `ssh host command`: the one line, and the session ends with it
+                var n = 0;
+                while n < len(ssh.command(si, sb)) && n < len(rline) {
+                    rline[n] = ssh.command(si, sb)[n];
+                    n = n + 1;
+                }
+                k[31] = n;
+                k[4152] = 1;
+                return 1;
+            }
+            return 2;
+        }
+        if k[4163] != 0 && k[27] > 0 {
+            var n = k[27];
+            if n > len(wire) {
+                n = len(wire);
+            }
+            var j = 0;
+            while j < n {
+                wire[j] = byte_of(k[40 + j] & 255);
+                j = j + 1;
+            }
+            let wrote = ssh.write(si, sb, wire[0..n]);
+            if wrote > 0 {
+                j = wrote;
+                while j < k[27] {
+                    k[40 + j - wrote] = k[40 + j];
+                    j = j + 1;
+                }
+                k[27] = k[27] - wrote;
+                moved = true;
+            }
+        }
+        if ssh.wants(si) == ssh.want_data() {
+            // what was typed, copied out so that it can be taken a byte at a time
+            var have = 0;
+            while have < len(ssh.received(si, sb)) && have < len(wire) {
+                wire[have] = ssh.received(si, sb)[have];
+                have = have + 1;
+            }
+            var used = have;
+            var whole = false;
+            if k[4163] != 0 && k[4152] == 0 {
+                // a client that asked for a terminal echoes nothing itself: the kernel does
+                let echo = ssh.terminal(si);
+                used = 0;
+                if k[27] > 0 {
+                    // nothing more is read until what was said has gone
+                    have = 0;
+                }
+                while used < have && !whole && k[4152] == 0 {
+                    let ch = int_of(wire[used]);
+                    used = used + 1;
+                    if ch == 10 && k[32] != 0 {
+                        k[32] = 0;
+                    } else if ch == 13 || ch == 10 {
+                        k[32] = 0;
+                        if ch == 13 {
+                            k[32] = 1;
+                        }
+                        if echo {
+                            say(k, 13);
+                            say(k, 10);
+                        }
+                        whole = true;
+                    } else if ch == 127 || ch == 8 {
+                        k[32] = 0;
+                        if k[31] > 0 {
+                            k[31] = k[31] - 1;
+                            if echo {
+                                say(k, 8);
+                                say(k, 32);
+                                say(k, 8);
+                            }
+                        }
+                    } else if ch == 3 {
+                        // Ctrl-C: the line is dropped
+                        k[32] = 0;
+                        k[31] = 0;
+                        say(k, '^');
+                        say(k, 'C');
+                        say(k, 13);
+                        say(k, 10);
+                        say(k, '>');
+                        say(k, ' ');
+                    } else if ch == 4 && k[31] == 0 {
+                        // Ctrl-D on an empty line: the session ends
+                        k[4152] = 1;
+                    } else {
+                        k[32] = 0;
+                        if ch >= 32 && ch < 127 && k[31] < len(rline) {
+                            rline[k[31]] = byte_of(ch);
+                            k[31] = k[31] + 1;
+                            if echo {
+                                say(k, ch);
+                            }
+                        }
+                    }
+                }
+            }
+            if used > 0 {
+                ssh.consume(si, sb, used);
+                moved = true;
+            }
+            if whole {
+                return 1;
+            }
+        } else if k[4163] != 0 && ssh.peer_eof(si) && k[27] == 0 {
+            // the client will send no more (its input was a file, say): the session ends
+            k[4152] = 1;
+        }
+        if k[4163] != 0 && k[4152] != 0 && k[27] == 0 {
+            if ssh.exit_session(si, sb, 0) == 0 {
+                k[4163] = 0;
+                k[4152] = 0;
+                moved = true;
+            }
+        }
+        if ssh.wants(si) == ssh.want_nothing() {
+            if len(ssh.pending(si, sb)) == 0 {
+                // the connection is over, from either side
+                inet.tcp_close(tcp, c);
+                forget(k, si, sb);
+                return 0;
+            }
+        } else if !moved && k[4161] == k[4162] {
+            k[4161] = 0;
+            k[4162] = inet.tcp_read(tcp, inbox, c, sx[96..352], 256);
+            if k[4162] == 0 {
+                if inet.tcp_state(tcp, c) == 3 {
+                    // the other end has finished without a word: so do we
+                    inet.tcp_close(tcp, c);
+                    forget(k, si, sb);
+                } else if inet.tcp_quiet(tcp, c, now) > 300000 {
+                    // nothing for five minutes: the kernel hangs up, and says so
+                    ssh.disconnect(si, sb);
+                }
+                return 0;
+            }
+        }
+    }
+    return 0;
+}

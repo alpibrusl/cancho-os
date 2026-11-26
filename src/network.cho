@@ -4,6 +4,7 @@ module network;
 
 import base;
 import inet;
+import sshd;
 
 // network.cho -- the kernel's side of the network: the two links (SLIP on the second serial
 // port, a virtio card), the board's random number generator, the shell over a connection,
@@ -927,10 +928,9 @@ pub fn session[&s, &t, &g, &h, &l, &w](k: &!s [int], tcp: &!t [int], bufs: &!g [
     return 0;
 }
 
-// Take what has arrived, at most eight packets, and answer each; move the shell's bytes;
-// then send again whatever a connection has had out too long, and whatever is new.
-// Answers what `session` does.
-pub fn net_poll[&mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l](bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], rline: &!l [byte], now: int, iss: int) -> [mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
+// Take what has arrived, at most eight packets, and answer each; then send again whatever a
+// connection has had out too long, and whatever is new.
+pub fn net_pump[&mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h](bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], now: int, iss: int) -> [mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
     var budget = 8;
     while budget > 0 {
         let n = link_recv(bus, vio, dma, k, ns, frame);
@@ -941,7 +941,6 @@ pub fn net_poll[&mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l](bus: &!mu Mmi
             budget = budget - 1;
         }
     }
-    let ready = session(k, tcp, bufs, inbox, rline, wire, now);
     var c = 0;
     while c < inet.tcp_count(tcp, bufs, inbox) {
         var m = 0;
@@ -966,6 +965,20 @@ pub fn net_poll[&mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l](bus: &!mu Mmi
         c = c + 1;
     }
     k[24] = inet.tcp_open(tcp, bufs, inbox);
+    return 0;
+}
+
+// What `getc` does while it waits for a key: move the shell's bytes to and from the connection
+// that has it (in the clear on port 23, or through SSH on port 22), then `net_pump`.
+// Answers what `session` or `sshd.step` does.
+pub fn net_poll[&mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l, &si, &sb, &sx](bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], rline: &!l [byte], si: &!si [int], sb: &!sb [byte], sx: &!sx [byte], now: int, iss: int) -> [mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
+    var ready = 0;
+    if k[4153] == 1 {
+        ready = sshd.step(k, tcp, bufs, inbox, rline, wire, si, sb, sx, now);
+    } else {
+        ready = session(k, tcp, bufs, inbox, rline, wire, now);
+    }
+    net_pump(bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, now, iss);
     return ready;
 }
 
@@ -1068,7 +1081,7 @@ fn put_bytes[&o, &d](out: &!o [byte], at: int, data: &d [byte], from: int, to: i
 // `http <address> <port>`: the kernel opens a connection, asks for `/` in HTTP/1.0, and
 // prints what comes back until the other end finishes, for at most five seconds. The
 // shell waits meanwhile; the network is served as always.
-pub fn net_http[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], rline: &!l [byte], dest: int, name: &r [byte], from: int, to: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
+pub fn net_http[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], dest: int, name: &r [byte], from: int, to: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
     let target = dest / 65536;
     let card = resolve(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, target);
     if card < 0 {
@@ -1090,7 +1103,7 @@ pub fn net_http[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l, &r](
     var printed = 0;
     k[39] = 1;
     while inet.tcp_state(tcp, c) != 0 && base.uptime_ms(cpu) - began < 5000 {
-        net_poll(bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, rline, base.uptime_ms(cpu), cpu_read(cpu, "cntvct_el0"));
+        net_pump(bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, base.uptime_ms(cpu), cpu_read(cpu, "cntvct_el0"));
         let state = inet.tcp_state(tcp, c);
         if state == 2 && !opened {
             opened = true;
@@ -1415,6 +1428,30 @@ fn begins[&r, &w](text: &r [byte], n: int, word: &w [byte]) -> [] bool {
 // `rline` is the line being typed over the shell's connection, which `http` must leave
 // alone while it waits; `text` is never that buffer.
 pub fn net_command[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l, &r, &mr, &mw](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], rng: &!mr Mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), fw: &!mw Mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4"), rline: &!l [byte], text: &r [byte], n: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4")] int {
+    if n == 10 && begins(text, n, "net ssh on") {
+        if k[26] != 0 {
+            base.puts(con, k, "only from the serial console\r\n");
+        } else if k[34] == 0 {
+            base.puts(con, k, "not without random numbers: with guessable ones SSH protects nothing (on a Pi 4, `net eth` starts the generator)\r\n");
+        } else {
+            k[30] = 22;
+            k[4153] = 1;
+            k[29] = 0;
+            base.puts(con, k, "ssh is on port 22; keys built into this image that may log in: ");
+            base.put_dec(con, k, k[4164]);
+            if k[4164] == 0 {
+                base.puts(con, k, " (so nobody can: AUTHORIZED=key.pub ./build.sh)");
+            }
+            base.puts(con, k, "\r\n");
+        }
+        return 1;
+    }
+    if n == 11 && begins(text, n, "net ssh off") {
+        k[30] = 0;
+        k[4153] = 0;
+        base.puts(con, k, "port 22 is closed\r\n");
+        return 1;
+    }
     if n == 5 && begins(text, n, "board") {
         put_board(con, fw, dma, k);
         return 1;
@@ -1486,7 +1523,7 @@ pub fn net_command[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l, &
         }
         let a = host(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, text, 5, sp);
         if a >= 0 {
-            net_http(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, rline, a * 65536 + port, text, 5, sp);
+            net_http(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, a * 65536 + port, text, 5, sp);
         }
         return 1;
     }
@@ -1570,7 +1607,14 @@ pub fn put_net[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201
     } else {
         base.puts(con, k, "connections begin at the counter's value: it can be guessed\r\n");
     }
-    if k[30] != 0 {
+    if k[30] != 0 && k[4153] == 1 {
+        base.puts(con, k, "ssh on port 22: ");
+        if k[29] != 0 {
+            base.puts(con, k, "a session is open\r\n");
+        } else {
+            base.puts(con, k, "nobody connected\r\n");
+        }
+    } else if k[30] != 0 {
         base.puts(con, k, "shell on port 23: ");
         if k[29] != 0 {
             base.puts(con, k, "a session is open\r\n");
