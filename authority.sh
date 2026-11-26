@@ -10,7 +10,7 @@ set -eu
 cd "$(dirname "$0")"
 CANCHO=${CANCHO:-cancho}
 SSH=$(cd "${SSH:-../cancho-ssh}" 2>/dev/null && pwd)
-SOURCES="src/feetech.cho src/calibration.cho src/kinematics.cho src/so101.cho src/safety.cho src/inet.cho src/base.cho src/network.cho src/sshd.cho src/fat.cho src/disk.cho src/keys.cho build/authorized.cho $(echo "$SSH"/src/*.cho)"
+SOURCES="src/feetech.cho src/calibration.cho src/kinematics.cho src/so101.cho src/safety.cho src/inet.cho src/base.cho src/network.cho src/sshd.cho src/fat.cho src/disk.cho src/keys.cho src/record.cho build/authorized.cho $(echo "$SSH"/src/*.cho)"
 mkdir -p build
 "$CANCHO" authority src/kernel.cho $SOURCES --std | sed '/^provably pure/,$d' > build/authority.txt
 if ! diff docs/authority.txt build/authority.txt; then

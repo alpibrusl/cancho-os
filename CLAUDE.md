@@ -45,7 +45,15 @@ Rules of the road
   Writing follows docs/permissions.md: the directory sector that names new data is written LAST, nothing
   that is on the disk is changed in place, and a write is believed only when another system's checker
   (`fsck.fat -n`, macOS `fsck_msdos -n`) finds nothing wrong and another system reads the bytes back.
-  Do not add replacing or removing a file before versions exist.
+  A write over a file or a `remove` gives what was there a name in `OLD` first and changes the file's own
+  entry last; only `purge`, at the console, frees a version. Directories are walked with their own table
+  buffer (`wt`), never the writer's `tab`, whose cached sector `w[5]` tracks.
+- The record (docs/permissions.md, slice 3): `src/record.cho` is pure and makes and checks LOG.TXT's lines;
+  its vectors come from Python's `hashlib`, and `tests/checklog.py` is the judge of a real file. Every
+  command that changes the disk calls `record_add` after its data is on the disk and before the one
+  sector that makes the change take effect, and stops if the line could not be added. The line format is
+  what other tools read: do not change a field without changing `checklog.py` and the doc. `OLD`, `LOG.TXT`
+  and `HOSTKEY.BIN` are names the shell does not change (`kept_name` in disk.cho).
 - Who may do what (docs/permissions.md): a session's role is k[4179] (2 an owner's key, 1 a reader's); a
   new shell command must be put on the reader's list in `reading` (kernel.cho) only if it changes nothing
   and reaches nowhere. `HOSTKEY.BIN` is never shown, copied or changed by the shell (`secret` in disk.cho).
@@ -62,7 +70,7 @@ Rules of the road
   keep "measured in QEMU" on everything that was not seen on the board.
 - The Pi 5 (docs/pi5.md) is the one board whose code no test runs: QEMU has none. Do not describe it as
   working, and do not add a Pi 5 driver (RP1, the RNG200, USB) before the console has been seen on a real board.
-- Three files, none near 2,000 lines: `src/kernel.cho` (boot, memory, shell, servo and arm), `src/base.cho`
+- Three big files, none near 2,000 lines: `src/kernel.cho` (boot, memory, shell, servo and arm), `src/base.cho`
   (console output, clock, bus bytes), `src/network.cho` (links, generator, session, network commands). A
   new network command goes in `network.net_command`, never in the shell's loop.
 - The kernel's address, mask, gateway and name server are k[4154..4157] (docs/addresses.md); nothing may

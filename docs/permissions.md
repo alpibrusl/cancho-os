@@ -1,9 +1,10 @@
 # Who may do what: keys, grants, versions and a record
 
-> **Status: design, with two slices built**, in QEMU: adding a file and adding to one
-> ([`storage.md`](storage.md)); and the host key kept, the keys file read, and two roles ("What is built"
-> below). Grants, versions, the record and approval are not built. It was written before the kernel
-> could write a single byte to a disk, because it decides how writing must work.
+> **Status: design, with three slices built**, in QEMU: adding a file and adding to one
+> ([`storage.md`](storage.md)); the host key kept, the keys file read, and two roles; and versions and
+> the record ("What is built" below, twice). Grants for agents and approval by a key are not built, and
+> nothing here has run on a real card. It was written before the kernel could write a single byte to a
+> disk, because it decides how writing must work.
 
 ## What is wanted
 
@@ -94,8 +95,8 @@ policy (which company is given what). Neither should grow the other's half.
   the shell has. A reader's runs what changes nothing and reaches nowhere (`ls`, `cat`, `sum`, `disk`,
   `about`, `mem` and the like) and is told so for anything else.
 - **A key is given by adding a line**: `append KEYS.TXT reader ssh-ed25519 AAAA...`, by an owner or at
-  the console. There is no taking one away yet: that is removing, which waits for versions. Until then
-  a key is taken away by editing the card on another machine.
+  the console. One is taken away by writing the file again without it, or by removing the file (slice
+  3): the keys are read again after either, and what the file held stays in `OLD`.
 
 Measured, at the commit that adds this section (`./keys.sh`, QEMU's `virt`, OpenSSH's client, three keys
 `ssh-keygen` made; on a FAT32 and a FAT16 volume):
@@ -115,7 +116,73 @@ not keys; 23,040 damaged lines, none traps). `./authority.sh` says "as recorded"
 
 What it does not do: a reader can still read every file but the host key, `KEYS.TXT` included (it holds
 only public halves); the role is the shell's doing, command by command, not a grant on part of the disk;
-nothing is recorded; and the port-23 shell, where it is turned on, asks nobody anything.
+and the port-23 shell, where it is turned on, asks nobody anything (the record calls it `port23 open`).
+
+## What is built (slice 3): versions and the record
+
+- **A write over a file keeps what was there.** The new contents go to free clusters. Then what the file
+  held is given a name of its own in the directory `OLD`, a number and `.V` (`OLD/00000003.V`). Then the
+  record gets its line. Last, the file's own directory entry is pointed at the new contents: one sector,
+  written once.
+- **`remove <name>`** is the same without new contents: the version's name, the line, then the file's
+  name is taken away.
+- **A version is read like a file**: `versions` lists them, `cat OLD/<name>` and `sum OLD/<name>` read one,
+  and `copy OLD/<name> <new>` brings one back under a name that is free.
+- **`purge <number>`** gives a version up for good and its clusters back. It is taken at the serial
+  console only: an owner's key over SSH is told so. That is the place approval by a person's key will
+  take (slice 5); until then the person is whoever holds the console.
+- **`LOG.TXT` is the record.** A line a change, added before the change's last sector is written, so
+  nothing takes effect that the record does not have:
+
+  ```
+  <number> <ticks> <who> <role> <action> <target> <from> <version> <bytes> <contents> <chain>
+  3 809 key:da8e761b716a82a8 owner write O.TXT - - 20 8b318dc7f66b... 5942da9fc95a...
+  ```
+
+  `who` is `console`, `kernel` (the host key, written by the kernel itself), `port23`, or `key:` and the
+  first 16 hex digits of the SHA-256 fingerprint `ssh-keygen -l` shows for the key that logged in.
+  `contents` is the SHA-256 of what was written; `chain` is the SHA-256 of the line before's chain and
+  this line. `ticks` is how long the machine had been running: there is still no time of day.
+- **The kernel checks it and so can anything else.** `record` walks the file and says how many lines it
+  has and the first that does not follow from the one before. `tests/checklog.py` does the same with
+  Python's `hashlib` and nothing of ours. While a line does not follow, changes are taken at the console
+  only.
+- **The shell will not write, add to, copy onto or remove `OLD` or `LOG.TXT`.** `src/record.cho` makes and
+  checks the lines and is pure, like `inet`, `fat` and `keys`.
+
+Measured, at the commit that adds this section (QEMU's `virt`; FAT32, FAT16, and FAT32 behind a
+partition table; macOS's `fsck_msdos -n` and a mount here, Linux's `fsck.fat -n` and `mcopy` in CI):
+
+| what was done | result |
+|---|---|
+| `write A.TXT one`, `write A.TXT two`, `append A.TXT more` | `A.TXT` reads `two`, `more` on another system; `OLD/00000001.V` reads `one` |
+| `remove BIG.BIN` (300,000 random bytes), `copy OLD/00000002.V C.BIN` | `BIG.BIN` gone from the top directory; the version and `C.BIN` are the original, byte for byte |
+| `write A.TXT` 70 times on FAT16 | 69 versions; `OLD` grew past its first cluster; the checker finds nothing wrong |
+| `purge 1` at the console; `purge 2` by an owner's key over SSH | one cluster given back and the free count right; "taken at the serial console only" |
+| `remove LOG.TXT`, `write OLD x` | "that name is the kernel's", twice |
+| the record after those, by Python | every line follows; `C.BIN` and `A.TXT` hold what their lines say |
+| the same disk started again, one more write | `record`: one line more, each following |
+| one letter of line 1 changed by another machine | `record`: "line 1 does not follow"; a write over SSH refused and no file made; a write at the console taken |
+| `./keys.sh`: the owner's key writes `O.TXT`, then removes `KEYS.TXT` | the record names the key by the digits `ssh-keygen -l` gives; the reader's refused write has no line; afterwards the reader is not let in |
+
+and 5 tests of `record.cho` on its own (three lines Python chained are found whole; a line changed,
+removed or cut short is found, and which; the lines it makes are Python's, byte for byte; every byte of
+the file as 16 others and the file cut at every byte: none traps).
+
+What it does not do:
+
+- **It does not catch someone who rewrites the whole record.** The chain shows a line changed or taken
+  out. Whoever holds the card can make a new file whose every line follows. Catching that needs the last
+  chain kept somewhere the card's holder cannot reach, which is not built.
+- **A power cut was not tried.** The order is argued, not measured. Cut between the version's name and
+  the file's own, two names point at the same clusters until the file's is written (a checker reports
+  it; no byte is lost). Cut between a line and its change, the record has a line for a change that did
+  not happen: the file does not hold what the line's hash says.
+- **A version's name is a number.** Which file it was of is in the record, not in `OLD`.
+- **`append` leaves no version**, since it loses nothing; it has its line.
+- **`write` takes one line of text**, 500 bytes at most. Whole files come in by `copy`.
+- **Nothing is ever purged by itself**: a disk that is written over and over fills.
+- **No grants.** An owner's key may still do everything but purge; there are no keys for agents yet.
 
 ## The slices
 

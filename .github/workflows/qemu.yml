@@ -38,6 +38,8 @@ jobs:
           /tmp/cancho-out/cancho test tests/keys_test.cho src/keys.cho --std
           # the file system: sectors of volumes macOS's tools made, read by a second implementation
           /tmp/cancho-out/cancho test tests/fat_test.cho src/fat.cho --std
+          # the record: lines Python's hashlib chained, and every damage to them (nothing traps)
+          /tmp/cancho-out/cancho test tests/record_test.cho src/record.cho /tmp/cancho-ssh/src/sha256.cho --std
           # the gateway, datagrams, names and a given address
           /tmp/cancho-out/cancho test tests/addr_test.cho src/inet.cho --std
       - name: what the kernel can touch
@@ -102,7 +104,7 @@ jobs:
             grep -q "^300000 bytes, adler32 $want" disk-$img.txt
             grep -q "^hello from a file, to cancho-os" disk-$img.txt
             grep -Eq "^BIG.BIN +300000" disk-$img.txt
-            grep -q "^no such file in the top directory" disk-$img.txt
+            grep -q "^no such file" disk-$img.txt
           done
           grep -q "a FAT32 volume at sector 0," disk-fat32.txt
           grep -q "a FAT16 volume at sector 0," disk-fat16.txt
@@ -120,14 +122,14 @@ jobs:
         run: |
           L="0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzAB"
           echo "line 0" > want.txt
-          set -- 'write LOG.TXT line 0'
-          for i in 1 2 3 4 5 6 7 8 9 10 11 12; do set -- "$@" "append LOG.TXT $i $L"; echo "$i $L" >> want.txt; done
+          set -- 'write NOTES.TXT line 0'
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12; do set -- "$@" "append NOTES.TXT $i $L"; echo "$i $L" >> want.txt; done
           for i in 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20; do set -- "$@" "write F$i.TXT file $i"; done
           for img in fat32 fat16 part; do
             cp $img.img w-$img.img
-            MACHINE=virt DISKRW=w-$img.img ./test.sh "$@" 'copy BIG.BIN COPY.BIN' 'write LOG.TXT again' 'write bad/name x' 'sum COPY.BIN' ls disk > w-$img.txt; tail -40 w-$img.txt
+            MACHINE=virt DISKRW=w-$img.img ./test.sh "$@" 'copy BIG.BIN COPY.BIN' 'copy BIG.BIN NOTES.TXT' 'write bad/name x' 'sum COPY.BIN' ls disk > w-$img.txt; tail -40 w-$img.txt
             grep -q "^copied: 300000 bytes" w-$img.txt
-            grep -q "^there is a file of that name" w-$img.txt
+            grep -q "^there is something of that name already" w-$img.txt
             grep -q "^not a short name" w-$img.txt
             # the volume itself, for the tools: the image, or the partition inside it
             vol=w-$img.img
@@ -135,11 +137,59 @@ jobs:
             fsck.fat -n $vol
             mcopy -i $vol ::COPY.BIN copy.out && cmp copy.out big.bin
             mcopy -i $vol ::BIG.BIN big.out && cmp big.out big.bin
-            mcopy -i $vol ::LOG.TXT log.out && cmp log.out want.txt
+            mcopy -i $vol ::NOTES.TXT log.out && cmp log.out want.txt
             mcopy -i $vol ::F20.TXT f20.out && test "$(cat f20.out)" = "file 20"
             test "$(mdir -i $vol :: | grep -c '^F[0-9][0-9] *TXT')" = 20
             rm -f copy.out big.out log.out f20.out
           done
+      - name: versions, and the record
+        # docs/permissions.md, slice 3. A file written over and a file removed must still be on the disk,
+        # in OLD under a number; a version must come back by copying it; and only the console may purge one.
+        # Every change must have its line in LOG.TXT, and the lines are checked here by Python's hashlib,
+        # not by the kernel: each must end with the SHA-256 of the one before and itself, and the files
+        # must hold what their lines say. Then the same disk is started again, and then one byte of the
+        # record is changed from outside: the kernel must say which line, and take no change over SSH.
+        run: |
+          for img in fat32 fat16 part; do
+            cp $img.img v-$img.img
+            MACHINE=virt DISKRW=v-$img.img ./test.sh record 'write A.TXT one' 'write A.TXT two' 'append A.TXT more' 'remove BIG.BIN' 'copy OLD/00000002.V C.BIN' 'cat OLD/00000001.V' 'purge 1' versions 'remove LOG.TXT' 'write OLD x' record > v-$img.txt; tail -28 v-$img.txt
+            grep -q "^no record on this disk yet" v-$img.txt
+            grep -q "^written: 4 bytes; what was there is OLD/00000001.V" v-$img.txt
+            grep -q "^removed; what it held is OLD/00000002.V" v-$img.txt
+            grep -q "^copied: 300000 bytes" v-$img.txt
+            grep -q "^one" v-$img.txt
+            grep -q "^purged: OLD/00000001.V, 1 clusters given back" v-$img.txt
+            grep -q "^1 versions kept" v-$img.txt
+            test "$(grep -c "^that name is the kernel's" v-$img.txt)" = 2
+            grep -q "^the record: 6 lines, each following from the one before" v-$img.txt
+            vol=v-$img.img
+            if [ $img = part ]; then dd if=v-part.img of=v-part-vol.img bs=512 skip=2048 status=none; vol=v-part-vol.img; fi
+            fsck.fat -n $vol
+            rm -rf vout; mkdir vout
+            mcopy -i $vol ::LOG.TXT vout/LOG.TXT
+            mcopy -i $vol ::A.TXT vout/A.TXT
+            mcopy -i $vol ::C.BIN vout/C.BIN
+            mcopy -i $vol ::OLD/00000002.V v2.out && cmp v2.out big.bin && cmp vout/C.BIN big.bin
+            test "$(cat vout/A.TXT)" = "$(printf 'two\nmore')"
+            python3 tests/checklog.py vout/LOG.TXT vout > vlog.txt || { cat vlog.txt; exit 1; }
+            cat vlog.txt
+            grep -q "^6 lines, 0 that do not follow" vlog.txt
+            grep -q "^C.BIN holds what the record says" vlog.txt
+            # the same disk, started again: the next line follows the last one of the first start
+            MACHINE=virt DISKRW=v-$img.img ./test.sh 'write B.TXT after a restart' record > v2-$img.txt; tail -4 v2-$img.txt
+            grep -q "^the record: 7 lines, each following from the one before" v2-$img.txt
+          done
+          # an owner's key cannot purge: that is the console's
+          MACHINE=virt DISKRW=v-fat32.img SSHKEY=/tmp/sshkey SSHCMD='purge 2' ./test.sh 'net up' 'net ssh on' > v-purge.txt; cat v-purge.txt
+          grep -q "^ssh: purge gives up a version for good, and is taken at the serial console only" v-purge.txt
+          # one letter of the first line changed, by another machine
+          python3 -c 'p="v-fat32.img"; d=bytearray(open(p,"rb").read()); i=d.find(b" console console write A.TXT "); assert i > 0; d[i+23]=66; open(p,"wb").write(d)'
+          MACHINE=virt DISKRW=v-fat32.img SSHKEY=/tmp/sshkey SSHCMD='write S.TXT over ssh' ./test.sh 'net up' 'net ssh on' record 'write T.TXT at the console' ls > v-broken.txt; cat v-broken.txt
+          grep -q "line 1 does not follow from the one before it" v-broken.txt
+          grep -q "^ssh: the record does not follow at line 1" v-broken.txt
+          grep -q "^written: 15 bytes" v-broken.txt
+          grep -Eq "^T.TXT +15" v-broken.txt
+          if grep -Eq "^S.TXT " v-broken.txt; then exit 1; fi
       - name: who may log in, and the host key kept
         # docs/permissions.md, slice 2, with OpenSSH's own client and three keys made here. The owner's is
         # built into the image; the reader's is put in KEYS.TXT at the console; the third is in neither.
@@ -154,6 +204,18 @@ jobs:
             grep -q "^the host key is the same after the restart" keys-$img.txt
             fsck.fat -n k-$img.img
             mcopy -i k-$img.img ::HOSTKEY.BIN hostkey.out && test "$(wc -c < hostkey.out)" = 32 && rm hostkey.out
+            # the record says who: the console, the kernel itself, and the owner's key by the fingerprint
+            # ssh-keygen gives it. The reader's refused write has no line.
+            mcopy -i k-$img.img ::LOG.TXT klog.out
+            python3 tests/checklog.py klog.out > klog.txt || { cat klog.txt; exit 1; }
+            cat klog.txt
+            id=$(ssh-keygen -lf /tmp/sshkey.pub | awk '{print $2}' | cut -d: -f2 | python3 -c 'import sys,base64; print(base64.b64decode(sys.stdin.read().strip()+"=").hex()[:16])')
+            grep -q "^1 [0-9]* console console write KEYS.TXT " klog.txt
+            grep -q "^2 [0-9]* kernel kernel keep HOSTKEY.BIN - - 32 - " klog.txt
+            grep -q "^3 [0-9]* key:$id owner write O.TXT " klog.txt
+            grep -q "^4 [0-9]* key:$id owner remove KEYS.TXT - 1 " klog.txt
+            grep -q "^4 lines, 0 that do not follow" klog.txt
+            rm -f klog.out
           done
       - name: a kernel loaded over the serial console
         # the running kernel takes another (this build, renamed 0.0.99) and starts it: a wrong checksum

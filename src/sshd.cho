@@ -5,6 +5,7 @@ module sshd;
 import inet;
 import ssh_server as ssh;
 import std.ed25519;
+import ssh_sha256 as sha;
 
 // sshd.cho -- the kernel's shell over SSH (docs/ssh.md). SSH itself is cancho-ssh, which is given bytes and
 // gives bytes back; this file is the loop between it and three things the kernel already had: a connection
@@ -20,6 +21,7 @@ import std.ed25519;
 //    k[4152] the session is to end when its output has gone
 //    k[4177] which of the keys are owners' (a bit each; the others may only read)
 //    k[4179] what the key that logged in may do: 2 an owner's, 1 a reader's
+//    k[4184] k[4185] the first eight bytes of that key's SHA-256 fingerprint, as two 32-bit numbers
 
 pub fn ints() -> [] int {
     return ssh.ints_len();
@@ -181,6 +183,23 @@ pub fn step[&s, &t, &g, &h, &l, &w, &i, &b, &x](k: &!s [int], tcp: &!t [int], bu
                     k[4179] = 2;
                 }
                 who = who + 1;
+            }
+            // and which key: the start of the SHA-256 OpenSSH shows for it, for the record's lines
+            region f {
+                let hs = alloc_slice[f](sha.state_len(), 0);
+                let hd = alloc_slice[f](32, byte_of(0));
+                sha.init(hs);
+                sha.update_u32(hs, 11);
+                sha.update(hs, "ssh-ed25519");
+                sha.update_u32(hs, 32);
+                var q = 0;
+                while q < 32 {
+                    sha.update_byte(hs, int_of(ssh.auth_key(si, sb)[q]));
+                    q = q + 1;
+                }
+                sha.final(hs, hd);
+                k[4184] = int_of(hd[0]) << 24 | int_of(hd[1]) << 16 | int_of(hd[2]) << 8 | int_of(hd[3]);
+                k[4185] = int_of(hd[4]) << 24 | int_of(hd[5]) << 16 | int_of(hd[6]) << 8 | int_of(hd[7]);
             }
             k[27] = 0;
             k[31] = 0;

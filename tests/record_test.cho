@@ -1,0 +1,167 @@
+import std.test;
+import record;
+import ssh_sha256 as sha;
+
+// `record` with no disk under it. The three lines below were made by a second implementation (Python's
+// `hashlib`): each ends with the SHA-256 of the chain before it and its own text.
+
+fn three() -> [] &static [byte] {
+    return "1 12 console console write A.TXT - - 4 2c8b08da5ce60398e1f19af0e5dccc744df274b826abe585eaba68c525434806 66eb20297394e56d990dd8b30971a968b1af05f4f219062ff9090d1c5db6dbf8\n2 40 key:0123456789abcdef owner remove A.TXT - 1 - - afc981586d9c7deecc81d8e6d25315e074273a54c1b54284815e8d9cfca4c52b\n3 41 console console purge 00000001.V - 1 - - ca1f1461e2f87cf092049d8889b5f82753f9adf32cf9cc90a35e4d462b25777e\n";
+}
+
+// A walk over `text[0..n]`, with the byte at `spoil` (if it is not negative) replaced by `with`, and the
+// bytes `cut..cut_to` left out. Answers lines * 1000 + the first line that does not follow.
+fn walked[&t](text: &t [byte], n: int, spoil: int, with: int, cut: int, cut_to: int) -> [] int {
+    var answer = 0;
+    region a {
+        let st = alloc_slice[a](record.walk_len(), 0);
+        let prev = alloc_slice[a](64, byte_of(0));
+        let ln = alloc_slice[a](512, byte_of(0));
+        let state = alloc_slice[a](sha.state_len(), 0);
+        let dig = alloc_slice[a](32, byte_of(0));
+        let hex = alloc_slice[a](64, byte_of(0));
+        record.start(st, prev);
+        var i = 0;
+        while i < n {
+            if i < cut || i >= cut_to {
+                var c = int_of(text[i]);
+                if i == spoil {
+                    c = with;
+                }
+                record.feed(st, prev, ln, state, dig, hex, c);
+            }
+            i = i + 1;
+        }
+        record.end(st);
+        answer = st[0] * 1000 + st[1];
+    }
+    return answer;
+}
+
+fn test_lines_another_implementation_chained_are_found_whole() -> [] int {
+    let t = three();
+    test.assert_eq(walked(t, len(t), -1, 0, 0, 0), 3000);
+    test.assert_eq(walked(t, 0, -1, 0, 0, 0), 0);
+    return 0;
+}
+
+fn test_a_line_changed_removed_or_cut_short_is_found() -> [] int {
+    let t = three();
+    // the first line is 169 bytes with its line feed, the second 118
+    test.assert_eq(int_of(t[168]), 10);
+    test.assert_eq(int_of(t[286]), 10);
+    // one letter of the second line's target
+    test.assert_eq(walked(t, len(t), 169 + 36, 'B', 0, 0), 3002);
+    // the first line's count
+    test.assert_eq(walked(t, len(t), 0, '7', 0, 0), 3001);
+    // one digit of the first line's own chain: it is that line that does not follow, and the next is
+    // held to what the first says, so it does not follow either
+    test.assert_eq(walked(t, len(t), 160, 'f', 0, 0), 3001);
+    // the second line taken out
+    test.assert_eq(walked(t, len(t), -1, 0, 169, 287), 2002);
+    // the first line taken out
+    test.assert_eq(walked(t, len(t), -1, 0, 0, 169), 2001);
+    // the file ends in the middle of the third line
+    test.assert_eq(walked(t, len(t) - 10, -1, 0, 0, 0), 2003);
+    return 0;
+}
+
+fn test_the_lines_this_makes_are_the_ones_the_other_implementation_made() -> [] int {
+    region a {
+        let t = three();
+        let prev = alloc_slice[a](64, byte_of('0'));
+        let ln = alloc_slice[a](512, byte_of(0));
+        let state = alloc_slice[a](sha.state_len(), 0);
+        let dig = alloc_slice[a](32, byte_of(0));
+        let hex = alloc_slice[a](64, byte_of(0));
+        let contents = alloc_slice[a](32, byte_of(0));
+        sha.digest("one\n", contents);
+        var at = record.number(ln, 0, 1);
+        at = record.number(ln, at, 12);
+        at = record.word(ln, at, "console", 0, 7);
+        at = record.word(ln, at, "console", 0, 7);
+        at = record.word(ln, at, "write", 0, 5);
+        at = record.word(ln, at, "xxA.TXT", 2, 7);
+        at = record.word(ln, at, "-", 0, 1);
+        at = record.number(ln, at, -1);
+        at = record.number(ln, at, 4);
+        at = record.hexes(ln, at, contents, 32);
+        let n = record.sealed(ln, at, prev, state, dig, hex);
+        test.assert_eq(n, 169);
+        var i = 0;
+        while i < n {
+            test.assert_eq(int_of(ln[i]), int_of(t[i]));
+            i = i + 1;
+        }
+        // the second, after the first: `prev` was moved on by `sealed`
+        at = record.number(ln, 0, 2);
+        at = record.number(ln, at, 40);
+        at = record.word(ln, at, "key:0123456789abcdef", 0, 20);
+        at = record.word(ln, at, "owner", 0, 5);
+        at = record.word(ln, at, "remove", 0, 6);
+        at = record.word(ln, at, "A.TXT", 0, 5);
+        at = record.word(ln, at, "-", 0, 1);
+        at = record.number(ln, at, 1);
+        at = record.number(ln, at, -1);
+        at = record.number(ln, at, -1);
+        let m = record.sealed(ln, at, prev, state, dig, hex);
+        test.assert_eq(m, 118);
+        i = 0;
+        while i < m {
+            test.assert_eq(int_of(ln[i]), int_of(t[169 + i]));
+            i = i + 1;
+        }
+    }
+    return 0;
+}
+
+fn test_a_field_that_would_break_a_line_is_a_question_mark() -> [] int {
+    region a {
+        let ln = alloc_slice[a](512, byte_of(0));
+        test.assert_eq(record.word(ln, 0, "two words", 0, 9), 2);
+        test.assert_eq(int_of(ln[0]), '?');
+        test.assert_eq(record.word(ln, 0, "line\nfeed", 0, 9), 2);
+        test.assert_eq(record.word(ln, 0, "", 0, 0), 2);
+        test.assert_eq(record.word(ln, 0, "abc", 2, 9), 2);
+        // nothing is added past what a line may hold, and a line that lost a field is not closed
+        test.assert_eq(record.word(ln, 430, "abcdefgh", 0, 8), 432);
+        test.assert_eq(record.word(ln, 433, "a", 0, 1), -1);
+        test.assert_eq(record.number(ln, 420, 5), -1);
+        test.assert_eq(record.hexes(ln, 400, "0123456789abcdef0123456789abcdef", 32), -1);
+        let prev = alloc_slice[a](64, byte_of('0'));
+        let state = alloc_slice[a](sha.state_len(), 0);
+        let dig = alloc_slice[a](32, byte_of(0));
+        let hex = alloc_slice[a](64, byte_of(0));
+        test.assert_eq(record.sealed(ln, -1, prev, state, dig, hex), -1);
+        test.assert_eq(record.sealed(ln, 440, prev, state, dig, hex), -1);
+    }
+    return 0;
+}
+
+fn test_no_damage_to_the_file_makes_it_trap() -> [] int {
+    let t = three();
+    var tried = 0;
+    var i = 0;
+    while i < len(t) {
+        // every byte of the file as each of sixteen others, among them a line feed, a space and a NUL
+        var v = 0;
+        while v < 16 {
+            let r = walked(t, len(t), i, v * 17 % 256 + (v & 1) * 10 - (v & 1) * (v * 17 % 256), 0, 0);
+            test.assert(r >= 0);
+            tried = tried + 1;
+            v = v + 1;
+        }
+        // and the file cut at every byte
+        test.assert(walked(t, i, -1, 0, 0, 0) >= 0);
+        i = i + 1;
+    }
+    test.assert_eq(tried, len(t) * 16);
+    // a line far longer than any that is taken, with no line feed and then with one
+    region a {
+        let long = alloc_slice[a](3000, byte_of('a'));
+        test.assert_eq(walked(long, 3000, -1, 0, 0, 0), 1);
+        long[2999] = byte_of(10);
+        test.assert_eq(walked(long, 3000, -1, 0, 0, 0), 1001);
+    }
+    return 0;
+}
