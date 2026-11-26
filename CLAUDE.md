@@ -94,6 +94,9 @@ Rules of the road
   memory the regions use, so `std.buffer`, `std.vec`, `std.json` build here. `heap` in the shell tries it. The kernel
   holds the `Heap` capability and lends it only to what needs it: keep regions for anything with a known size, and
   never use the heap in a path that must not fail (no memory left is a trap, not an answer).
+- Paths (docs/storage.md, "Directories"): `files.folder` walks a path and refuses a part that begins with a dot
+  (`..` would reach the kernel's own names); the kernel's names are checked for names of the TOP directory only,
+  and nothing is written under `OLD` (`under_old`). A new command that takes a name must go through `paths`.
 - BOOT.TXT (docs/boot.md): `src/boot.cho` (pure) holds the list of lines the kernel may type to itself at its
   start. Adding a command to that list is a decision: nothing that changes the disk, loads a kernel or restarts.
   The file is written at the console only (`files.boot_name`, `files.put_name`). A key in the first second stops it.

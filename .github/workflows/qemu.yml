@@ -264,6 +264,27 @@ jobs:
           print("the bridge passed two reads and dropped five that were not")'
           kill %1
           test "$(grep -c "dropped a packet" bridge.txt)" = 5
+      - name: directories
+        # docs/storage.md, "Directories". The kernel makes directories and works in them; Linux's tools must then
+        # find the same tree, and the kernel's own names must not be reachable by a path.
+        run: |
+          for img in fat32 fat16; do
+            cp $img.img d-$img.img
+            MACHINE=virt DISKRW=d-$img.img ./test.sh 'mkdir SRC' 'write SRC/A.TXT one' 'write SRC/A.TXT two' 'copy BIG.BIN SRC/B.BIN' 'mkdir SRC/DEEP' 'copy SRC/B.BIN SRC/DEEP/C.BIN' ls 'ls SRC' 'cat OLD/00000001.V' 'write OLD/X y' 'write SRC/../HOSTKEY.BIN x' 'cat NOPE/A.TXT' 'remove SRC' record > d-$img.txt; tail -24 d-$img.txt
+            test "$(grep -c "^made: a directory" d-$img.txt)" = 2
+            grep -q "^SRC/" d-$img.txt
+            grep -q "^DEEP/" d-$img.txt
+            grep -q "^one" d-$img.txt
+            grep -q "^that name is the kernel's" d-$img.txt
+            grep -q "^not a path" d-$img.txt
+            grep -q "^no such directory" d-$img.txt
+            grep -q "^that is a directory" d-$img.txt
+            grep -q "^the record: 6 lines, each following from the one before" d-$img.txt
+            fsck.fat -n d-$img.img
+            mcopy -i d-$img.img ::SRC/DEEP/C.BIN dc.out && cmp dc.out big.bin
+            mcopy -i d-$img.img ::SRC/A.TXT da.out && test "$(cat da.out)" = two
+            mcopy -i d-$img.img ::LOG.TXT dlog.out && python3 tests/checklog.py dlog.out
+          done
       - name: what the board does at its start
         # docs/boot.md. BOOT.TXT is written at the console; the same disk is started again and nothing is typed
         # that the file says: the link must be up and SSH on, the line that restarts must not have run, and

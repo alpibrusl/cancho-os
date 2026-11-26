@@ -104,5 +104,33 @@ the shell may add files).
 
 ## What it does not do, yet
 
-- **Directories below the top, long names, FAT12, exFAT.**
+- **Long names, FAT12, exFAT.** Directories are built (below); a name is still eight letters, a dot and three.
 - **Writing a kernel to the card.** Files come in as one line of text or as a copy of another file.
+
+## Directories
+
+A name may have directories before it, with `/` between: `SRC/KERNEL.CHO`, to any depth. Every command
+that takes a name takes a path: `cat`, `sum`, `write`, `append`, `copy`, `remove`, and `put` over SSH.
+`mkdir <path>` makes a directory (its one cluster first, holding the two entries every directory begins
+with; then its name, last, with a line in the record). `ls <path>` lists one; `ls` shows directories
+with a `/` after the name.
+
+- **The kernel's own names are names of the top directory**: `HOSTKEY.BIN`, `LOG.TXT`, `KEYS.TXT`,
+  `BOOT.TXT`, and the files the board starts from. A file of the same name inside a directory is an
+  ordinary file.
+- **Nothing is written under `OLD` but by the kernel.** Versions stay there, all of them, whatever
+  directory the file was in: the record says which file a number was.
+- **A part of a path that begins with a dot is refused.** `SRC/../HOSTKEY.BIN` would otherwise be a way
+  around the names the kernel keeps for itself.
+- **A directory is not removed**, and not renamed: neither is built.
+
+Measured, in QEMU's `virt`, judged by macOS's `fsck_msdos -n` and a mount (and by `fsck.fat` and `mcopy`
+in CI):
+
+| what | result |
+|---|---|
+| `mkdir SRC`, `write SRC/A.TXT` twice, `copy BIG.BIN SRC/B.BIN`, `mkdir SRC/DEEP`, `copy SRC/B.BIN SRC/DEEP/C.BIN` | macOS lists `SRC`, `SRC/DEEP` and the files; both copies are the 300,000 bytes, byte for byte; `OLD/00000001.V` is the first text; the checker finds nothing wrong |
+| 40 files written into one directory of a FAT32 volume with 512-byte clusters | the directory grew past its first cluster; all 40 read back; the checker finds nothing wrong |
+| over SSH: a file of 403,552 bytes sent with `board/put.sh` to `SRC/K.IMG` | kept, and `sum` gives Python's checksum |
+| `write OLD/X y`, `put OLD/X.BIN ...`, `write SRC/../HOSTKEY.BIN x`, `cat NOPE/A.TXT`, `remove SRC` | refused, each with its reason |
+| the record after those | every line follows; `mkdir` has its lines |

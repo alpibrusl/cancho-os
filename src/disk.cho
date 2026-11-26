@@ -280,6 +280,14 @@ pub fn top[&mc, &mv, &md, &s, &b, &t, &i, &m, &o, &w](con: &!mc Mmio("0x9000000.
                 let kind = fat.entry(sec, i, name, out);
                 if kind == fat.entry_end() {
                     going = false;
+                } else if kind == fat.entry_directory() && to == from && out[0] > 0 && int_of(name[0]) != '.' {
+                    // a directory, in a listing: its name and a `/` (not `.` and `..`, which every directory has)
+                    var c = 0;
+                    while c < out[0] {
+                        base.putc(con, k, int_of(name[c]));
+                        c = c + 1;
+                    }
+                    base.puts(con, k, "/\r\n");
                 } else if kind == fat.entry_file() {
                     if to > from {
                         if fat.named(name, out[0], wanted, from, to) {
