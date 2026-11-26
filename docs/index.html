@@ -154,34 +154,38 @@ ul.why span { color: var(--muted); font-size: .95rem; }
     <p class="sub">Before the kernel runs, the compiler says every address and every processor register it is able to touch, and which function holds which device. That list is checked on every change.</p>
     <div class="cta"><a class="btn primary" href="#video">Watch it on a real Pi 4 (37 s)</a><a class="btn ghost" href="#pi4">Put it on yours</a><a class="btn ghost" href="https://github.com/alpibrusl/cancho-os">Source</a></div>
   </div>
-  <div class="term" role="img" aria-label="A session over SSH on a real Raspberry Pi 4"><div class="bar"><i></i><i></i><i></i></div>
-<pre><span class="c"># a Mac, and on the same network a Raspberry Pi 4 running cancho-os</span>
-$ ssh cancho@192.168.1.24
-cancho-os: the kernel's shell, over SSH. `help` lists the commands, `exit` leaves.
+  <div class="term" role="img" aria-label="The console of a real Raspberry Pi 4 running cancho-os, reading its card and a robot arm"><div class="bar"><i></i><i></i><i></i></div>
+<pre><span class="c"># what a real Raspberry Pi 4 answered on 2026-11-26, running cancho-os from its own
+# card with a robot arm on a second board. Shortened; put together from two sessions.</span>
 &gt; about
-cancho-os 0.0.23: a kernel written in cancho (Raspberry Pi 4)
-&gt; random
-random (the RNG200): cfa092c0310e2998940d7c0659f4d42c
-&gt; ping example.com
-reply from 172.66.147.243 in 2025 us
-&gt; arm zero
-gripper at x 391361 y -9 z 226469 um
+cancho-os 0.0.30: a kernel written in cancho (Raspberry Pi 4)
 &gt; disk
-<span class="r">no disk: QEMU's virt machine has one when it is given one; a Pi's card has no driver yet</span>
-&gt; exit
-bye</pre></div>
+an SD card of 249737216 sectors (121942 MB); a FAT32 volume at sector 8192, ...
+&gt; record
+the record: 8 lines, each following from the one before (`cat LOG.TXT` shows them)
+&gt; servo via 10.42.0.1 6000
+the servo bus is the one at 10.42.0.1 port 6000: packets that read, passed on by that machine
+&gt; servo pos
+servo 1: position 2555
+servo 2: position 609
+servo 3: position 3035
+<span class="c">...</span>
+&gt; arm pose
+gripper at x -63873 y 66990 z 109883 um
+&gt; restart
+<span class="r">restarting: the firmware starts the board again, and loads the kernel from the card</span></pre></div>
 </section>
 
 <div class="stats">
   <div><b>0</b><span>lines of C, and no foreign function the kernel calls</span></div>
-  <div><b>300 KB</b><span>the whole image, <code>kernel8.img</code>, SSH and its cryptography included</span></div>
-  <div><b>15 + 32</b><span>processor registers and address ranges it can touch, each listed</span></div>
+  <div><b>373 KB</b><span>the whole image, <code>kernel8.img</code>, SSH and its cryptography included</span></div>
+  <div><b>15 + 36</b><span>processor registers and address ranges it can touch, each listed</span></div>
   <div><b>1</b><span>real board it has run on, a Pi 4; the Pi 5's code has never run</span></div>
 </div>
 
 <section id="video">
   <h2>On a real board</h2>
-  <p class="sub">A Mac logs in over SSH to the kernel on a Raspberry Pi 4, cabled to a home router. The board got its address from the router, looked a name up and pinged it; the random numbers are the chip's own.</p>
+  <p class="sub">A Mac logs in over SSH to the kernel on a Raspberry Pi 4, cabled to a home router. The board got its address from the router, looked a name up and pinged it; the random numbers are the chip's own. The recording is of version 0.0.23, from the morning of the same day: the board had no disk yet, which is what its last answer says.</p>
   <div class="vid">
     <video controls preload="none" playsinline poster="demo/pi4-ssh.poster.jpg" aria-label="A 37-second recording of an SSH session on cancho-os on a Raspberry Pi 4">
       <source src="demo/pi4-ssh.mp4" type="video/mp4">
@@ -197,7 +201,7 @@ bye</pre></div>
   <p class="sub">The first job is small and concrete: the safety controller of a robot arm (<a href="https://alpibrusl.github.io/cancho-robot/">cancho-robot</a>). A controller like that is only worth trusting if nothing under it can go around it.</p>
   <div class="grid">
     <div><h3>Hardware is a capability</h3><p>A device register is reached through an <code>Mmio</code> value whose type names the addresses it covers. A function that was lent the console cannot write to the servo bus: it is a type error.</p></div>
-    <div><h3>Nothing underneath</h3><p>No Linux, no libc, and no C in this repository. What is not cancho is one page of assembly that boots and catches faults, which exports nothing the kernel can call, and the board's own firmware, which loads the image and is asked three questions.</p></div>
+    <div><h3>Nothing underneath</h3><p>No Linux, no libc, and no C in this repository. What is not cancho is one page of assembly that boots and catches faults, which exports nothing the kernel can call, and the board's own firmware, which loads the image and is asked four questions.</p></div>
     <div><h3>No code behind its back</h3><p>Interrupts stay masked and are polled after <code>wfi</code>; a fault re-enters <code>main</code>, which reports it. So there is no handler running between two statements.</p></div>
     <div><h3>Checked in CI</h3><p>Every change boots in QEMU with a scripted shell session, and the list of what the kernel can touch is a file in the repository that CI compares.</p></div>
   </div>
@@ -205,31 +209,33 @@ bye</pre></div>
 
 <section id="today">
   <h2>What it does today</h2>
-  <p class="sub">On a real Raspberry Pi 4 (since 2026-11-26): it boots, joins a home network through its own Ethernet card, and is logged in to over SSH. Everything is also booted in QEMU on every change, as a Pi 3, a Pi 4 and QEMU's own <code>virt</code> board, which is the only place the disk is so far.</p>
+  <p class="sub">On a real Raspberry Pi 4 (since 2026-11-26): it boots from its own SD card, joins a network through its own Ethernet card, is logged in to over SSH, keeps files with their versions and a record, takes a new kernel over SSH and restarts into it, and reads two real robot arms. Everything is also booted in QEMU on every change, as a Pi 3 and QEMU's own <code>virt</code> board.</p>
   <div class="cols">
     <div><h3>Built</h3><ul>
       <li>A serial console and a small shell</li>
-      <li>The timer and the interrupt controller, polled</li>
-      <li>The MMU: code read-only, data not executable, address 0 unmapped</li>
+      <li>The timer and the interrupt controller, polled; the MMU: code read-only, data not executable, address 0 unmapped</li>
       <li>A fault report that names the fault and the three registers</li>
-      <li>The Feetech servo bus, read only: <code>servo scan</code>, <code>servo pos</code></li>
-      <li>The SO-101 arm's pose from its servos, and a safety check that judges a motion and sends nothing</li>
-      <li>A first network: <code>ping</code>, a UDP echo and a TCP echo answered, over a serial line and over Ethernet (a virtual card in QEMU); the kernel can <code>ping</code> and fetch a web page too</li>
-      <li>An address from the network (DHCP), a gateway, and names (DNS): <code>http example.com 80</code> works</li>
-      <li>Random numbers from the board's generator (QEMU's and the Pi 3's), used to begin each connection</li>
-      <li>Files: a FAT16 or FAT32 disk read, and files added to it (in QEMU; no real card yet, and nothing replaced or removed)</li>
-      <li>Who may log in: keys in a file on the disk, as owners or as readers who may only look; the host key kept across restarts (in QEMU)</li>
-      <li>SSH: the shell behind <a href="https://github.com/alpibrusl/cancho-ssh">cancho-ssh</a>, logged in to by OpenSSH in QEMU and on a real Pi 4</li>
-      <li>A file sent over SSH and kept only with the SHA-256 it was told: how a new kernel reaches the card</li>
+      <li>A network: Ethernet (the Pi 4's own card, and a virtual one in QEMU) and a serial line; an address from the network (DHCP), a gateway, names (DNS); <code>ping</code> and <code>http example.com 80</code></li>
+      <li>Random numbers from the board's generator, used to begin each connection</li>
+      <li>SSH, the only way in from the network: the shell behind <a href="https://github.com/alpibrusl/cancho-ssh">cancho-ssh</a>, logged in to by OpenSSH</li>
+      <li>Who may log in: keys in a file on the disk, as owners or as readers who may only look; the host key kept across restarts</li>
+      <li>The SD card of a Pi, and a FAT16 or FAT32 volume on it, read and written</li>
+      <li>Versions: a file written over or removed is still there, under a number, and comes back with a copy</li>
+      <li>A record: every change is a line that says who made it, each chained to the one before by SHA-256; another machine can check it with Python alone</li>
+      <li>A file sent over SSH and kept only with the SHA-256 it was told, checked again as the card gives it back: how a new kernel reaches the card</li>
+      <li><code>restart</code>, through the board's watchdog: with the line above, an update with nobody at the board</li>
+      <li>The Feetech servo bus, read only: <code>servo scan</code>, <code>servo pos</code>; the SO-101 arm's pose from its servos; a safety check that judges a motion and sends nothing</li>
+      <li>Two real arms read, through a second board that has their USB adapters and passes on only packets that read</li>
     </ul></div>
     <div class="no"><h3>Not built</h3><ul>
-      <li>Moving a servo (waits for the safety core's actuation side)</li>
+      <li>Moving a servo (waits for the safety core's side that sends)</li>
       <li>Separate programs: one image does everything</li>
+      <li>Keys for agents, with grants, and approval by a person's key (designed; keys, two roles, versions and the record are built)</li>
+      <li>USB: the arms' adapters are USB, so the kernel does not yet hold their bus itself</li>
+      <li>Falling back from a kernel that arrives whole and does not boot</li>
       <li>Preemption, and more than one core</li>
       <li>The Pi 5, which is the robot's board: its console, timer and memory map are written from the board's own device tree and have never run</li>
-      <li>A faster card (one data line, one block a command), and falling back from a kernel that does not boot</li>
-      <li>Grants for agents, and approval by a person's key (designed; keys, two roles, versions and the record are built)</li>
-      <li>Wi-Fi, USB, display</li>
+      <li>Wi-Fi, display</li>
     </ul></div>
   </div>
 </section>
@@ -257,19 +263,19 @@ bye</pre></div>
     cpu("wfi")</pre>
     <figcaption>Fifteen registers and instructions. The annotations on the right are added here; the names are the report's.</figcaption></figure>
     <figure class="figure"><h3>Memory, and what it never touches</h3>
-<pre class="code">    mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048")  <span class="c">console</span>
-    mmio("0x3f200004..0x3f200008,0xfe200004..0xfe200008")                       <span class="c">pins</span>
-    mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c")                       <span class="c">servo bus</span>
-    mmio("0xa000000..0xa004000")                                                <span class="c">network card</span>
-    mmio("0x210000..0x220000,0x40210000..0x40220000")                           <span class="c">its packets</span>
-    <span class="c">... five more, in docs/authority.txt</span>
+<pre class="code">    mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048")  <span class="c">console</span>
+    mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c")                         <span class="c">servo bus</span>
+    mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")  <span class="c">network card, SD card</span>
+    mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028")                         <span class="c">random numbers</span>
+    mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028")                         <span class="c">the watchdog: restart</span>
+    <span class="c">... nine more, in docs/authority.txt</span>
 never touches
     the filesystem
     the network
     the heap
     other programs
     foreign code</pre>
-    <figcaption>Each line is one capability, cut in <code>main</code>. The addresses in a line are the same device on each board: QEMU's virt, the Pi 3, the Pi 4. &ldquo;The network&rdquo; here means the host system's sockets, which a kernel does not have; its own card is the fourth line.</figcaption></figure>
+    <figcaption>Each line is one capability, cut in <code>main</code>. The addresses in a line are the same device on each board: QEMU's virt, the Pi 3, the Pi 4, the Pi 5. &ldquo;The filesystem&rdquo; and &ldquo;the network&rdquo; here mean a host system's files and sockets, which a kernel does not have; its own cards are the third line.</figcaption></figure>
   </div>
   <p class="note">The full report is <a href="https://github.com/alpibrusl/cancho-os/blob/main/docs/authority.txt"><code>docs/authority.txt</code></a>. The language features behind it are in cancho: <a href="https://alpibrusl.github.io/cancho/mmio.html"><code>Mmio</code></a> and <a href="https://alpibrusl.github.io/cancho/cpu.html"><code>Cpu</code></a>.</p>
 </section>
@@ -299,7 +305,7 @@ picocom -b 115200 /dev/ttyUSB0            <span class="c"># Linux</span></pre></
     <li><b>The data cache</b><span>The boot stub empties the caches before the kernel turns them on. QEMU has no cache; a real board showed what happens without that. A hang right after boot would still point here.</span></li>
     <li><b>The UART clock</b><span>The divisor is for 48 MHz, the Pi 4's default. Garbage on the console points here.</span></li>
     <li><b>No second cable needed</b><span>A second Pi can be the serial cable: three wires between the two headers (pin 6 to pin 6, pins 8 and 10 crossed). That is how the board above was reached.</span></li>
-    <li><b>The servo bus</b><span>It does not work on a Pi 4 header yet: it is the mini UART, whose only header pins are the two the console uses. It has to move to another UART before a real arm can be read.</span></li>
+    <li><b>The servo bus</b><span>It does not work on a Pi 4 header yet: it is the mini UART, whose only header pins are the two the console uses. Real arms are read through a second board for now (<a href="https://github.com/alpibrusl/cancho-os/blob/main/docs/netbus.md"><code>netbus.md</code></a>); the kernel holding the bus itself waits for USB.</span></li>
   </ul>
   <p class="note">To try it without a board: <code>./run.sh</code> boots the same image in QEMU (<code>qemu-system-aarch64</code>, version 9 or later for the Pi 4 model).</p>
 </section>
@@ -307,11 +313,12 @@ picocom -b 115200 /dev/ttyUSB0            <span class="c"># Linux</span></pre></
 <section class="status" id="status" style="padding:1.3rem 1.5rem">
   <h2>Status</h2>
   <ul>
-    <li><strong>Research.</strong> One kernel image that boots, answers on a network and gives a shell over SSH. It does not load programs yet, so it is not an operating system in the sense most people mean.</li>
-    <li>It runs on one real board, a Raspberry Pi 4, on one home network. The Pi 5's code has never run. Everything else is measured in QEMU, on every change.</li>
+    <li><strong>Research.</strong> One kernel image that boots from a card, answers on a network, gives a shell over SSH, keeps files with their history, and updates itself. It does not load programs yet, so it is not an operating system in the sense most people mean.</li>
+    <li>It runs on one real board, a Raspberry Pi 4, with one card. The Pi 5's code has never run. Everything is also measured in QEMU, on every change.</li>
     <li>Its SSH is <a href="https://github.com/alpibrusl/cancho-ssh">cancho-ssh</a>, which nobody but its author has read: for a network you trust.</li>
-    <li>It reads a FAT disk in QEMU and writes nothing anywhere; on a real board it has no disk.</li>
-    <li>It cannot move a servo, by design, until the safety core's actuation side exists in cancho-robot.</li>
+    <li>The record shows a line changed or taken out. It does not catch someone who holds the card and rewrites all of it.</li>
+    <li>A kernel sent over SSH that arrives whole and does not boot stops the board until its card is mended on another machine.</li>
+    <li>It reads real arms through a second board running Linux, which is for development. It cannot move a servo, by design, until the safety core's side that sends exists in cancho-robot.</li>
     <li>What is next and why is in the <a href="https://github.com/alpibrusl/cancho-os/blob/main/docs/ROADMAP.md">roadmap</a>.</li>
   </ul>
 </section>

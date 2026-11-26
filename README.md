@@ -9,13 +9,25 @@ the typing is scripted ([`docs/demo/session.py`](docs/demo/session.py)); re-rend
 
 **Where it stands** (2026-11-26):
 
-- **On a real Raspberry Pi 4:** it boots, gets an address from a home router through its own Ethernet card,
-  resolves names, gives its shell over SSH, and reads and writes its SD card: the SSH host key is kept
-  there, and every change to a file leaves the old version and a line in a record. One board, one network,
-  one card.
+- **On a real Raspberry Pi 4** (one board, one card, one day of sessions):
+  - it boots from its own SD card, joins a network through its own Ethernet card, and gives its shell over SSH;
+  - it reads and writes that card: every change to a file leaves the old version and a line in a record that says
+    who made it, and the SSH host key is the same after a restart;
+  - a new kernel is sent to it over SSH and it restarts into it, with nobody at the board;
+  - it reads two real SO-101 arms (which servos are there, where each is), through a second board that has their
+    USB adapters. It cannot move them.
 - **In QEMU, on every change:** all of that, as a Pi 3 and QEMU's `virt` machine.
-- **Not yet:** separate programs, moving a servo, grants for agents, the Pi 5 (its code is written from the
-  board's device tree and has never run).
+- **Not yet:** separate programs, moving a servo, keys and grants for agents, USB, the Pi 5 (its code is written
+  from the board's device tree and has never run).
+
+| | |
+|---|---|
+| Files, versions, the record | [docs/permissions.md](docs/permissions.md), [docs/storage.md](docs/storage.md) |
+| The SD card | [docs/sdcard.md](docs/sdcard.md) |
+| A kernel sent over SSH; restart | [docs/update.md](docs/update.md), [docs/restart.md](docs/restart.md) |
+| SSH, the network, the Pi 4's Ethernet | [docs/ssh.md](docs/ssh.md), [docs/network.md](docs/network.md), [docs/genet.md](docs/genet.md) |
+| The arms, read through another machine | [docs/netbus.md](docs/netbus.md) |
+| What the kernel can touch | [docs/authority.txt](docs/authority.txt) |
 
 Raspberry Pi first. Nothing in the design is tied to it: the shell, the servo
 protocol, the kinematics and the safety core are plain cancho, and what is specific to the
@@ -31,6 +43,8 @@ page of assembly and the board's own firmware.
 src/kernel.cho   the kernel: boot, memory, the shell, the servo and arm commands (cancho)
 src/base.cho     the console's output, the clock, bytes on the second serial port
 src/network.cho  the kernel's side of the network: both links, the generator, the commands
+src/sdcard.cho   a Pi's SD card, one sector at a time
+src/keys.cho     who may log in: the lines of a keys file; holds no hardware
 src/feetech.cho  the Feetech servo protocol, read side only        } vendored from
 src/calibration.cho, kinematics.cho, so101.cho  ticks to degrees,  } cancho-robot,
                  and the SO-101's forward kinematics               } unchanged
@@ -46,6 +60,9 @@ sim/expect.cho   what `arm pose` must print for them, computed on the host
 sim/netpeer.cho  the other end of the network link for QEMU, also a program for the host
 board/boot.S     boot (park cores 1-3, EL2 -> EL1, stack, zero .bss) and the exception stub.
                  Nothing in it is called by cancho
+board/put.sh     send a file (a new kernel, say) to a running kernel over SSH
+board/send.py    send a kernel over the serial console
+board/busbridge.py  on a machine that has the servo adapters: pass on packets that read, and no others
 board/link.ld    load at 0x80000; code, constants and data on page boundaries; the
                  translation tables at 2 MB
 build.sh         cancho build --target aarch64-none-elf, assemble boot.S, link twice (Pi, virt), objcopy
@@ -122,6 +139,12 @@ program that can reach the servo bus is the one the kernel hands it to.
 Today the kernel can talk to the bus and only read: `servo scan` pings ids 1 to 8,
 `servo pos` reads each servo's position. It contains no packet that can move a servo.
 
+The arms' adapters are USB, and the kernel has no USB yet. Until it does, the bus can be another machine's:
+`servo via <address> <port>` sends each packet there, and `board/busbridge.py` on that machine passes on
+only packets that read ([docs/netbus.md](docs/netbus.md)). That is how two real arms were read from the
+kernel on a Pi 4: 14 servos found, and twelve positions that a separate reader in Python agreed with.
+It is for development: a controller must hold the bus itself.
+
 It also knows where the arm is. `arm pose` reads the five joints, turns ticks into degrees
 with the arm's calibration and runs the SO-101's forward kinematics; `arm zero` does the
 same for the all-zero pose, with no bus. That code is cancho-robot's, where it is held to
@@ -164,8 +187,9 @@ a gateway and a name server, after which names work (`lookup example.com`, `http
 [docs/addresses.md](docs/addresses.md). The shell is reached from the network through SSH only (below);
 the open shell that port 23 once had is removed. TCP here is small
 on purpose: connections are opened from the other end only, and at most one segment's worth of
-data (966 bytes) is unacknowledged at a time. No real network card yet: QEMU's Pi 4 has no Ethernet controller, so the Pi's own is
-for the day a board boots. [docs/network.md](docs/network.md) has the reasoning and what is
+data (966 bytes) is unacknowledged at a time. On a real Pi 4 the card is the board's own
+([docs/genet.md](docs/genet.md)); QEMU's Pi 4 has none, so in QEMU the card is `virt`'s.
+[docs/network.md](docs/network.md) has the reasoning and what is
 checked; [docs/drivers.md](docs/drivers.md) the order of the drivers.
 
 ```
@@ -317,22 +341,33 @@ AUTHORIZED=~/.ssh/id_ed25519.pub ./build.sh       # that key may log in, and no 
 ssh anyone@<the kernel's address> about            # after `net ssh on`: the host key is on the console
 ```
 
-It works in QEMU and on a real Pi 4. Where the kernel has a disk (QEMU so far) the host key is kept on
-it, and `KEYS.TXT` there lists more keys, each an `owner` or a `reader` that may only look
-([docs/permissions.md](docs/permissions.md)); on a real Pi the host key is still new at every start.
-There are no passwords, and cancho-ssh has not been reviewed: for a network you trust.
+It works in QEMU and on a real Pi 4. The host key is kept on the disk, so the kernel is the same host
+after a restart, and `KEYS.TXT` there lists more keys, each an `owner` or a `reader` that may only look
+([docs/permissions.md](docs/permissions.md)). SSH is the only way in from the network: the open shell
+that port 23 once had is removed. There are no passwords, and cancho-ssh has not been reviewed: for a
+network you trust.
 
 ## A new kernel without moving the card
 
-`load <bytes>`, at the serial console, takes a kernel over that line and starts it in place of the
-running one, if the sender confirms its checksum: [docs/load.md](docs/load.md). From the machine wired
-to the console:
+Over SSH, to the card, and then a restart ([docs/update.md](docs/update.md), [docs/restart.md](docs/restart.md)):
+
+```
+board/put.sh cancho@<the kernel's address> build/kernel8.img KERNEL8.IMG
+ssh cancho@<the kernel's address> restart
+```
+
+The kernel keeps the file only if the bytes that came, and the bytes the card gives back, have the
+SHA-256 the sender gave; the kernel that was there stays in `OLD`. On the real Pi 4 that took 7
+seconds and the board was back twelve seconds after `restart`. There is no fallback from a kernel
+that arrives whole and does not boot: the card then has to be mended on another machine.
+
+Or over the serial console, into memory, for bringing up hardware ([docs/load.md](docs/load.md)):
 
 ```
 python3 board/send.py /dev/ttyAMA0 build/kernel8.img
 ```
 
-It does not write the card: a power cycle brings back the card's kernel. `./load.sh` does the same in QEMU.
+That does not write the card: a power cycle brings back the card's kernel. `./load.sh` does the same in QEMU.
 
 ## How it is built, and what is left to remove
 
@@ -348,12 +383,15 @@ It does not write the card: a power cycle brings back the card's kernel. `./load
 
 Context and decisions: [`docs/ROADMAP.md`](docs/ROADMAP.md). Compiler issues to file in cancho: [`docs/issues/`](docs/issues/).
 
-## Next milestones
+## Next
 
-3. (identity map done) kernel/user split, together with
-4. tasks, scheduler, capability IPC
-5. framebuffer via the firmware mailbox
-6. SD card + FAT
+1. A heap for the kernel, so that cancho's own libraries (`std.json`, `std.buffer`) build for it.
+2. The tools an agent calls ([cancho-tools](https://github.com/alpibrusl/cancho-tools)) built in, and keys for
+   agents with grants: which names a key may read, add to or write.
+3. USB on the Pi 4, so that the kernel holds the arms' bus itself.
+4. Separate programs; the Pi 5's first boot; the safety core's side that sends.
+
+[docs/ROADMAP.md](docs/ROADMAP.md) has the decisions and the order they were taken in.
 
 ## Licence
 
