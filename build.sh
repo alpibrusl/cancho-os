@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 CANCHO=${CANCHO:-cancho}
 CLANG=${CLANG:-clang}
 mkdir -p build
-"$CANCHO" build src/kernel.cho src/feetech.cho src/calibration.cho src/kinematics.cho src/so101.cho src/safety.cho src/inet.cho --std --target aarch64-none-elf --emit obj --clang "$(command -v "$CLANG")" -o build/kernel.o
+"$CANCHO" build src/kernel.cho src/feetech.cho src/calibration.cho src/kinematics.cho src/so101.cho src/safety.cho src/inet.cho src/base.cho src/network.cho --std --target aarch64-none-elf --emit obj --clang "$(command -v "$CLANG")" -o build/kernel.o
 "$CLANG" --target=aarch64-none-elf -c board/boot.S -o build/boot.o
 # whatever main does not reach is dropped
 ld.lld --defsym=RAM_BASE=0 -T board/link.ld --gc-sections -o build/kernel8.elf build/boot.o build/kernel.o
