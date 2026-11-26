@@ -177,8 +177,9 @@ a table of one neighbour.
 
 - No connection opened from the kernel, no listening on other ports, no urgent data, no options but the
   maximum segment size, no window scaling, no selective acknowledgement, no timestamps.
-- **The first sequence number is a counter's value, not a secret.** RFC 6528 wants one nobody can guess,
-  and the kernel has no source of randomness yet. Someone who can guess it can forge a segment.
+- **The first sequence number was a counter's value, not a secret,** when this was written. It is now
+  a random word where the board has a generator ([`random.md`](random.md)): QEMU's `virt` and the
+  Pi 3, not yet the Pi 4, where it is still the counter and `net` says so.
 - **A reset is believed if its sequence number is the next one expected**, and ignored otherwise; the
   challenge acknowledgement of RFC 5961 is not sent.
 - **A connection that goes silent stays** until a fifth one is asked for and it has been idle a minute.

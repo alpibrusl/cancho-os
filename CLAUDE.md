@@ -33,6 +33,9 @@ Rules of the road
   A change to TCP is tried against a real stack before it is believed: `MACHINE=virt TCPFILE=... ./test.sh`
   (QEMU's own TCP) here, `sudo ./ping.sh` (Linux's) in CI. Twice every test passed and a real stack
   showed the code wrong (docs/network.md, section 7): never take back window that was offered.
+- Randomness (docs/random.md): `rng_word` reads the generator, the pool at k[4136..] is what other code takes
+  from. QEMU's raspi4b has no RNG200 and reading 0xfe104000 there faults: do not add the Pi 4 driver without
+  a real board to try it on. Never print or reuse a word taken from the pool.
 - The shell on port 23 (`net shell on`, docs/network.md section 8) has no password and no encryption. It must
   stay off by default and openable only from the serial console, and it must be removed or put behind SSH
   before any command can move a servo. All shell output goes through `putc`: never write to the UART elsewhere.

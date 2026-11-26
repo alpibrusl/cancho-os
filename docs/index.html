@@ -201,6 +201,7 @@ halted.</pre></div>
       <li>The Feetech servo bus, read only: <code>servo scan</code>, <code>servo pos</code></li>
       <li>The SO-101 arm's pose from its servos, and a safety check that judges a motion and sends nothing</li>
       <li>A first network: <code>ping</code>, a UDP echo and a TCP echo answered, over a serial line and over Ethernet (a virtual card in QEMU); the kernel can <code>ping</code> too</li>
+      <li>Random numbers from the board's generator (QEMU's and the Pi 3's), used to begin each connection</li>
       <li>The shell over a TCP connection, off until the console turns it on (no password, no encryption: a step towards SSH)</li>
     </ul></div>
     <div class="no"><h3>Not built</h3><ul>

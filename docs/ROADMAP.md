@@ -90,7 +90,8 @@ every milestone here boots in QEMU. Second slice (same day): QEMU's `virt` machi
 frames and ARP; `ping` from Linux over a tap interface in CI. Third slice (same day): TCP in `inet`, passive, port 7, a buffer of one segment whose room is the window
 (state owned by the caller, so `inet` is still pure), and the kernel speaking first (`ping <address>`, with an ARP request
 on the card). Fourth slice: the shell over a connection (port 23, off until `net shell on` at the console; `inet` gained a port
-the caller reads and writes). Next: SSH as its own package, cancho-ssh (needs a randomness driver in the kernel first),
+the caller reads and writes). Randomness (docs/random.md): virtio-rng and the Pi 3's generator feed a small pool, and connections begin at a random number;
+the Pi 4's generator waits for a board. Next: SSH as its own package, cancho-ssh,
 replacing the open port; a link on pins the console does not use; the Pi 4's Ethernet (GENET), testable only on the board.
 
 ## Prior art

@@ -126,6 +126,13 @@ table and the four `bus_` functions (a PL011 behind the RP1 chip instead of the 
 UART); the protocol, and everything built on it, does not. Not verified in QEMU: timing at
 1 Mbaud, half-duplex behaviour, RP1.
 
+## Randomness
+
+`random` prints sixteen bytes from the board's own generator: virtio-rng on QEMU's `virt`, the BCM2835
+generator on a Pi 3. The kernel keeps a few words ready and begins each TCP connection at one. The
+Pi 4's generator has no driver yet, because QEMU's Pi 4 does not have the device to test against:
+[docs/random.md](docs/random.md).
+
 ## The network
 
 The kernel answers `ping`, a UDP echo and a TCP echo (port 7) over two links: a serial line
