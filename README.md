@@ -217,7 +217,9 @@ in 1 s) and its shell. [docs/genet.md](docs/genet.md).
 **And it has a disk.** The card the board boots from: `disk` found it (a 128 GB card, a FAT32 volume),
 `ls` listed the firmware's 43 files, a file was written and read back, written again with the first
 version kept, and the SSH host key was the same after the kernel was started again. A 2.2 MB file reads
-in 4 s. [docs/sdcard.md](docs/sdcard.md), and Linux's `fsck.fat` on another machine then found nothing wrong with it. Everything else in this file was still measured in QEMU.
+in 4 s. [docs/sdcard.md](docs/sdcard.md), and Linux's `fsck.fat` on another machine then found nothing wrong with it.
+The board now boots this kernel from that card by itself, with the same host key after a power cycle.
+Everything else in this file was still measured in QEMU.
 
 You need a Raspberry Pi 4, a microSD card and a USB-serial cable with **3.3 V** levels (a
 5 V one damages the pins).

@@ -80,10 +80,20 @@ The card was then moved to a Pi 5 running Linux, which had no part in writing it
 | `cmp` of the 2.2 MB copy with the file it was copied from | the same, byte for byte |
 | `tests/checklog.py` on `LOG.TXT`, with the files beside it | 5 lines, each following; the three files hold what their lines say |
 
+## Turned off and on
+
+The same visit to the other machine put this kernel on the card as `kernel8.img`. Back in the Pi 4,
+with the power cut and restored:
+
+| what | result |
+|---|---|
+| the board, alone | the firmware loaded the kernel from the card: `about` says 0.0.27 |
+| `disk`, `record` | the card, and "5 lines, each following" |
+| `net ssh on` | "read from the disk: the same as before the restart", and the key of the first session |
+| `sum KERNEL8.IMG` over SSH | 368,832 bytes, and the Adler-32 Python gives the file that was copied there |
+
 ## What was not done
 
-- **No power cycle.** The restart was a kernel loaded over the serial console. The board has not been
-  turned off and on with the new files on its card.
 - **No command writes a kernel to the card.** The kernel the board boots from was put there by another machine.
 - **One card.** Cards differ, above all in how long they take to become ready and to store a block.
 - **It is slow**, by choice: one data line and one block a command. Four lines and many blocks a command
