@@ -66,6 +66,8 @@
   for a wider one (cancho `docs/mmio.md` 3), not fixed yet.
 - `load` (docs/load.md): a kernel sent over the serial console replaces the running one. A tool for bringing up
   hardware on the real boards without moving the SD card for every build; `board/send.py` is the sender.
+- Directories (2026-11-26, docs/storage.md): a name may be a path; `mkdir`, `ls <path>`. Short names still.
+  Next: long names, which the tools and the compiler's source tree need.
 - BOOT.TXT (2026-11-26, docs/boot.md): the lines the board types to itself at its start (the network, SSH, where
   the servo bus is), from a file written at the console only. With `put` and `restart`, an update needs nobody.
 - A heap (2026-11-26): cancho's bare target got `malloc` and `free` (cancho docs/freestanding.md 8), asked for

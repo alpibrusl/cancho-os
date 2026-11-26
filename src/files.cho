@@ -151,48 +151,113 @@ pub fn boot_name[&r](text: &r [byte], from: int, to: int) -> [] bool {
     return a == 'e' && b == 'l' && c == 'f' || a == 'd' && b == 'a' && c == 't' || a == 'd' && b == 't' && c == 'b' || a == 'b' && b == 'i' && c == 'n' || a == 'i' && b == 'm' && c == 'g';
 }
 
-// May `put` make or replace `text[from..to]`? A short name that is not one of the kernel's own.
+// May `put` make or replace `text[from..to]`? A path whose last name is a short name, that is not one of the
+// kernel's own names at the top, and not under OLD.
 pub fn put_name[&r](text: &r [byte], from: int, to: int) -> [] bool {
     var good = false;
     region r {
         let sec = alloc_slice[r](512, byte_of(0));
+        let at = leaf(text, from, to);
         // (BOOT.TXT is run with the console's authority at the next start: it is written at the console only)
-        good = !kept_name(text, from, to) && !fat.named("BOOT.TXT", 8, text, from, to) && fat.put_entry(sec, 0, text, from, to, 0, 0) == 0;
+        let own = at == from && (kept_name(text, from, to) || fat.named("BOOT.TXT", 8, text, from, to));
+        good = !own && !under_old(text, from, to) && fat.put_entry(sec, 0, text, at, to, 0, 0) == 0;
     }
     return good;
 }
 
-// Does `text[from..to]` begin with `OLD/`, the way a version is named?
-fn in_old[&r](text: &r [byte], from: int, to: int) -> [] bool {
-    if to - from < 5 {
-        return false;
+// ---- paths (docs/storage.md) ------------------------------------------------------------------
+// A name may have directories before it, with `/` between: `SRC/KERNEL.CHO`. Short names throughout.
+
+// Where the last part of the path `text[from..to]` begins: after its last `/`, or at `from`.
+fn leaf[&r](text: &r [byte], from: int, to: int) -> [] int {
+    var at = from;
+    var i = from;
+    while i < to {
+        if int_of(text[i]) == '/' {
+            at = i + 1;
+        }
+        i = i + 1;
     }
-    return (int_of(text[from]) | 32) == 'o' && (int_of(text[from + 1]) | 32) == 'l' && (int_of(text[from + 2]) | 32) == 'd' && int_of(text[from + 3]) == '/';
+    return at;
 }
 
-// The file a command reads, `text[from..to]`: a name of the top directory, or `OLD/` and a version's.
-// 0 with `o[3]`, `o[4]` its first cluster and its length; else the reason is printed and 1 answered.
-fn source[&mc, &mv, &md, &s, &b, &t, &q, &i, &m, &n, &o, &u, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], sec: &!b [byte], tab: &!t [byte], wt: &!q [byte], info: &i [int], name: &!m [byte], out: &!n [int], o: &!o [int], w: &!u [int], text: &r [byte], from: int, to: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+// Is the first part of the path `OLD`, the directory the versions are kept in? Nothing is written under it
+// but by the kernel.
+fn under_old[&r](text: &r [byte], from: int, to: int) -> [] bool {
+    var i = from;
+    while i < to && int_of(text[i]) != '/' {
+        i = i + 1;
+    }
+    return i < to && fat.named("OLD", 3, text, from, i);
+}
+
+// The directory the path `text[from..to]` names, every part of it a directory (`to` is where the last name
+// begins, so the path ends with `/` or is empty): its first cluster, 0 for the top. -1 with the reason printed.
+// A part that begins with a dot is refused: `..` would be a way around the names the kernel keeps for itself.
+fn folder[&mc, &mv, &md, &s, &b, &q, &i, &m, &n, &o, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], sec: &!b [byte], wt: &!q [byte], info: &i [int], name: &!m [byte], out: &!n [int], o: &!o [int], text: &r [byte], from: int, to: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
     var dir = 0;
     var at = from;
-    if in_old(text, from, to) {
-        dir = disk.old_dir(con, vio, dma, k, sec, tab, wt, info, name, out, o, w, false);
-        if dir < 0 {
-            return 1;
+    var i = from;
+    while i < to {
+        if int_of(text[i]) == '/' {
+            if i == at || int_of(text[at]) == '.' {
+                base.puts(con, k, "not a path: names with `/` between them, none empty and none beginning with a dot\r\n");
+                return -1;
+            }
+            if disk.look(vio, dma, k, sec, wt, info, name, out, o, dir, text, at, i) != 0 {
+                base.puts(con, k, "the disk could not be read\r\n");
+                return -1;
+            }
+            if o[0] == 0 || o[8] != fat.entry_directory() {
+                base.puts(con, k, "no such directory (`ls` lists the top one, `ls <path>` another)\r\n");
+                return -1;
+            }
+            dir = o[3];
+            at = i + 1;
         }
-        if dir == 0 {
-            base.puts(con, k, "no versions are kept on this disk yet\r\n");
-            return 1;
-        }
-        at = from + 4;
+        i = i + 1;
     }
-    if disk.look(vio, dma, k, sec, wt, info, name, out, o, dir, text, at, to) != 0 {
+    return dir;
+}
+
+// The file `text[from..to]` of the directory `dir`. 0 with `o[3]`, `o[4]` its first cluster and its length; else
+// the reason is printed and 1 answered.
+fn file_at[&mc, &mv, &md, &s, &b, &q, &i, &m, &n, &o, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], sec: &!b [byte], wt: &!q [byte], info: &i [int], name: &!m [byte], out: &!n [int], o: &!o [int], dir: int, text: &r [byte], from: int, to: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+    if disk.look(vio, dma, k, sec, wt, info, name, out, o, dir, text, from, to) != 0 {
         base.puts(con, k, "the disk could not be read\r\n");
         return 1;
     }
     if o[0] == 0 || o[8] != fat.entry_file() {
         base.puts(con, k, "no such file (short names only; `ls` lists them, and `versions` what is kept)\r\n");
         return 1;
+    }
+    return 0;
+}
+
+// The file a command reads, by its path. 0 with `o[3]`, `o[4]`; else the reason is printed and 1 answered.
+fn source[&mc, &mv, &md, &s, &b, &q, &i, &m, &n, &o, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], sec: &!b [byte], wt: &!q [byte], info: &i [int], name: &!m [byte], out: &!n [int], o: &!o [int], text: &r [byte], from: int, to: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+    let at = leaf(text, from, to);
+    let dir = folder(con, vio, dma, k, sec, wt, info, name, out, o, text, from, at);
+    if dir < 0 {
+        return 1;
+    }
+    return file_at(con, vio, dma, k, sec, wt, info, name, out, o, dir, text, at, to);
+}
+
+// The directories of the one or two paths of a change, into `pd`: 0 the first's directory, 1 where its last
+// name begins, and 2, 3 the same for the second (`copy <from> <to>`). 0; else the reason is printed and 1.
+fn paths[&mc, &mv, &md, &s, &b, &q, &i, &m, &n, &o, &r, &p](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], sec: &!b [byte], wt: &!q [byte], info: &i [int], name: &!m [byte], out: &!n [int], o: &!o [int], text: &r [byte], first: int, mid: int, n: int, what: int, pd: &!p [int]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+    pd[1] = leaf(text, first, mid);
+    pd[0] = folder(con, vio, dma, k, sec, wt, info, name, out, o, text, first, pd[1]);
+    if pd[0] < 0 {
+        return 1;
+    }
+    if what == 3 {
+        pd[3] = leaf(text, mid + 1, n);
+        pd[2] = folder(con, vio, dma, k, sec, wt, info, name, out, o, text, mid + 1, pd[3]);
+        if pd[2] < 0 {
+            return 1;
+        }
     }
     return 0;
 }
@@ -223,10 +288,12 @@ fn change[&mc, &mv, &md, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000
         let hd = alloc_slice[r](32, byte_of(0));
         let out = alloc_slice[r](3, 0);
         let o = alloc_slice[r](10, 0);
+        let pd = alloc_slice[r](4, 0);
         let w = alloc_slice[r](8, 0);
         w[5] = -1;
         // the words after the command
         var first = 6;
+        // (`mkdir ` is six, as `write ` is)
         if what == 2 || what == 4 {
             first = 7;
         } else if what == 3 {
@@ -243,9 +310,45 @@ fn change[&mc, &mv, &md, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000
             base.puts(con, k, "usage: write <name> <text>, append <name> <text>, copy <from> <to>\r\n");
         } else if ledger.ready(con, vio, dma, k, sec, tab, rtab, info, name, out, o, w, who) != 0 {
             // `ready` said why
+        } else if what != 5 && paths(con, vio, dma, k, sec, rtab, info, name, out, o, text, first, mid, n, what, pd) != 0 {
+            // `paths` said why
+        } else if what == 6 {
+            // a directory: its one cluster first, holding the two entries a directory begins with; then its name
+            if disk.place(con, vio, dma, k, sec, tab, rtab, info, name, out, o, w, pd[0], text, pd[1], mid) == 0 {
+                let slot = o[5];
+                let slot_i = o[6];
+                let c = disk.take(vio, dma, k, tab, info, w, 0);
+                var z = 0;
+                while z < 512 {
+                    sec[z] = byte_of(0);
+                    z = z + 1;
+                }
+                var bad = c < 0;
+                var s = 1;
+                while s < info[1] && !bad {
+                    bad = disk.write(vio, dma, k, fat.cluster_sector(info, c) + s, sec) != 0;
+                    s = s + 1;
+                }
+                if !bad {
+                    fat.put_dots(sec, c, pd[0]);
+                    bad = disk.write(vio, dma, k, fat.cluster_sector(info, c), sec) != 0;
+                }
+                bad = bad || disk.kept(vio, dma, k, tab, info, w) != 0;
+                if !bad && ledger.record_add(vio, dma, k, info, w, who, "mkdir", text, first, mid, text, 0, 0, 0, -1, hd, false) != 0 {
+                    base.puts(con, k, "the record could not be added to: nothing was changed\r\n");
+                    bad = true;
+                }
+                bad = bad || disk.read(vio, dma, k, slot, sec) != 0 || fat.put_directory(sec, slot_i, text, pd[1], mid, c) != 0 || disk.write(vio, dma, k, slot, sec) != 0;
+                if bad {
+                    base.puts(con, k, "the disk is full, or could not be written: no directory was made\r\n");
+                } else {
+                    disk.counted(vio, dma, k, sec, info, w);
+                    base.puts(con, k, "made: a directory\r\n");
+                }
+            }
         } else if what == 1 {
             // a file whose contents are the text and a line feed: a new one, or a new version of one
-            if disk.look(vio, dma, k, sec, rtab, info, name, out, o, 0, text, first, mid) != 0 {
+            if disk.look(vio, dma, k, sec, rtab, info, name, out, o, pd[0], text, pd[1], mid) != 0 {
                 base.puts(con, k, "the disk could not be read\r\n");
             } else if o[0] != 0 && o[8] != fat.entry_file() {
                 base.puts(con, k, "that is a directory\r\n");
@@ -257,7 +360,7 @@ fn change[&mc, &mv, &md, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000
                 let os = o[4];
                 var ok = true;
                 if !there {
-                    ok = disk.place(con, vio, dma, k, sec, tab, rtab, info, name, out, o, w, 0, text, first, mid) == 0;
+                    ok = disk.place(con, vio, dma, k, sec, tab, rtab, info, name, out, o, w, pd[0], text, pd[1], mid) == 0;
                 }
                 var size = n - mid - 1;
                 if size > 500 {
@@ -283,7 +386,7 @@ fn change[&mc, &mv, &md, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000
                 } else if !there {
                     if ledger.record_add(vio, dma, k, info, w, who, "write", text, first, mid, text, 0, 0, 0, size, hd, true) != 0 {
                         base.puts(con, k, "the record could not be added to: nothing was changed\r\n");
-                    } else if disk.name_it(vio, dma, k, sec, tab, info, o, w, text, first, mid, size) != 0 {
+                    } else if disk.name_it(vio, dma, k, sec, tab, info, o, w, text, pd[1], mid, size) != 0 {
                         base.puts(con, k, "the disk could not be written: no file was made\r\n");
                     } else {
                         disk.counted(vio, dma, k, sec, info, w);
@@ -320,7 +423,7 @@ fn change[&mc, &mv, &md, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000
             }
         } else if what == 4 {
             // the file's contents get a name in OLD, and then its own name is taken away
-            if disk.look(vio, dma, k, sec, rtab, info, name, out, o, 0, text, first, mid) != 0 {
+            if disk.look(vio, dma, k, sec, rtab, info, name, out, o, pd[0], text, pd[1], mid) != 0 {
                 base.puts(con, k, "the disk could not be read\r\n");
             } else if o[0] == 0 {
                 base.puts(con, k, "no such file to remove\r\n");
@@ -412,10 +515,10 @@ fn change[&mc, &mv, &md, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000
             }
         } else if what == 3 {
             // a new file with the contents of another, or of a version, read as `sum` reads it
-            if source(con, vio, dma, k, sec, tab, rtab, info, name, out, o, w, text, first, mid) == 0 {
+            if file_at(con, vio, dma, k, sec, rtab, info, name, out, o, pd[0], text, pd[1], mid) == 0 {
                 let from_cluster = o[3];
                 let size = o[4];
-                if disk.place(con, vio, dma, k, sec, tab, rtab, info, name, out, o, w, 0, text, mid + 1, n) == 0 {
+                if disk.place(con, vio, dma, k, sec, tab, rtab, info, name, out, o, w, pd[2], text, pd[3], n) == 0 {
                     var done = 0;
                     var cluster = from_cluster;
                     var held = -1;
@@ -457,7 +560,7 @@ fn change[&mc, &mv, &md, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000
                         sha.final(hs, hd);
                         bad = ledger.record_add(vio, dma, k, info, w, who, "copy", text, mid + 1, n, text, first, mid, 0, size, hd, true) != 0;
                     }
-                    if bad || disk.name_it(vio, dma, k, sec, tab, info, o, w, text, mid + 1, n, size) != 0 {
+                    if bad || disk.name_it(vio, dma, k, sec, tab, info, o, w, text, pd[3], n, size) != 0 {
                         base.puts(con, k, "the disk is full, or could not be read or written: no file was made\r\n");
                     } else {
                         disk.counted(vio, dma, k, sec, info, w);
@@ -469,7 +572,7 @@ fn change[&mc, &mv, &md, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000
             }
         } else {
             // more at the end of a file that is there: its text and a line feed
-            if disk.look(vio, dma, k, sec, rtab, info, name, out, o, 0, text, first, mid) != 0 || o[0] == 0 || o[8] != fat.entry_file() {
+            if disk.look(vio, dma, k, sec, rtab, info, name, out, o, pd[0], text, pd[1], mid) != 0 || o[0] == 0 || o[8] != fat.entry_file() {
                 base.puts(con, k, "no such file to add to (`write` makes one)\r\n");
             } else {
                 let size = o[4];
@@ -533,6 +636,7 @@ pub fn store[&mc, &mv, &md, &mg, &s, &r, &h](con: &!mc Mmio("0x9000000..0x900004
         let hx = alloc_slice[r](64, byte_of(0));
         let out = alloc_slice[r](3, 0);
         let o = alloc_slice[r](10, 0);
+        let pd = alloc_slice[r](4, 0);
         let w = alloc_slice[r](8, 0);
         w[5] = -1;
         // what came, against what was sent
@@ -566,7 +670,9 @@ pub fn store[&mc, &mv, &md, &mg, &s, &r, &h](con: &!mc Mmio("0x9000000..0x900004
             disk.put_why(con, k, why);
         } else if ledger.ready(con, vio, dma, k, sec, tab, rtab, info, name, out, o, w, who) != 0 {
             // `ready` said why
-        } else if disk.look(vio, dma, k, sec, rtab, info, name, out, o, 0, text, from, to) != 0 {
+        } else if paths(con, vio, dma, k, sec, rtab, info, name, out, o, text, from, to, to, 0, pd) != 0 {
+            // `paths` said why
+        } else if disk.look(vio, dma, k, sec, rtab, info, name, out, o, pd[0], text, pd[1], to) != 0 {
             base.puts(con, k, "the disk could not be read\r\n");
         } else if o[0] != 0 && o[8] != fat.entry_file() {
             base.puts(con, k, "that is a directory\r\n");
@@ -578,7 +684,7 @@ pub fn store[&mc, &mv, &md, &mg, &s, &r, &h](con: &!mc Mmio("0x9000000..0x900004
             let os = o[4];
             var bad = false;
             if !there {
-                bad = disk.place(con, vio, dma, k, sec, tab, rtab, info, name, out, o, w, 0, text, from, to) != 0;
+                bad = disk.place(con, vio, dma, k, sec, tab, rtab, info, name, out, o, w, pd[0], text, pd[1], to) != 0;
             }
             let slot = o[5];
             let slot_i = o[6];
@@ -661,7 +767,7 @@ pub fn store[&mc, &mv, &md, &mg, &s, &r, &h](con: &!mc Mmio("0x9000000..0x900004
                     bad = disk.write(vio, dma, k, es, sec) != 0;
                 }
             } else if !bad {
-                bad = disk.read(vio, dma, k, slot, sec) != 0 || fat.put_entry(sec, slot_i, text, from, to, first_new, size) != 0 || disk.write(vio, dma, k, slot, sec) != 0;
+                bad = disk.read(vio, dma, k, slot, sec) != 0 || fat.put_entry(sec, slot_i, text, pd[1], to, first_new, size) != 0 || disk.write(vio, dma, k, slot, sec) != 0;
             }
             if !bad {
                 disk.counted(vio, dma, k, sec, info, w);
@@ -686,6 +792,7 @@ pub fn store[&mc, &mv, &md, &mg, &s, &r, &h](con: &!mc Mmio("0x9000000..0x900004
 pub fn command[&mc, &mv, &md, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], text: &r [byte], n: int, console: bool) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
     let is_disk = n == 4 && begins(text, n, "disk");
     let is_ls = n == 2 && begins(text, n, "ls");
+    let is_lsdir = n > 3 && begins(text, n, "ls ");
     let is_versions = n == 8 && begins(text, n, "versions");
     let is_record = n == 6 && begins(text, n, "record");
     let is_cat = n > 4 && begins(text, n, "cat ");
@@ -710,29 +817,31 @@ pub fn command[&mc, &mv, &md, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f2
     } else if n > 6 && begins(text, n, "purge ") {
         first = 6;
         what = 5;
+    } else if n > 6 && begins(text, n, "mkdir ") {
+        first = 6;
+        what = 6;
     }
     if first > 0 && what != 5 {
         var mid = word(text, first, n);
-        if what == 4 {
+        if what >= 4 {
             mid = n;
         }
-        if secret(text, first, mid) || what == 3 && mid < n && secret(text, mid + 1, n) {
+        // the kernel's own names are names of the top directory; under OLD nothing is written but by the kernel
+        let top_a = leaf(text, first, mid) == first;
+        let top_b = what == 3 && mid < n && leaf(text, mid + 1, n) == mid + 1;
+        if top_a && secret(text, first, mid) || top_b && secret(text, mid + 1, n) {
             base.puts(con, k, "the host key is kept by the kernel: the shell does not show it, copy it or change it\r\n");
             return 1;
         }
-        if what != 0 && what != 3 && kept_name(text, first, mid) || what == 3 && mid < n && kept_name(text, mid + 1, n) {
+        if what != 0 && what != 3 && (top_a && kept_name(text, first, mid) || under_old(text, first, mid)) || what == 3 && mid < n && (top_b && kept_name(text, mid + 1, n) || under_old(text, mid + 1, n)) {
             base.puts(con, k, "that name is the kernel's: OLD holds the versions and LOG.TXT the record\r\n");
             return 1;
         }
-    }
-    if what != 0 && what != 5 && !console {
-        var mid = word(text, first, n);
-        if what == 4 {
-            mid = n;
-        }
-        if what != 3 && boot_name(text, first, mid) || what == 3 && mid < n && boot_name(text, mid + 1, n) {
-            base.puts(con, k, "a file the board starts from: it is changed with `put`, which checks every byte, or at the console\r\n");
-            return 1;
+        if what != 0 && !console {
+            if what != 3 && top_a && boot_name(text, first, mid) || top_b && boot_name(text, mid + 1, n) {
+                base.puts(con, k, "a file the board starts from: it is changed with `put`, which checks every byte, or at the console\r\n");
+                return 1;
+            }
         }
     }
     if what == 5 && !console {
@@ -747,7 +856,7 @@ pub fn command[&mc, &mv, &md, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f2
         }
         return change(con, vio, dma, k, text, n, what, who);
     }
-    if !is_disk && !is_ls && !is_cat && !is_sum && !is_versions && !is_record {
+    if !is_disk && !is_ls && !is_lsdir && !is_cat && !is_sum && !is_versions && !is_record {
         return 0;
     }
     region r {
@@ -792,6 +901,22 @@ pub fn command[&mc, &mv, &md, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f2
                 base.put_dec(con, k, count);
                 base.puts(con, k, " files\r\n");
             }
+        } else if is_lsdir {
+            let at = leaf(text, 3, n);
+            let parent = folder(con, vio, dma, k, sec, wt, info, name, out, o, text, 3, at);
+            if parent >= 0 {
+                if disk.look(vio, dma, k, sec, wt, info, name, out, o, parent, text, at, n) != 0 || o[0] == 0 || o[8] != fat.entry_directory() {
+                    base.puts(con, k, "no such directory (`ls` lists the top one)\r\n");
+                } else {
+                    let count = disk.top(con, vio, dma, k, sec, wt, info, name, out, o[3], text, 0, 0);
+                    if count < 0 {
+                        base.puts(con, k, "the disk could not be read\r\n");
+                    } else {
+                        base.put_dec(con, k, count);
+                        base.puts(con, k, " files\r\n");
+                    }
+                }
+            }
         } else if is_record {
             let have = ledger.record_load(vio, dma, k, sec, wt, info, name, out, o);
             if have < 0 {
@@ -821,7 +946,7 @@ pub fn command[&mc, &mv, &md, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f2
                 base.put_dec(con, k, count);
                 base.puts(con, k, " versions kept (`cat OLD/<name>` shows one, `copy OLD/<name> <new>` brings one back)\r\n");
             }
-        } else if source(con, vio, dma, k, sec, tab, wt, info, name, out, o, w, text, 4, n) == 0 {
+        } else if source(con, vio, dma, k, sec, wt, info, name, out, o, text, 4, n) == 0 {
             let size = o[4];
             let got = disk.whole(con, vio, dma, k, sec, tab, info, o[3], size, is_cat, sum);
             if got < 0 {
