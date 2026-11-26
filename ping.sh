@@ -20,7 +20,7 @@ if [ "$MACHINE" = virt ]; then
     # ping would leave by it)
     ip tuntap add dev tap0 mode tap && ip addr add 10.0.0.1 peer 10.0.0.2 dev tap0 && ip link set tap0 up
     qemu-system-aarch64 -M virt -cpu cortex-a57 -m 1G -global virtio-mmio.force-legacy=false \
-        -netdev tap,id=n0,ifname=tap0,script=no,downscript=no -device virtio-net-device,netdev=n0 \
+        -netdev tap,id=n0,ifname=tap0,script=no,downscript=no -device virtio-net-device,netdev=n0 -device virtio-rng-device \
         -kernel build/kernel-virt.elf -serial stdio -display none -monitor none \
         < build/uart.in > build/ping-uart.out 2> build/qemu.err &
 else
