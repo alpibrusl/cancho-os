@@ -972,6 +972,19 @@ pub fn net_pump[&mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h](bus: &!mu Mmio("0
 // that has it (in the clear on port 23, or through SSH on port 22), then `net_pump`.
 // Answers what `session` or `sshd.step` does.
 pub fn net_poll[&mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l, &si, &sb, &sx](bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], rline: &!l [byte], si: &!si [int], sb: &!sb [byte], sx: &!sx [byte], now: int, iss: int) -> [mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
+    if k[4174] != 0 {
+        // a port was just closed (`net ssh off`, `net shell off`): whoever was connected to it is hung up
+        // on, since nothing will read or answer them now
+        var c = 0;
+        while c < inet.tcp_count(tcp, bufs, inbox) {
+            if inet.tcp_port(tcp, c) == k[4174] {
+                inet.tcp_close(tcp, c);
+            }
+            c = c + 1;
+        }
+        k[4174] = 0;
+        k[29] = 0;
+    }
     var ready = 0;
     if k[4153] == 1 {
         ready = sshd.step(k, tcp, bufs, inbox, rline, wire, si, sb, sx, now);
@@ -1447,6 +1460,7 @@ pub fn net_command[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l, &
         return 1;
     }
     if n == 11 && begins(text, n, "net ssh off") {
+        k[4174] = k[30];
         k[30] = 0;
         k[4153] = 0;
         base.puts(con, k, "port 22 is closed\r\n");

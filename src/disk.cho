@@ -1,0 +1,367 @@
+edition 14;
+
+module disk;
+
+import base;
+import fat;
+import network;
+
+// disk.cho -- the kernel's side of storage (docs/storage.md): a disk as "read one sector", the first thing
+// under that (virtio-blk, on QEMU's virt machine), and the commands that read a FAT volume with it.
+// Everything about what a sector means is src/fat.cho, which holds no hardware.
+//
+// In the kernel's state: k[4170] the disk (0 none, 1 virtio-blk)   k[4171] how many sectors it has
+//   k[4172] its registers   k[4173] its queue's counter
+//
+// virtio-blk (VIRTIO 1.2, section 5.2): one queue; a request is three pieces chained together, a header
+// (0 to read, the sector), 512 bytes for the data, and one byte in which the device says how it went. They
+// are in `dma`, after the network card's and the generator's: +0x7000 the queue's three tables, +0x7400 the
+// header, +0x7410 the status byte, +0x7800 the data.
+
+// Find the disk and bring it up. 1 if there is none.
+pub fn start[&mv, &md, &s](vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int]) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
+    var found = 0;
+    var slot = 0;
+    while slot < 32 && found == 0 {
+        let at = 0xa000000 + slot * 0x200;
+        if mmio_read32(vio, at) == 0x74726976 && mmio_read32(vio, at + 4) == 2 && mmio_read32(vio, at + 8) == 2 {
+            found = at;
+        }
+        slot = slot + 1;
+    }
+    if found == 0 {
+        return 1;
+    }
+    let q = k[14] + 0x217000;
+    var z = 0;
+    while z < 0x800 {
+        mmio_write64(dma, q + z, 0);
+        z = z + 8;
+    }
+    mmio_write32(vio, found + 0x70, 0);
+    mmio_write32(vio, found + 0x70, 1);
+    mmio_write32(vio, found + 0x70, 3);
+    // nothing is asked of the device but the current version of the interface (bit 32)
+    mmio_write32(vio, found + 0x24, 0);
+    mmio_write32(vio, found + 0x20, 0);
+    mmio_write32(vio, found + 0x24, 1);
+    mmio_write32(vio, found + 0x20, 1);
+    mmio_write32(vio, found + 0x70, 11);
+    if mmio_read32(vio, found + 0x70) & 8 == 0 || network.vnet_queue(vio, found, 0, q) != 0 {
+        mmio_write32(vio, found + 0x70, 128);
+        return 1;
+    }
+    // the three pieces, chained: the header, the data (the device writes it: 2), the status (the same)
+    mmio_write64(dma, q, q + 0x400);
+    mmio_write32(dma, q + 8, 16);
+    network.put16le(dma, q + 12, 1);
+    network.put16le(dma, q + 14, 1);
+    mmio_write64(dma, q + 16, q + 0x800);
+    mmio_write32(dma, q + 24, 512);
+    network.put16le(dma, q + 28, 1 | 2);
+    network.put16le(dma, q + 30, 2);
+    mmio_write64(dma, q + 32, q + 0x410);
+    mmio_write32(dma, q + 40, 1);
+    network.put16le(dma, q + 44, 2);
+    mmio_write32(vio, found + 0x70, 15);
+    // how many sectors, from the device's own description
+    k[4171] = mmio_read32(vio, found + 0x100) | mmio_read32(vio, found + 0x104) << 32;
+    k[4172] = found;
+    k[4173] = 0;
+    k[4170] = 1;
+    return 0;
+}
+
+// Sector `n` of the disk, into `into`. 0, or 1 if there is no such sector or the device refused.
+pub fn read[&mv, &md, &s, &b](vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], n: int, into: &!b [byte]) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
+    if k[4170] != 1 || n < 0 || n >= k[4171] || len(into) < 512 {
+        return 1;
+    }
+    let q = k[14] + 0x217000;
+    mmio_write32(dma, q + 0x400, 0);
+    mmio_write32(dma, q + 0x404, 0);
+    mmio_write64(dma, q + 0x408, n);
+    mmio_write8(dma, q + 0x410, 255);
+    network.put16le(dma, q + 0x104 + k[4173] % 8 * 2, 0);
+    k[4173] = (k[4173] + 1) % 65536;
+    network.put16le(dma, q + 0x102, k[4173]);
+    mmio_write32(vio, k[4172] + 0x50, 0);
+    var spins = 0;
+    while network.get16le(dma, q + 0x202) != k[4173] && spins < 10000000 {
+        spins = spins + 1;
+    }
+    let raised = mmio_read32(vio, k[4172] + 0x60);
+    if raised != 0 {
+        mmio_write32(vio, k[4172] + 0x64, raised);
+    }
+    if network.get16le(dma, q + 0x202) != k[4173] || mmio_read8(dma, q + 0x410) != 0 {
+        return 1;
+    }
+    var i = 0;
+    while i < 512 {
+        into[i] = byte_of(mmio_read8(dma, q + 0x800 + i));
+        i = i + 1;
+    }
+    return 0;
+}
+
+// The volume on the disk, into `info` (what `fat.mount` fills). 0, or why not: 1 no disk, 2 it could not be
+// read, 3 no FAT partition, or one of `fat.mount`'s refusals.
+fn volume[&mv, &md, &s, &b, &i](vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], sec: &!b [byte], info: &!i [int]) -> [mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
+    if k[4170] == 0 {
+        return 1;
+    }
+    if read(vio, dma, k, 0, sec) != 0 {
+        return 2;
+    }
+    let at = fat.partition(sec);
+    if at < 0 {
+        return 3;
+    }
+    if at > 0 && read(vio, dma, k, at, sec) != 0 {
+        return 2;
+    }
+    return fat.mount(sec, at, info);
+}
+
+fn put_why[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), k: &!s [int], why: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048")] int {
+    if why == 1 {
+        return base.puts(con, k, "no disk: QEMU's virt machine has one when it is given one; a Pi's card has no driver yet\r\n");
+    }
+    if why == 2 {
+        return base.puts(con, k, "the disk could not be read\r\n");
+    }
+    if why == 3 {
+        return base.puts(con, k, "no FAT volume on the disk, and no partition table that names one\r\n");
+    }
+    if why == fat.not_512() {
+        return base.puts(con, k, "a volume whose sectors are not 512 bytes: not read here\r\n");
+    }
+    if why == fat.fat12() {
+        return base.puts(con, k, "a FAT12 volume: not read here\r\n");
+    }
+    return base.puts(con, k, "what is on the disk is not a FAT volume\r\n");
+}
+
+// The top directory, entry by entry. With `wanted[from..to]` empty every file is printed; otherwise the
+// file of that name is looked for, and `out` is its entry (length of name, first cluster, bytes).
+// Answers how many files were printed, or 1 if the one wanted was found, or -1 if the disk failed.
+fn top[&mc, &mv, &md, &s, &b, &t, &i, &m, &o, &w](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], sec: &!b [byte], tab: &!t [byte], info: &i [int], name: &!m [byte], out: &!o [int], wanted: &w [byte], from: int, to: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
+    var count = 0;
+    var cluster = info[4];
+    var left = info[5];
+    var at = info[4];
+    var in_cluster = 0;
+    var steps = 0;
+    var going = true;
+    while going && steps < 65536 {
+        steps = steps + 1;
+        // which sector is next: of the fixed run (FAT16), or of the directory's clusters (FAT32)
+        if info[0] == 16 {
+            if left == 0 {
+                return count;
+            }
+            left = left - 1;
+        } else {
+            if in_cluster == info[1] {
+                let fs = fat.fat_sector(info, cluster);
+                if fs < 0 || read(vio, dma, k, fs, tab) != 0 {
+                    return -1;
+                }
+                cluster = fat.next(info, tab, cluster);
+                in_cluster = 0;
+            }
+            at = fat.cluster_sector(info, cluster) + in_cluster;
+            if cluster < 2 || at < 0 {
+                return count;
+            }
+            in_cluster = in_cluster + 1;
+        }
+        if read(vio, dma, k, at, sec) != 0 {
+            return -1;
+        }
+        if info[0] == 16 {
+            at = at + 1;
+        }
+        var i = 0;
+        while i < 16 && going {
+            let kind = fat.entry(sec, i, name, out);
+            if kind == fat.entry_end() {
+                going = false;
+            } else if kind == fat.entry_file() {
+                if to > from {
+                    if fat.named(name, out[0], wanted, from, to) {
+                        return 1;
+                    }
+                } else {
+                    var c = 0;
+                    while c < 14 {
+                        if c < out[0] {
+                            base.putc(con, k, int_of(name[c]));
+                        } else {
+                            base.putc(con, k, 32);
+                        }
+                        c = c + 1;
+                    }
+                    base.put_dec(con, k, out[2]);
+                    base.puts(con, k, "\r\n");
+                    count = count + 1;
+                }
+            }
+            i = i + 1;
+        }
+    }
+    return count;
+}
+
+// The file that starts at `cluster` and is `size` bytes long, read to its end. With `show`, its text is
+// printed (4,096 bytes at most; what is not a letter of ASCII as a dot). `sum` is two ints, and gets the two
+// halves of the Adler-32 of all of it. Answers the bytes read, or -1.
+fn whole[&mc, &mv, &md, &s, &b, &t, &i, &u](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], sec: &!b [byte], tab: &!t [byte], info: &i [int], first: int, size: int, show: bool, sum: &!u [int]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
+    var a = 1;
+    var b = 0;
+    var done = 0;
+    var cluster = first;
+    var held = -1;
+    var steps = 0;
+    while done < size {
+        let at = fat.cluster_sector(info, cluster);
+        if at < 0 || steps > info[7] {
+            return -1;
+        }
+        steps = steps + 1;
+        var s = 0;
+        while s < info[1] && done < size {
+            if read(vio, dma, k, at + s, sec) != 0 {
+                return -1;
+            }
+            var i = 0;
+            while i < 512 && done < size {
+                let c = int_of(sec[i]);
+                a = (a + c) % 65521;
+                b = (b + a) % 65521;
+                if show && done < 4096 {
+                    if c == 10 {
+                        base.puts(con, k, "\r\n");
+                    } else if c >= 32 && c < 127 {
+                        base.putc(con, k, c);
+                    } else if c != 13 {
+                        base.putc(con, k, '.');
+                    }
+                }
+                done = done + 1;
+                i = i + 1;
+            }
+            s = s + 1;
+        }
+        if done < size {
+            // the table says which cluster is next; its sector is read again only when it changes
+            let fs = fat.fat_sector(info, cluster);
+            if fs < 0 {
+                return -1;
+            }
+            if fs != held {
+                if read(vio, dma, k, fs, tab) != 0 {
+                    return -1;
+                }
+                held = fs;
+            }
+            cluster = fat.next(info, tab, cluster);
+            if cluster < 0 {
+                // the file's clusters end before its length does
+                return -1;
+            }
+        }
+    }
+    sum[0] = a;
+    sum[1] = b;
+    return done;
+}
+
+fn begins[&r, &w](text: &r [byte], n: int, word: &w [byte]) -> [] bool {
+    if n < len(word) {
+        return false;
+    }
+    var i = 0;
+    while i < len(word) {
+        if int_of(text[i]) != int_of(word[i]) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// The commands that read the disk, for the shell: `disk`, `ls`, `cat <name>`, `sum <name>`.
+// 1 if `text[0..n]` was one of them and has been run, 0 if it is another command.
+pub fn command[&mc, &mv, &md, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0xfd580000..0xfd590000"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], text: &r [byte], n: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0xfd580000..0xfd590000")] int {
+    let is_disk = n == 4 && begins(text, n, "disk");
+    let is_ls = n == 2 && begins(text, n, "ls");
+    let is_cat = n > 4 && begins(text, n, "cat ");
+    let is_sum = n > 4 && begins(text, n, "sum ");
+    if !is_disk && !is_ls && !is_cat && !is_sum {
+        return 0;
+    }
+    region r {
+        let sec = alloc_slice[r](512, byte_of(0));
+        let tab = alloc_slice[r](512, byte_of(0));
+        let info = alloc_slice[r](fat.facts(), 0);
+        let name = alloc_slice[r](12, byte_of(0));
+        let out = alloc_slice[r](3, 0);
+        let sum = alloc_slice[r](2, 0);
+        let why = volume(vio, dma, k, sec, info);
+        if why != 0 {
+            put_why(con, k, why);
+        } else if is_disk {
+            base.puts(con, k, "a disk of ");
+            base.put_dec(con, k, k[4171]);
+            base.puts(con, k, " sectors (");
+            base.put_dec(con, k, k[4171] / 2048);
+            base.puts(con, k, " MB); a FAT");
+            base.put_dec(con, k, info[0]);
+            base.puts(con, k, " volume at sector ");
+            base.put_dec(con, k, info[8]);
+            base.puts(con, k, ", ");
+            base.put_dec(con, k, info[7]);
+            base.puts(con, k, " clusters of ");
+            base.put_dec(con, k, info[1] * 512);
+            base.puts(con, k, " bytes\r\n");
+        } else if is_ls {
+            let count = top(con, vio, dma, k, sec, tab, info, name, out, text, 0, 0);
+            if count < 0 {
+                base.puts(con, k, "the disk could not be read\r\n");
+            } else {
+                base.put_dec(con, k, count);
+                base.puts(con, k, " files\r\n");
+            }
+        } else {
+            let found = top(con, vio, dma, k, sec, tab, info, name, out, text, 4, n);
+            if found < 0 {
+                base.puts(con, k, "the disk could not be read\r\n");
+            } else if found == 0 {
+                base.puts(con, k, "no such file in the top directory (short names only; `ls` lists them)\r\n");
+            } else {
+                let size = out[2];
+                let got = whole(con, vio, dma, k, sec, tab, info, out[1], size, is_cat, sum);
+                if got < 0 {
+                    base.puts(con, k, "\r\nthe file could not be read to its end\r\n");
+                } else if is_sum {
+                    base.put_dec(con, k, got);
+                    base.puts(con, k, " bytes, adler32 ");
+                    let v = sum[1] << 16 | sum[0];
+                    var shift = 28;
+                    while shift >= 0 {
+                        base.put_hex(con, k, v >> shift & 15);
+                        shift = shift - 4;
+                    }
+                    base.puts(con, k, "\r\n");
+                } else if size > 4096 {
+                    base.puts(con, k, "\r\n[the first 4096 bytes of ");
+                    base.put_dec(con, k, size);
+                    base.puts(con, k, "]\r\n");
+                }
+            }
+        }
+    }
+    return 1;
+}

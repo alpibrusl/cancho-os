@@ -38,6 +38,11 @@ Rules of the road
   faults there, so no test may type it. Change it only with the board on the serial link, and send builds
   with `board/send.py` (docs/load.md). `dma` is mapped as device memory on purpose: a card writes it.
   Never leave `net shell on` open on a real network after a test.
+- Storage (docs/storage.md): `src/fat.cho` is pure like `inet` (given a sector, says what it means; no trap
+  on any bytes) and its tests use sectors of volumes other tools made, read by a second implementation.
+  `src/disk.cho` holds the driver and the commands. A change is tried against real images before it is
+  believed: `MACHINE=virt DISK=img ./test.sh ... 'sum NAME'` and the checksum from another tool. Nothing
+  writes a disk yet: writing is its own design and its own slice.
 - SSH (docs/ssh.md) is cancho-ssh, pinned by `SSH_REF` in the workflow and taken from `../cancho-ssh` (or
   `SSH=`) by build.sh: change it there, never copy it here. `src/sshd.cho` is the loop and must keep its two
   rules (read the connection only when nothing else moved; keep what `feed` and `tcp_write` did not take).

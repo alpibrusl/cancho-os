@@ -1,0 +1,289 @@
+edition 5;
+
+module fat;
+
+// `fat` -- reading a FAT16 or FAT32 volume (docs/storage.md), with no disk under it. Like `inet`, every
+// function is pure (`[]`), allocates nothing and never traps, whatever the bytes: it is given a sector of 512
+// bytes and says what the sector means, and whoever holds the disk does the reading. So the same file is
+// tested on the machine that builds it (tests/fat_test.cho) and runs in the kernel.
+//
+// A volume is: a first sector that describes it; one or two copies of a table with an entry for each
+// cluster (a cluster is a run of sectors, and its entry names the cluster that follows it in a file); then
+// the clusters. A directory is 32-byte entries. In FAT16 the top directory is a fixed run of sectors before
+// the clusters; in FAT32 it is a file like any other.
+//
+// What is here:  where the partition is; the volume's shape; a directory entry's short name, first cluster
+//                and length; where a cluster is; which cluster is next.
+// What is not:   writing; long names (an entry of one is skipped, and the file is seen under its short
+//                alias); FAT12 and exFAT; sectors that are not 512 bytes.
+
+pub fn sector() -> [] int {
+    return 512;
+}
+
+// ── what `mount` says when the volume cannot be read ──
+
+pub fn not_a_volume() -> [] int {
+    return -1;
+}
+
+pub fn not_512() -> [] int {
+    return -2;
+}
+
+pub fn fat12() -> [] int {
+    return -3;
+}
+
+// The ints `mount` fills:
+//   0 the kind, 16 or 32          1 sectors in a cluster        2 the table's first sector
+//   3 sectors in one table        4 the top directory: its first sector (16) or its first cluster (32)
+//   5 the top directory's sectors (16; 0 for 32)                6 the sector of cluster 2
+//   7 how many clusters           8 where the volume starts     9 its sectors
+pub fn facts() -> [] int {
+    return 10;
+}
+
+fn le16[&b](s: &b [byte], at: int) -> [] int {
+    return int_of(s[at]) + int_of(s[at + 1]) * 256;
+}
+
+fn le32[&b](s: &b [byte], at: int) -> [] int {
+    return le16(s, at) + le16(s, at + 2) * 65536;
+}
+
+// Does this sector describe a volume? Its last two bytes, a jump at its start, 512-byte sectors (or it is
+// refused later), a cluster of 1 to 128 sectors that is a power of two, one or two tables.
+fn describes[&b](s: &b [byte]) -> [] bool {
+    if len(s) < 512 || int_of(s[510]) != 85 || int_of(s[511]) != 170 {
+        return false;
+    }
+    let jump = int_of(s[0]);
+    if jump != 235 && jump != 233 {
+        return false;
+    }
+    let spc = int_of(s[13]);
+    let power = spc == 1 || spc == 2 || spc == 4 || spc == 8 || spc == 16 || spc == 32 || spc == 64 || spc == 128;
+    let tables = int_of(s[16]);
+    return power && (tables == 1 || tables == 2) && le16(s, 14) > 0;
+}
+
+// Where the volume starts, from the disk's first sector: 0 if that sector is the volume's own, else the
+// start of the first FAT partition its table lists. -1: there is none.
+pub fn partition[&b](s: &b [byte]) -> [] int {
+    if len(s) < 512 || int_of(s[510]) != 85 || int_of(s[511]) != 170 {
+        return -1;
+    }
+    if describes(s) {
+        return 0;
+    }
+    var i = 0;
+    while i < 4 {
+        let at = 446 + i * 16;
+        let kind = int_of(s[at + 4]);
+        if kind == 1 || kind == 4 || kind == 6 || kind == 11 || kind == 12 || kind == 14 {
+            return le32(s, at + 8);
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// The volume whose first sector is `s`, at sector `start` of the disk. 0 and `info` filled, or one of the
+// three refusals above.
+pub fn mount[&b, &i](s: &b [byte], start: int, info: &!i [int]) -> [] int {
+    if len(info) < facts() || start < 0 || !describes(s) {
+        return not_a_volume();
+    }
+    if le16(s, 11) != 512 {
+        return not_512();
+    }
+    let spc = int_of(s[13]);
+    let reserved = le16(s, 14);
+    let tables = int_of(s[16]);
+    let top_entries = le16(s, 17);
+    var total = le16(s, 19);
+    if total == 0 {
+        total = le32(s, 32);
+    }
+    var table = le16(s, 22);
+    if table == 0 {
+        table = le32(s, 36);
+    }
+    let top_sectors = (top_entries * 32 + 511) / 512;
+    let first = reserved + tables * table + top_sectors;
+    if table == 0 || total <= first {
+        return not_a_volume();
+    }
+    let clusters = (total - first) / spc;
+    if clusters < 4085 {
+        return fat12();
+    }
+    info[1] = spc;
+    info[2] = start + reserved;
+    info[3] = table;
+    info[6] = start + first;
+    info[7] = clusters;
+    info[8] = start;
+    info[9] = total;
+    if clusters < 65525 {
+        info[0] = 16;
+        info[4] = start + reserved + tables * table;
+        info[5] = top_sectors;
+    } else {
+        info[0] = 32;
+        info[4] = le32(s, 44);
+        info[5] = 0;
+    }
+    return 0;
+}
+
+// ── directories ──
+
+pub fn entry_end() -> [] int {
+    return 0;
+}
+
+pub fn entry_skip() -> [] int {
+    return 1;
+}
+
+pub fn entry_file() -> [] int {
+    return 2;
+}
+
+pub fn entry_directory() -> [] int {
+    return 3;
+}
+
+// Entry `i` (0 to 15) of the directory sector `s`. Answers what it is: the end of the directory; something
+// to skip (a deleted entry, a piece of a long name, the volume's label); a file; a directory. For the last
+// two, `name` gets the short name as it is written (`KERNEL8.IMG`), and `out` its length, the first cluster
+// and the length of the file.
+pub fn entry[&b, &m, &o](s: &b [byte], i: int, name: &!m [byte], out: &!o [int]) -> [] int {
+    if len(s) < 512 || i < 0 || i > 15 || len(name) < 12 || len(out) < 3 {
+        return entry_end();
+    }
+    let at = i * 32;
+    let first = int_of(s[at]);
+    if first == 0 {
+        return entry_end();
+    }
+    let attr = int_of(s[at + 11]);
+    if first == 229 || attr % 16 == 15 || attr / 8 % 2 == 1 {
+        return entry_skip();
+    }
+    var n = 0;
+    var k = 0;
+    while k < 8 {
+        let c = int_of(s[at + k]);
+        if c != 32 {
+            // (a first byte of 5 stands for 229, which would read as "deleted")
+            if k == 0 && c == 5 {
+                name[n] = byte_of(229);
+            } else {
+                name[n] = s[at + k];
+            }
+            n = n + 1;
+        }
+        k = k + 1;
+    }
+    if int_of(s[at + 8]) != 32 || int_of(s[at + 9]) != 32 || int_of(s[at + 10]) != 32 {
+        name[n] = byte_of(46);
+        n = n + 1;
+        k = 8;
+        while k < 11 {
+            if int_of(s[at + k]) != 32 {
+                name[n] = s[at + k];
+                n = n + 1;
+            }
+            k = k + 1;
+        }
+    }
+    out[0] = n;
+    out[1] = le16(s, at + 26) + le16(s, at + 20) * 65536;
+    out[2] = le32(s, at + 28);
+    if attr / 16 % 2 == 1 {
+        return entry_directory();
+    }
+    return entry_file();
+}
+
+fn upper(c: int) -> [] int {
+    if c >= 97 && c <= 122 {
+        return c - 32;
+    }
+    return c;
+}
+
+// Is the short name `name[0..n]` the name `wanted[from..to]`, whatever the case of either?
+pub fn named[&m, &w](name: &m [byte], n: int, wanted: &w [byte], from: int, to: int) -> [] bool {
+    if n < 0 || n > len(name) || from < 0 || to > len(wanted) || to - from != n {
+        return false;
+    }
+    var i = 0;
+    while i < n {
+        if upper(int_of(name[i])) != upper(int_of(wanted[from + i])) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// ── clusters ──
+
+// The first sector of `cluster`, or -1 if the volume has no such cluster.
+pub fn cluster_sector[&i](info: &i [int], cluster: int) -> [] int {
+    if len(info) < facts() || cluster < 2 || cluster >= info[7] + 2 {
+        return -1;
+    }
+    return info[6] + (cluster - 2) * info[1];
+}
+
+// The sector of the table that holds `cluster`'s entry, or -1.
+pub fn fat_sector[&i](info: &i [int], cluster: int) -> [] int {
+    if len(info) < facts() || cluster < 2 || cluster >= info[7] + 2 {
+        return -1;
+    }
+    var at = cluster * 2;
+    if info[0] == 32 {
+        at = cluster * 4;
+    }
+    if at / 512 >= info[3] {
+        return -1;
+    }
+    return info[2] + at / 512;
+}
+
+pub fn chain_end() -> [] int {
+    return -1;
+}
+
+pub fn chain_broken() -> [] int {
+    return -2;
+}
+
+// The cluster after `cluster`, read from `s`, the sector `fat_sector` named. Or `chain_end`: it was the
+// file's last. Or `chain_broken`: the entry says something a file's cluster cannot be followed by.
+pub fn next[&i, &b](info: &i [int], s: &b [byte], cluster: int) -> [] int {
+    if len(info) < facts() || len(s) < 512 || cluster < 2 || cluster >= info[7] + 2 {
+        return chain_broken();
+    }
+    var v = 0;
+    var last = 0;
+    if info[0] == 32 {
+        v = le32(s, cluster * 4 % 512) % 268435456;
+        last = 268435448;
+    } else {
+        v = le16(s, cluster * 2 % 512);
+        last = 65528;
+    }
+    if v >= last {
+        return chain_end();
+    }
+    if v < 2 || v >= info[7] + 2 {
+        return chain_broken();
+    }
+    return v;
+}
