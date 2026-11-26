@@ -116,7 +116,7 @@ not keys; 23,040 damaged lines, none traps). `./authority.sh` says "as recorded"
 
 What it does not do: a reader can still read every file but the host key, `KEYS.TXT` included (it holds
 only public halves); the role is the shell's doing, command by command, not a grant on part of the disk;
-and the port-23 shell, where it is turned on, asks nobody anything (the record calls it `port23 open`).
+and (until [`update.md`](update.md) removed it) the port-23 shell asked nobody anything.
 
 ## What is built (slice 3): versions and the record
 
@@ -139,7 +139,7 @@ and the port-23 shell, where it is turned on, asks nobody anything (the record c
   3 809 key:da8e761b716a82a8 owner write O.TXT - - 20 8b318dc7f66b... 5942da9fc95a...
   ```
 
-  `who` is `console`, `kernel` (the host key, written by the kernel itself), `port23`, or `key:` and the
+  `who` is `console`, `kernel` (the host key, written by the kernel itself), or `key:` and the
   first 16 hex digits of the SHA-256 fingerprint `ssh-keygen -l` shows for the key that logged in.
   `contents` is the SHA-256 of what was written; `chain` is the SHA-256 of the line before's chain and
   this line. `ticks` is how long the machine had been running: there is still no time of day.

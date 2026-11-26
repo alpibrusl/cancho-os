@@ -66,6 +66,10 @@
   for a wider one (cancho `docs/mmio.md` 3), not fixed yet.
 - `load` (docs/load.md): a kernel sent over the serial console replaces the running one. A tool for bringing up
   hardware on the real boards without moving the SD card for every build; `board/send.py` is the sender.
+- Update over SSH (2026-11-26, docs/update.md): `put` keeps a file sent over SSH only with the SHA-256 it was
+  told, checked on arrival and again read back from the disk; the firmware's files are changed no other way
+  over SSH. The open shell on port 23 is removed. Next: keys and grants for agents, with cancho-tools as what
+  an agent calls.
 - The SD card (2026-11-26, docs/sdcard.md): src/sdcard.cho, standard SDHCI, one data line, one block a command.
   Run on the real Pi 4 (read, written, versions, the record, the host key kept across a restart, SSH) and in
   QEMU as a Pi 3 and a Pi 4. Not yet judged by another system's checker on the real card. Next: a kernel

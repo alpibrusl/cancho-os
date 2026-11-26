@@ -34,7 +34,7 @@ if len(sys.argv) > 2:
         f = line.split(" ")
         if len(f) != 11:
             continue
-        if f[4] in ("write", "copy"):
+        if f[4] in ("write", "copy", "put"):
             last[f[5].upper()] = f[9]
         if f[4] in ("append", "remove"):
             last.pop(f[5].upper(), None)

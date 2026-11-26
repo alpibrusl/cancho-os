@@ -159,9 +159,8 @@ The kernel answers `ping`, a UDP echo and a TCP echo (port 7) over two links: a 
 on QEMU's `virt` machine. It can also speak first: `ping 10.0.0.1` in its shell, and `http 10.0.0.1 8000` opens a connection
 and prints the page a web server there gives. On the card, `net dhcp` asks the network for an address,
 a gateway and a name server, after which names work (`lookup example.com`, `http example.com 80`):
-[docs/addresses.md](docs/addresses.md). And `net shell on`, typed at the serial
-console, gives that shell to whoever connects to port 23 (`nc 10.0.0.2 23`): no password and no
-encryption, so only on a cable you trust, and only until SSH replaces it. TCP here is small
+[docs/addresses.md](docs/addresses.md). The shell is reached from the network through SSH only (below);
+the open shell that port 23 once had is removed. TCP here is small
 on purpose: connections are opened from the other end only, and at most one segment's worth of
 data (966 bytes) is unacknowledged at a time. No real network card yet: QEMU's Pi 4 has no Ethernet controller, so the Pi's own is
 for the day a board boots. [docs/network.md](docs/network.md) has the reasoning and what is
@@ -172,7 +171,6 @@ NET=1 ./test.sh 'net up' 'echo wait' 'echo wait' net   # sim/netpeer.cho is the 
 sudo ./ping.sh                                          # Linux: the system's own ping, over a pty
 MACHINE=virt UDP=hello ./test.sh 'net up' net           # Ethernet: a datagram from this machine to the kernel
 MACHINE=virt TCP=hello ./test.sh 'net up' 'ping 10.0.0.1' net   # a TCP connection, and the kernel's own ping
-MACHINE=virt RSH='about\nmem\n' ./test.sh 'net up' 'net shell on' net   # the kernel's shell, over a connection
 sudo MACHINE=virt ./ping.sh                             # Linux: ping over a tap interface, ARP first
 ```
 
@@ -295,7 +293,9 @@ Pi's SD card ([docs/sdcard.md](docs/sdcard.md)):
 the directory `OLD` (`versions` lists them, `copy OLD/<name> <new>` brings one back), and every change
 has a line in `LOG.TXT` that says who made it, each line chained to the one before by SHA-256 (`record`
 checks the chain; so does `tests/checklog.py`, with Python alone). Only `purge <number>`, at the serial
-console, gives a version up. Short names only.
+console, gives a version up. Short names only. A whole file, a new kernel among them, comes in over
+SSH with `board/put.sh` ([docs/update.md](docs/update.md)): it is kept only if the bytes that came and
+the bytes the disk gives back have the SHA-256 the sender gave.
 
 ```
 MACHINE=virt DISK=some-fat.img ./test.sh disk ls 'sum KERNEL8.IMG'
