@@ -1141,6 +1141,62 @@ fn put_text[&mc, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f20
 
 // The address of the name `name[from..to]`, asked of the name server over UDP: twice at
 // most, two seconds each. -1, and the reason printed, if there is none to be had.
+// A servo packet sent to the machine that has the servo bus, and that machine's answer (docs/netbus.md):
+// one datagram each way. `out` gets what the servo said, which is nothing when no servo answered.
+// How many bytes; -1 if the machine could not be reached or sent nothing back in time.
+pub fn bus_exchange[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &r, &o](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], pkt: &r [byte], n: int, out: &!o [byte], wait_us: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+    let ours = k[4154];
+    let peer = k[4262];
+    let card = resolve(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, peer);
+    if card < 0 {
+        return -1;
+    }
+    var at = 0;
+    if k[10] == 2 {
+        at = 14;
+    }
+    // a port of ours not used a moment ago, so that a late answer to the last packet is not taken for this one's
+    k[23] = k[23] + 1;
+    let port = 49152 + k[23] % 16384;
+    var m = inet.udp_packet(reply, at, ours, peer, port, k[4263], pkt, 0, n);
+    if m > 0 && k[10] == 2 {
+        m = inet.eth_frame(reply, m, card, k[19]);
+    }
+    if m <= 0 {
+        return -1;
+    }
+    link_send(bus, vio, dma, k, reply, m, wire);
+    // the other machine waits for the servo as long as this one would have, and then the answer crosses
+    // the network: a fifth of a second more is allowed for that
+    let asked = base.now_us(cpu);
+    var got = -1;
+    while got < 0 && base.now_us(cpu) - asked < wait_us + 200000 {
+        let size = link_recv(bus, vio, dma, k, ns, frame);
+        if size > 0 {
+            var d = -1;
+            if k[10] != 2 {
+                d = inet.udp_data(frame, 0, size, ours, peer, k[4263], port);
+            } else if size > 14 && inet.get16(frame, 12) == 2048 {
+                d = inet.udp_data(frame, 14, size - 14, ours, peer, k[4263], port);
+            }
+            if d >= 0 {
+                got = inet.udp_size(frame, d);
+                if got > len(out) {
+                    got = len(out);
+                }
+                var i = 0;
+                while i < got {
+                    out[i] = frame[d + i];
+                    i = i + 1;
+                }
+            } else {
+                net_take(bus, vio, dma, k, frame, size, reply, wire, tcp, bufs, inbox, base.uptime_ms(cpu), cpu_read(cpu, "cntvct_el0"));
+            }
+        }
+    }
+    return got;
+}
+
 pub fn net_lookup[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], name: &r [byte], from: int, to: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
     if k[4157] == 0 {
         base.puts(con, k, "no name server is known: `net dhcp` asks for one\r\n");
@@ -1352,6 +1408,44 @@ fn begins[&r, &w](text: &r [byte], n: int, word: &w [byte]) -> [] bool {
 // `rline` is the line being typed over the shell's connection, which `http` must leave
 // alone while it waits; `text` is never that buffer.
 pub fn net_command[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l, &r, &mr, &mw](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], rng: &!mr Mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), fw: &!mw Mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4"), rline: &!l [byte], text: &r [byte], n: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4")] int {
+    if n == 13 && begins(text, n, "servo via off") {
+        k[4262] = 0;
+        base.puts(con, k, "the servo bus is this board's own again\r\n");
+        return 1;
+    }
+    if n > 10 && begins(text, n, "servo via ") {
+        // `servo via <address> <port>`: the bus is another machine's, which passes packets on (docs/netbus.md)
+        var sp = 10;
+        while sp < n && int_of(text[sp]) != ' ' {
+            sp = sp + 1;
+        }
+        let to = address(text, 10, sp);
+        var port = 0;
+        var i = sp + 1;
+        var digits = i < n;
+        while i < n && digits {
+            let c = int_of(text[i]);
+            digits = c >= '0' && c <= '9' && port < 65536;
+            port = port * 10 + c - '0';
+            i = i + 1;
+        }
+        if k[26] != 0 {
+            base.puts(con, k, "only from the serial console\r\n");
+        } else if to <= 0 || !digits || port <= 0 || port > 65535 {
+            base.puts(con, k, "usage: servo via <address> <port>, or servo via off\r\n");
+        } else if k[10] == 0 {
+            base.puts(con, k, "the network is down: `net up` or `net eth` first\r\n");
+        } else {
+            k[4262] = to;
+            k[4263] = port;
+            base.puts(con, k, "the servo bus is the one at ");
+            put_address(con, k, to);
+            base.puts(con, k, " port ");
+            base.put_dec(con, k, port);
+            base.puts(con, k, ": packets that read, passed on by that machine\r\n");
+        }
+        return 1;
+    }
     if n == 10 && begins(text, n, "net ssh on") {
         if k[26] != 0 {
             base.puts(con, k, "only from the serial console\r\n");
@@ -1548,6 +1642,13 @@ pub fn put_net[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201
         } else {
             base.puts(con, k, "nobody connected\r\n");
         }
+    }
+    if k[4262] != 0 {
+        base.puts(con, k, "servo bus: through ");
+        put_address(con, k, k[4262]);
+        base.puts(con, k, " port ");
+        base.put_dec(con, k, k[4263]);
+        base.puts(con, k, "\r\n");
     }
     if k[20] != 0 || k[24] != 0 || k[25] != 0 {
         base.puts(con, k, "tcp: ");

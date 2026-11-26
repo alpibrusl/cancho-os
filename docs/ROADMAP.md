@@ -66,6 +66,9 @@
   for a wider one (cancho `docs/mmio.md` 3), not fixed yet.
 - `load` (docs/load.md): a kernel sent over the serial console replaces the running one. A tool for bringing up
   hardware on the real boards without moving the SD card for every build; `board/send.py` is the sender.
+- The servo bus through another machine (2026-11-26, docs/netbus.md): `servo via <address> <port>` and
+  `board/busbridge.py`, which passes on only packets that read. For reading real arms before the kernel has
+  USB or the bus on its own pins. In QEMU against a made-up bus.
 - `restart` (2026-11-26, docs/restart.md): the board started again through its watchdog; with `put`, an update
   with nobody at the board. No fallback from a kernel that does not boot.
 - Update over SSH (2026-11-26, docs/update.md): `put` keeps a file sent over SSH only with the SHA-256 it was

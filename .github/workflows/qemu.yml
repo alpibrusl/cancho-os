@@ -236,6 +236,32 @@ jobs:
           mcopy -i u.img ::OLD/00000001.V first.out && cmp first.out build/kernel8.img
           if mdir -i u.img :: | grep -q '^X '; then exit 1; fi
           python3 tests/checklog.py uout/LOG.TXT uout
+      - name: the servo bus, through another machine
+        # docs/netbus.md. board/busbridge.py with six servos made up in Python; the kernel must find six,
+        # read the positions the bridge invented, and the bridge must drop every packet that could move one.
+        run: |
+          python3 board/busbridge.py --bind 127.0.0.1 6000 --fake > bridge.txt 2>&1 &
+          sleep 1
+          MACHINE=virt ./test.sh 'net up' 'servo via 10.0.0.1 6000' 'servo scan' 'servo pos' 'arm pose' net > netbus.txt; cat netbus.txt
+          grep -q "^6 servos found" netbus.txt
+          grep -q "^servo 4: position 2200" netbus.txt
+          grep -q "^servo 7: no answer" netbus.txt
+          grep -q "^gripper at x " netbus.txt
+          grep -q "^servo bus: through 10.0.0.1 port 6000" netbus.txt
+          python3 -c 'import socket
+          def pkt(i, inst, *p):
+              b = bytes([i, len(p) + 2, inst, *p]); return b"\xff\xff" + b + bytes([(~sum(b)) & 255])
+          s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(0.5)
+          def ask(p):
+              s.sendto(p, ("127.0.0.1", 6000))
+              try: return len(s.recvfrom(256)[0])
+              except socket.timeout: return -1
+          assert ask(pkt(3, 1)) == 6 and ask(pkt(3, 2, 56, 2)) == 8
+          for bad in (pkt(3, 3, 42, 0, 8), pkt(3, 4, 42, 0, 8), pkt(254, 0x83, 42, 2, 3, 0, 8), pkt(3, 1)[:-1] + b"\x00", pkt(3, 1) + pkt(3, 3, 42, 0, 8)):
+              assert ask(bad) == -1
+          print("the bridge passed two reads and dropped five that were not")'
+          kill %1
+          test "$(grep -c "dropped a packet" bridge.txt)" = 5
       - name: restart
         # docs/restart.md. As a Pi 3 the board must start a second time and answer; with a card, the record
         # must have the line; on virt, which has no such watchdog, the command must say so.
