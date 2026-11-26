@@ -54,6 +54,12 @@ Rules of the road
   sector that makes the change take effect, and stops if the line could not be added. The line format is
   what other tools read: do not change a field without changing `checklog.py` and the doc. `OLD`, `LOG.TXT`
   and `HOSTKEY.BIN` are names the shell does not change (`kept_name` in disk.cho).
+- The SD card (docs/sdcard.md): `src/sdcard.cho` is standard SDHCI with 32-bit register access only, every
+  wait a bounded count, and it is started the first time a disk is wanted, never at boot. QEMU's raspi4b has
+  its card on the other controller: `-device sd-card,drive=...,bus=main-system-bus/generic-sdhci/sd-bus`
+  puts one on `emmc2`. `SD=image ./test.sh` is the Pi 3 in QEMU, which CI runs. The real card is the one
+  the board boots from: a wrong write there can stop it booting, so change the write path only after
+  QEMU and a checker have passed it, and never write `KERNEL8.IMG` or the firmware's files in a test.
 - Who may do what (docs/permissions.md): a session's role is k[4179] (2 an owner's key, 1 a reader's); a
   new shell command must be put on the reader's list in `reading` (kernel.cho) only if it changes nothing
   and reaches nowhere. `HOSTKEY.BIN` is never shown, copied or changed by the shell (`secret` in disk.cho).
@@ -63,14 +69,14 @@ Rules of the road
   rules (read the connection only when nothing else moved; keep what `feed` and `tcp_write` did not take).
   A real person's public key goes into an image, never into the repository: `AUTHORIZED=` writes
   `build/authorized.cho`, and `build/` is ignored. SSH must refuse to start without a generator.
-- The firmware's mailbox (`fw`, docs/genet.md) can set things as well as answer: the kernel asks three tags
-  and sets nothing. A new tag is a decision, not a convenience. Never write a real board's serial number or
+- The firmware's mailbox (`fw`, docs/genet.md) can set things as well as answer: the kernel asks four tags
+  (three about the board, one clock's rate for the SD card) and sets nothing. A new tag is a decision, not a convenience. Never write a real board's serial number or
   full card address into a doc, a test or a commit.
 - A real Pi 4 has booted it (README, "On a real Pi 4"): one board, one session. Say exactly that, and
   keep "measured in QEMU" on everything that was not seen on the board.
 - The Pi 5 (docs/pi5.md) is the one board whose code no test runs: QEMU has none. Do not describe it as
   working, and do not add a Pi 5 driver (RP1, the RNG200, USB) before the console has been seen on a real board.
-- Three big files, none near 2,000 lines: `src/kernel.cho` (boot, memory, shell, servo and arm), `src/base.cho`
+- Files, none near 2,000 lines (disk.cho is the one to watch): `src/kernel.cho` (boot, memory, shell, servo and arm), `src/base.cho`
   (console output, clock, bus bytes), `src/network.cho` (links, generator, session, network commands). A
   new network command goes in `network.net_command`, never in the shell's loop.
 - The kernel's address, mask, gateway and name server are k[4154..4157] (docs/addresses.md); nothing may

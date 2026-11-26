@@ -66,7 +66,8 @@ written to one register and read from another when it has been answered in place
 with the message in `dma`, and a new capability, `fw`, bounds the three registers it uses
 (`0x3f00b880..0x3f00b8a4` on a Pi 3, `0xfe00b880..0xfe00b8a4` on a Pi 4). The interface can also *set*
 things (clocks, power, the display); the kernel sends three tags, all questions: the board's revision,
-its serial number, its card's address. `board` prints them. QEMU's Pi 3 and Pi 4 answer too, so this
+its serial number, its card's address (and, since the SD card, a fourth: how fast one clock runs,
+[`sdcard.md`](sdcard.md)). `board` prints them. QEMU's Pi 3 and Pi 4 answer too, so this
 part is tested in CI: "revision 00a02082 ... card address 52:54:00:12:34:57" as a Pi 3.
 
 On the real board `board` said revision `00c03111` (a Pi 4 Model B, 4 GB), a serial number, and the

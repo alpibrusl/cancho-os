@@ -66,6 +66,10 @@
   for a wider one (cancho `docs/mmio.md` 3), not fixed yet.
 - `load` (docs/load.md): a kernel sent over the serial console replaces the running one. A tool for bringing up
   hardware on the real boards without moving the SD card for every build; `board/send.py` is the sender.
+- The SD card (2026-11-26, docs/sdcard.md): src/sdcard.cho, standard SDHCI, one data line, one block a command.
+  Run on the real Pi 4 (read, written, versions, the record, the host key kept across a restart, SSH) and in
+  QEMU as a Pi 3 and a Pi 4. Not yet judged by another system's checker on the real card. Next: a kernel
+  written to the card; then grants for agents, and removing port 23.
 - Versions and the record (2026-11-26, permissions.md slice 3): a write over a file and `remove` keep what was
   there in `OLD`; `purge` at the console only; every change a line in LOG.TXT, chained by SHA-256, added before
   the change's last sector (src/record.cho, pure). Checked by Python's hashlib and two systems' FAT checkers.

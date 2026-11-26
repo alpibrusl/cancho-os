@@ -10,10 +10,12 @@ the typing is scripted ([`docs/demo/session.py`](docs/demo/session.py)); re-rend
 **Where it stands** (2026-11-26):
 
 - **On a real Raspberry Pi 4:** it boots, gets an address from a home router through its own Ethernet card,
-  resolves names, and gives its shell over SSH. One board, one network.
-- **In QEMU, on every change:** all of that, as a Pi 3, a Pi 4 and QEMU's `virt` machine; and a FAT disk read.
-- **Not yet:** writing files, the SD card on a real board, separate programs, moving a servo, the Pi 5
-  (its code is written from the board's device tree and has never run).
+  resolves names, gives its shell over SSH, and reads and writes its SD card: the SSH host key is kept
+  there, and every change to a file leaves the old version and a line in a record. One board, one network,
+  one card.
+- **In QEMU, on every change:** all of that, as a Pi 3 and QEMU's `virt` machine.
+- **Not yet:** separate programs, moving a servo, grants for agents, the Pi 5 (its code is written from the
+  board's device tree and has never run).
 
 Raspberry Pi first. Nothing in the design is tied to it: the shell, the servo
 protocol, the kinematics and the safety core are plain cancho, and what is specific to the
@@ -210,8 +212,14 @@ and 10 crossed.
 **And it is on the network.** The same day, with the board cabled to a home router: `net eth` found
 the card and the cable at 1000 Mb/s, `net dhcp` got an address from the router, `http example.com 80`
 printed the page, and a Mac on the network pinged the kernel, used its TCP echo (200,000 bytes back
-in 1 s) and its shell. [docs/genet.md](docs/genet.md). Everything else in this file was still
-measured in QEMU.
+in 1 s) and its shell. [docs/genet.md](docs/genet.md).
+
+**And it has a disk.** The card the board boots from: `disk` found it (a 128 GB card, a FAT32 volume),
+`ls` listed the firmware's 43 files, a file was written and read back, written again with the first
+version kept, and the SSH host key was the same after the kernel was started again. A 2.2 MB file reads
+in 4 s. [docs/sdcard.md](docs/sdcard.md), and Linux's `fsck.fat` on another machine then found nothing wrong with it.
+The board now boots this kernel from that card by itself, with the same host key after a power cycle.
+Everything else in this file was still measured in QEMU.
 
 You need a Raspberry Pi 4, a microSD card and a USB-serial cable with **3.3 V** levels (a
 5 V one damages the pins).
@@ -279,17 +287,19 @@ card is taken out.
 
 ## Files
 
-On QEMU's `virt` machine the kernel reads a FAT16 or FAT32 disk ([docs/storage.md](docs/storage.md)):
+The kernel reads a FAT16 or FAT32 disk ([docs/storage.md](docs/storage.md)): QEMU's `virt` disk, or a
+Pi's SD card ([docs/sdcard.md](docs/sdcard.md)):
 `disk`, `ls`, `cat <name>`, `sum <name>`, and it can change one: `write <name> <text>`,
 `append <name> <text>`, `copy <from> <to>`, `remove <name>`. Nothing is lost by any of them
 ([docs/permissions.md](docs/permissions.md)): what a file held before a `write` or a `remove` stays in
 the directory `OLD` (`versions` lists them, `copy OLD/<name> <new>` brings one back), and every change
 has a line in `LOG.TXT` that says who made it, each line chained to the one before by SHA-256 (`record`
 checks the chain; so does `tests/checklog.py`, with Python alone). Only `purge <number>`, at the serial
-console, gives a version up. Short names only; a real Pi's SD card has no driver yet.
+console, gives a version up. Short names only.
 
 ```
 MACHINE=virt DISK=some-fat.img ./test.sh disk ls 'sum KERNEL8.IMG'
+SD=some-fat.img ./test.sh disk ls        # as a Pi 3's SD card; the image is written to
 ```
 
 ## SSH
