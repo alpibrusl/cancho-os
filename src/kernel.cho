@@ -13,6 +13,8 @@ import ledger;
 import files;
 import keys;
 import authorized;
+import std.buffer;
+import std.json;
 
 // cancho-os: the kernel. Every driver here is cancho. A register is reached through
 // an `Mmio`, a capability whose type names the addresses it holds: `main` is given
@@ -831,9 +833,9 @@ fn run[&f, &mc, &mu, &mt, &mx, &mz, &s, &r, &nv, &nd, &nn, &na, &nb, &nw, &nt, &
         return 0;
     }
     if same(line, n, "help") {
-        base.puts(con, k, "commands: help, about, echo <text>, uptime, ticks, mem, board, random, disk, ls, cat <name>, sum <name>, write <name> <text>, append <name> <text>, copy <from> <to>, remove <name>, versions, purge <number>, record, put <name> <bytes> <sha256> (over SSH), restart, net [up|down|eth|dhcp], net ssh [on|off], lookup <name>, ping <address or name>, http <address or name> <port>, servo via <address> <port>|off, servo scan, servo pos, arm zero, arm pose, arm check <5 angles>, crash [null|write], load <bytes>\r\n");
+        base.puts(con, k, "commands: help, about, echo <text>, uptime, ticks, mem, board, random, disk, ls, cat <name>, sum <name>, write <name> <text>, append <name> <text>, copy <from> <to>, remove <name>, versions, purge <number>, record, put <name> <bytes> <sha256> (over SSH), restart, heap, net [up|down|eth|dhcp], net ssh [on|off], lookup <name>, ping <address or name>, http <address or name> <port>, servo via <address> <port>|off, servo scan, servo pos, arm zero, arm pose, arm check <5 angles>, crash [null|write], load <bytes>\r\n");
     } else if same(line, n, "about") {
-        base.puts(con, k, "cancho-os 0.0.30: a kernel written in cancho (");
+        base.puts(con, k, "cancho-os 0.0.31: a kernel written in cancho (");
         if k[1] >= 3 {
             base.puts(con, k, "Raspberry Pi ");
             base.put_dec(con, k, k[1]);
@@ -1034,6 +1036,93 @@ fn restart_soon[&mc, &mv, &md, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f2010
     return 0;
 }
 
+// `heap`: the heap of this machine, tried (cancho docs/freestanding.md, section 8). First what it is for: a JSON
+// object made with the library's writer, which grows a buffer on the heap, and printed. Then the allocator
+// itself: blocks of many sizes made, written, read back and given back in another order than they were made;
+// and a block of 64 KiB made and given back a hundred thousand times, which is 6 GB if nothing is used again.
+fn heap_try[&mc, &s, &hp](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), k: &!s [int], heap: &!hp Heap) -> [heap, mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048")] int {
+    var w = json.writer(heap, 16);
+    w = json.begin_object(heap, w);
+    w = json.put_key(heap, w, "type");
+    w = json.put_string(heap, w, "hash");
+    w = json.put_key(heap, w, "path");
+    w = json.put_string(heap, w, "TEST.TXT");
+    w = json.put_key(heap, w, "bytes");
+    w = json.put_int(heap, w, 45);
+    w = json.put_key(heap, w, "ok");
+    w = json.put_bool(heap, w, true);
+    w = json.end_object(heap, w);
+    let made = json.finish(w);
+    borrow made as &m in {
+        let text = buffer.bytes(m);
+        var i = 0;
+        while i < len(text) {
+            base.putc(con, k, int_of(text[i]));
+            i = i + 1;
+        }
+    }
+    buffer.drop(heap, made);
+    base.puts(con, k, "\r\n");
+    // sixteen blocks at a time, of sizes from 1 byte to 300,000, each filled with a byte of its own
+    var round = 0;
+    var wrong = 0;
+    var blocks = 0;
+    while round < 200 {
+        var a = buffer.empty(heap, 1 + round * 7 % 300000);
+        var b = buffer.empty(heap, 1 + round * 1501 % 300000);
+        var c = buffer.empty(heap, 33 + round % 64);
+        var n = 0;
+        while n < 500 + round * 13 {
+            a = buffer.push(heap, a, byte_of(round % 251));
+            b = buffer.push(heap, b, byte_of((round + 1) % 251));
+            c = buffer.push(heap, c, byte_of((round + 2) % 251));
+            n = n + 1;
+        }
+        borrow a as &x in {
+            borrow b as &y in {
+                borrow c as &z in {
+                    var i = 0;
+                    while i < n {
+                        if int_of(buffer.bytes(x)[i]) != round % 251 || int_of(buffer.bytes(y)[i]) != (round + 1) % 251 || int_of(buffer.bytes(z)[i]) != (round + 2) % 251 {
+                            wrong = wrong + 1;
+                        }
+                        i = i + 1;
+                    }
+                    if buffer.size(x) != n || buffer.size(y) != n || buffer.size(z) != n {
+                        wrong = wrong + 1;
+                    }
+                }
+            }
+        }
+        // given back in another order than they were made
+        buffer.drop(heap, b);
+        buffer.drop(heap, a);
+        buffer.drop(heap, c);
+        blocks = blocks + 3;
+        round = round + 1;
+    }
+    var again = 0;
+    while again < 100000 {
+        var big = buffer.empty(heap, 65536);
+        big = buffer.push(heap, big, byte_of(again % 251));
+        borrow big as &g in {
+            if int_of(buffer.bytes(g)[0]) != again % 251 {
+                wrong = wrong + 1;
+            }
+        }
+        buffer.drop(heap, big);
+        again = again + 1;
+    }
+    base.puts(con, k, "heap: ");
+    base.put_dec(con, k, blocks);
+    base.puts(con, k, " growing buffers filled, read back and given back; a 64 KiB block made and given back ");
+    base.put_dec(con, k, again);
+    base.puts(con, k, " times; ");
+    base.put_dec(con, k, wrong);
+    base.puts(con, k, " bytes wrong\r\n");
+    return wrong;
+}
+
 // The host key as OpenSSH writes one: base64 of "ssh-ed25519" and the 32 bytes, each after its length.
 fn put_host_key[&mc, &s, &x, &w](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), k: &!s [int], sx: &!x [byte], wire: &!w [byte]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048")] int {
     wire[0] = byte_of(0);
@@ -1196,7 +1285,7 @@ fn load[&f, &mc, &mg, &mz, &s, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x90
     return 0;
 }
 
-fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s, &mk](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), irq: &!mi Mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014,0x107fff9000..0x107fffa014"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), rng: &!mr Mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), fw: &!mw Mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), tab: &!mt Mmio("0x200000..0x208000,0x40200000..0x40208000"), code: &mx Mmio("0x80001..0x200000,0x40080001..0x40200000"), probe: &!mz Mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001"), k: &!s [int]) -> [cpu("cntfrq_el0"), cpu("cntv_cval_el0"), cpu("cntvct_el0"), cpu("wfi"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014,0x107fff9000..0x107fffa014"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x200000..0x208000,0x40200000..0x40208000"), mmio("0x80001..0x200000,0x40080001..0x40200000"), mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), mmio("0x220000..0x420000,0x40220000..0x40420000"), mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4"), mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028")] int {
+fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s, &mk, &hp](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), irq: &!mi Mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014,0x107fff9000..0x107fffa014"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), rng: &!mr Mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), fw: &!mw Mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), tab: &!mt Mmio("0x200000..0x208000,0x40200000..0x40208000"), code: &mx Mmio("0x80001..0x200000,0x40080001..0x40200000"), probe: &!mz Mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001"), k: &!s [int], heap: &!hp Heap) -> [heap, cpu("cntfrq_el0"), cpu("cntv_cval_el0"), cpu("cntvct_el0"), cpu("wfi"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014,0x107fff9000..0x107fffa014"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x200000..0x208000,0x40200000..0x40208000"), mmio("0x80001..0x200000,0x40080001..0x40200000"), mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), mmio("0x220000..0x420000,0x40220000..0x40420000"), mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4"), mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028")] int {
     base.puts(con, k, "\r\ncancho-os booted. type `help`.\r\n");
     region r {
         let line = alloc_slice[r](128, byte_of(0));
@@ -1286,6 +1375,8 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s, &mk](cpu
                     k[4152] = 1;
                 } else if k[4153] == 1 && k[4179] != 2 && !reading(cmd, k[31]) {
                     base.puts(con, k, "this key may only read: that needs an owner's key\r\n");
+                } else if same(cmd, k[31], "heap") {
+                    heap_try(con, k, heap);
                 } else if same(cmd, k[31], "restart") {
                     if restart_soon(con, vio, dma, k, 1) == 0 {
                         k[4152] = 1;
@@ -1322,7 +1413,9 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s, &mk](cpu
                         k[4176] = 1;
                     }
                 }
-                if same(line, n, "restart") {
+                if same(line, n, "heap") {
+                    heap_try(con, k, heap);
+                } else if same(line, n, "restart") {
                     restart_soon(con, vio, dma, k, 0);
                 } else if n > 5 && same(line, 5, "load ") {
                     load(cpu, con, stage, probe, k, line, n);
@@ -1353,7 +1446,7 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s, &mk](cpu
     return 0;
 }
 
-fn kernel[&f, &mc, &mp, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &mq, &mk](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), pins: &!mp Mmio("0x3f200004..0x3f200008,0xfe200004..0xfe200008"), irq: &!mi Mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014,0x107fff9000..0x107fffa014"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), rng: &!mr Mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), fw: &!mw Mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), tab: &!mt Mmio("0x200000..0x208000,0x40200000..0x40208000"), code: &mx Mmio("0x80001..0x200000,0x40080001..0x40200000"), probe: &!mz Mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001"), fault: &mq Mmio("0x208000..0x208008,0x40208000..0x40208008")) -> [cpu("cntfrq_el0"), cpu("cntv_ctl_el0"), cpu("cntv_cval_el0"), cpu("cntv_tval_el0"), cpu("cntvct_el0"), cpu("elr_el1"), cpu("esr_el1"), cpu("far_el1"), cpu("mair_el1"), cpu("midr_el1"), cpu("sctlr_el1"), cpu("tcr_el1"), cpu("tlbi_vmalle1"), cpu("ttbr0_el1"), cpu("wfi"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x3f200004..0x3f200008,0xfe200004..0xfe200008"), mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014,0x107fff9000..0x107fffa014"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x200000..0x208000,0x40200000..0x40208000"), mmio("0x80001..0x200000,0x40080001..0x40200000"), mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001"), mmio("0x208000..0x208008,0x40208000..0x40208008"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), mmio("0x220000..0x420000,0x40220000..0x40420000"), mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4"), mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028")] int {
+fn kernel[&f, &mc, &mp, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &mq, &mk, &hp](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), pins: &!mp Mmio("0x3f200004..0x3f200008,0xfe200004..0xfe200008"), irq: &!mi Mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014,0x107fff9000..0x107fffa014"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), rng: &!mr Mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), fw: &!mw Mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), tab: &!mt Mmio("0x200000..0x208000,0x40200000..0x40208000"), code: &mx Mmio("0x80001..0x200000,0x40080001..0x40200000"), probe: &!mz Mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001"), fault: &mq Mmio("0x208000..0x208008,0x40208000..0x40208008"), heap: &!hp Heap) -> [heap, cpu("cntfrq_el0"), cpu("cntv_ctl_el0"), cpu("cntv_cval_el0"), cpu("cntv_tval_el0"), cpu("cntvct_el0"), cpu("elr_el1"), cpu("esr_el1"), cpu("far_el1"), cpu("mair_el1"), cpu("midr_el1"), cpu("sctlr_el1"), cpu("tcr_el1"), cpu("tlbi_vmalle1"), cpu("ttbr0_el1"), cpu("wfi"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x3f200004..0x3f200008,0xfe200004..0xfe200008"), mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014,0x107fff9000..0x107fffa014"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x200000..0x208000,0x40200000..0x40208000"), mmio("0x80001..0x200000,0x40080001..0x40200000"), mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001"), mmio("0x208000..0x208008,0x40208000..0x40208008"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), mmio("0x220000..0x420000,0x40220000..0x40420000"), mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4"), mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028")] int {
     region r {
         let k = alloc_slice[r](40 + 4096 + 16 + 120, 0);
         // the address the kernel has until it is given another: 10.0.0.2 on a network of 256, gateway 10.0.0.1
@@ -1396,7 +1489,7 @@ fn kernel[&f, &mc, &mp, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &mq, &
         } else if k[1] == 4 {
             k[4253] = network.fw_clock(fw, dma, k, 12);
         }
-        shell(cpu, con, irq, bus, rng, fw, pm, stage, vio, dma, tab, code, probe, k);
+        shell(cpu, con, irq, bus, rng, fw, pm, stage, vio, dma, tab, code, probe, k, heap);
     }
     return 0;
 }
@@ -1406,7 +1499,6 @@ fn main(world: World) -> [] int {
     release(io);
     release(ffi);
     release(fs);
-    release(heap);
     release(args);
     release(out);
     release(ports);
@@ -1437,7 +1529,9 @@ fn main(world: World) -> [] int {
                                                     borrow mut stage as &!w in {
                                                         borrow mut fw as &!m in {
                                                             borrow mut pm as &!y in {
-                                                                status = kernel(r, c, p, i, u, g, m, y, w, v, d, t, x, z, q);
+                                                                borrow mut heap as &!e in {
+                                                                    status = kernel(r, c, p, i, u, g, m, y, w, v, d, t, x, z, q, e);
+                                                                }
                                                             }
                                                         }
                                                     }
@@ -1468,5 +1562,6 @@ fn main(world: World) -> [] int {
     release(stage);
     release(fw);
     release(pm);
+    release(heap);
     return status;
 }

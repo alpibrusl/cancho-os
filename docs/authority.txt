@@ -14,6 +14,7 @@ performs
     cpu("tlbi_vmalle1")
     cpu("ttbr0_el1")
     cpu("wfi")
+    heap
     mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001")
     mmio("0x200000..0x208000,0x40200000..0x40208000")
     mmio("0x208000..0x208008,0x40208000..0x40208008")
@@ -32,7 +33,6 @@ never touches
     the console
     the filesystem
     the network
-    the heap
     the command line
     signals
     other programs
