@@ -1,6 +1,7 @@
 # The servo bus, through another machine
 
-> **Status: built**, in QEMU against a made-up bus. 0.0.30. A way to read real arms during development,
+> **Status: built**, in QEMU against a made-up bus, and used once on the real boards to read two real
+> arms. 0.0.30. A way to read real arms during development,
 > not the way a controller will hold them: see "What it is not".
 
 The arms' adapters are USB, and the kernel has no USB. Until it does, or until the bus is wired to the
@@ -35,6 +36,17 @@ implementation of the protocol):
 | `servo pos` | 1300, 1600, 1900, 2200, 2500, 2800: the positions the bridge made up |
 | `arm pose`, `arm check 5 14 33 -41 44` | a pose, and "approved ... nothing was sent" |
 | to the bridge: a write, a registered write, a write to several, a wrong checksum, two packets in one | dropped, five of five; a ping and a read answered |
+
+On the real boards: the kernel on a Pi 4, two SO-101 arms on a Pi 5 running Linux, an Ethernet cable
+between the two (the Pi 5 shares its network over it and gave the kernel its address), one bridge per arm:
+
+| what | result |
+|---|---|
+| `servo via 10.42.0.1 6000`, `servo scan` | 8 servos found (the arm's six, and two more on that bus) |
+| `servo pos` | six positions; a separate reader in Python, asked a moment later, gave the same six numbers |
+| `arm pose` | five joint angles and a gripper position, from the kernel's built-in spans: not checked against this arm's own calibration |
+| `servo via 10.42.0.1 6001`, `servo scan`, `servo pos` | 6 servos found among numbers 1 to 8; six positions, again the same as Python's |
+| the bridges, afterwards | no packet dropped: the kernel sent nothing but reads |
 
 ## What it is not
 
