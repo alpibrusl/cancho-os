@@ -1,8 +1,9 @@
 # Who may do what: keys, grants, versions and a record
 
-> **Status: design, with its first slice built** (adding a file and adding to one, in QEMU:
-> [`storage.md`](storage.md)). Keys, grants, versions, the record and approval are not built. It was
-> written before the kernel could write a single byte to a disk, because it decides how writing must work.
+> **Status: design, with two slices built**, in QEMU: adding a file and adding to one
+> ([`storage.md`](storage.md)); and the host key kept, the keys file read, and two roles ("What is built"
+> below). Grants, versions, the record and approval are not built. It was written before the kernel
+> could write a single byte to a disk, because it decides how writing must work.
 
 ## What is wanted
 
@@ -80,6 +81,41 @@ is no moment at which the file is half one thing and half another.
 Forge keeps budgets, approvals and evidence for a company of agents. This is the part under it: the
 kernel provides the mechanism (keys, grants, versions, the record, the step of approval) and forge the
 policy (which company is given what). Neither should grow the other's half.
+
+## What is built (slice 2)
+
+- **The host key is kept.** When SSH is first turned on, `HOSTKEY.BIN` is read if the disk has it; if
+  not, a key is drawn as before and written there. After a restart the kernel is the same host. The
+  shell will not show, copy or add to that file, for anyone.
+- **`KEYS.TXT` is read** when SSH is turned on, and again whenever the shell adds a file or adds to
+  one. `src/keys.cho` reads it, and is pure like `inet` and `fat`. The keys built into the image come
+  first and are owners; eight keys in all.
+- **Two roles.** A session over SSH has the role of the key that logged in. An owner's runs anything
+  the shell has. A reader's runs what changes nothing and reaches nowhere (`ls`, `cat`, `sum`, `disk`,
+  `about`, `mem` and the like) and is told so for anything else.
+- **A key is given by adding a line**: `append KEYS.TXT reader ssh-ed25519 AAAA...`, by an owner or at
+  the console. There is no taking one away yet: that is removing, which waits for versions. Until then
+  a key is taken away by editing the card on another machine.
+
+Measured, at the commit that adds this section (`./keys.sh`, QEMU's `virt`, OpenSSH's client, three keys
+`ssh-keygen` made; on a FAT32 and a FAT16 volume):
+
+| who | what | result |
+|---|---|---|
+| the console | `write KEYS.TXT reader ssh-ed25519 ...`, then `net ssh on` | "keys built into this image that may log in: 1, and from KEYS.TXT on the disk: 1"; "ssh host key (new, and kept on the disk as HOSTKEY.BIN)" |
+| the owner's key | `write O.TXT ...`, `cat O.TXT` | written, and read back |
+| the reader's key | `ls` | the files, `KEYS.TXT` and `HOSTKEY.BIN` among them |
+| the reader's key | `write R.TXT ...`, `ping 10.0.0.1` | "this key may only read: that needs an owner's key", twice; no `R.TXT` afterwards |
+| either key | `cat HOSTKEY.BIN`, `copy HOSTKEY.BIN STOLEN.BIN` | "the host key is kept by the kernel", twice; no `STOLEN.BIN` afterwards |
+| a key in neither place | `about` | "Permission denied (publickey)" |
+| a second start of the same disk | `net ssh on` | "ssh host key (read from the disk: the same as before the restart)", and the same key, character for character |
+
+and 4 tests of `keys.cho` on its own (a line's role and bytes against Python's `base64`; lines that are
+not keys; 23,040 damaged lines, none traps). `./authority.sh` says "as recorded".
+
+What it does not do: a reader can still read every file but the host key, `KEYS.TXT` included (it holds
+only public halves); the role is the shell's doing, command by command, not a grant on part of the disk;
+nothing is recorded; and the port-23 shell, where it is turned on, asks nobody anything.
 
 ## The slices
 

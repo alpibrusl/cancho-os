@@ -301,8 +301,10 @@ AUTHORIZED=~/.ssh/id_ed25519.pub ./build.sh       # that key may log in, and no 
 ssh anyone@<the kernel's address> about            # after `net ssh on`: the host key is on the console
 ```
 
-It works in QEMU and on a real Pi 4. The host key is new at every start (there is nowhere to keep it),
-there are no passwords, and cancho-ssh has not been reviewed: for a network you trust.
+It works in QEMU and on a real Pi 4. Where the kernel has a disk (QEMU so far) the host key is kept on
+it, and `KEYS.TXT` there lists more keys, each an `owner` or a `reader` that may only look
+([docs/permissions.md](docs/permissions.md)); on a real Pi the host key is still new at every start.
+There are no passwords, and cancho-ssh has not been reviewed: for a network you trust.
 
 ## A new kernel without moving the card
 

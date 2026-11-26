@@ -218,6 +218,7 @@ bye</pre></div>
       <li>An address from the network (DHCP), a gateway, and names (DNS): <code>http example.com 80</code> works</li>
       <li>Random numbers from the board's generator (QEMU's and the Pi 3's), used to begin each connection</li>
       <li>Files: a FAT16 or FAT32 disk read, and files added to it (in QEMU; no real card yet, and nothing replaced or removed)</li>
+      <li>Who may log in: keys in a file on the disk, as owners or as readers who may only look; the host key kept across restarts (in QEMU)</li>
       <li>SSH: the shell behind <a href="https://github.com/alpibrusl/cancho-ssh">cancho-ssh</a>, logged in to by OpenSSH in QEMU and on a real Pi 4</li>
       <li>The shell over a TCP connection, off until the console turns it on (no password, no encryption: a step towards SSH)</li>
     </ul></div>
@@ -227,7 +228,7 @@ bye</pre></div>
       <li>Preemption, and more than one core</li>
       <li>The Pi 5, which is the robot's board: its console, timer and memory map are written from the board's own device tree and have never run</li>
       <li>Replacing and removing files (waits for versions), and the SD card on a real board</li>
-      <li>Users and permissions (keys, grants and a record: designed, not built)</li>
+      <li>Grants for agents, versions of files, and a record of who did what (designed; only keys and two roles are built)</li>
       <li>Wi-Fi, USB, display</li>
     </ul></div>
   </div>

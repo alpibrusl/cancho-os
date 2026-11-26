@@ -89,6 +89,11 @@ Measured, at the commit that adds this section:
 | the kernel in QEMU writing to copies of the three volumes macOS made: a new file, a 300,000-byte copy, a line added, twenty more files, thirteen lines added across clusters | then macOS's own `fsck_msdos -n` and macOS mounting the result | the checker finds nothing to fix; the copy is the original byte for byte; the thirteen lines are the thirteen lines; the files that were there are untouched |
 | in CI | the same on three volumes Linux's tools made, judged by `fsck.fat -n`, `mcopy` and `mdir` | the same |
 
+One thing CI found that this machine did not: on a busy runner a single request to the disk took longer
+than the driver waited (ten million turns of a loop, which is well under a second), and a `copy` gave up
+with the disk untouched. The driver now waits two thousand million turns. It still counts turns and not
+time, because it holds no clock.
+
 What this slice does not do: replace or remove a file; write below the top directory; survive a power cut
 *provably* (the order is the argument; nothing here cuts the power); set a date (files are dated 1 January
 1980, the kernel having no clock); or ask who is writing (that is the next slice: until then whoever has

@@ -1,0 +1,144 @@
+import std.test;
+import keys;
+
+// `keys` with no disk under it. The three keys are made by `ssh-keygen -t ed25519` for these tests and are
+// nobody's; the 32 bytes each must give were taken from its line by a second implementation (Python's
+// `base64`).
+
+fn digit(c: int) -> [] int {
+    if c >= '0' && c <= '9' {
+        return c - '0';
+    }
+    return c - 'a' + 10;
+}
+
+// Are the 32 bytes at `key[at..]` the ones `hex` writes?
+fn is_key[&k, &h](key: &k [byte], at: int, hex: &h [byte]) -> [] bool {
+    var i = 0;
+    while i < 32 {
+        if int_of(key[at + i]) != digit(int_of(hex[i * 2])) * 16 + digit(int_of(hex[i * 2 + 1])) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn first() -> [] &static [byte] {
+    return "6316363dec1724abaf20928d9be7d1dbe945fd128beba78c036565df3baa1129";
+}
+
+fn second() -> [] &static [byte] {
+    return "9f48c5f3633364a752f401f8859a274c8b4e4ab49a8cc13dd80631277c189d05";
+}
+
+fn third() -> [] &static [byte] {
+    return "9cca26d89c8a42125df71ccff98cee79e0140e78684d6314a8af0d388eb9ed53";
+}
+
+// What `keys.line` makes of the whole of `text`.
+fn role_of[&t](text: &t [byte]) -> [] int {
+    var role = 0;
+    region a {
+        let key = alloc_slice[a](32, byte_of(0));
+        role = keys.line(text, 0, len(text), key);
+    }
+    return role;
+}
+
+fn test_a_line_is_a_role_and_the_key_ssh_keygen_wrote() -> [] int {
+    region a {
+        let key = alloc_slice[a](32, byte_of(0));
+        let l = "owner ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGMWNj3sFySrryCSjZvn0dvpRf0Si+unjANlZd87qhEp cancho-os test key";
+        test.assert_eq(keys.line(l, 0, len(l), key), keys.owner());
+        test.assert(is_key(key, 0, first()));
+        let m = "  reader ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ9IxfNjM2SnUvQB+IWaJ0yLTkq0mozBPdgGMSd8GJ0F";
+        test.assert_eq(keys.line(m, 0, len(m), key), keys.reader());
+        test.assert(is_key(key, 0, second()));
+    }
+    return 0;
+}
+
+fn test_what_is_not_a_key_is_not_one() -> [] int {
+    // nothing to say: empty, blank, a comment
+    test.assert_eq(role_of(""), 0);
+    test.assert_eq(role_of("   "), 0);
+    test.assert_eq(role_of("# the people who may log in"), 0);
+    // no role, a role nobody has, another kind of key
+    test.assert_eq(role_of("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGMWNj3sFySrryCSjZvn0dvpRf0Si+unjANlZd87qhEp"), -1);
+    test.assert_eq(role_of("admin ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGMWNj3sFySrryCSjZvn0dvpRf0Si+unjANlZd87qhEp"), -1);
+    test.assert_eq(role_of("owner ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC7"), -1);
+    // one character short; one that is not base64; the right length saying another kind inside
+    test.assert_eq(role_of("owner ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGMWNj3sFySrryCSjZvn0dvpRf0Si+unjANlZd87qhE"), -1);
+    test.assert_eq(role_of("owner ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGMWNj3sFySrryCSjZvn0dvpRf0Si*unjANlZd87qhEp"), -1);
+    test.assert_eq(role_of("owner ssh-ed25519 AAAAC3NzaC1lZDI1NTE4AAAAIGMWNj3sFySrryCSjZvn0dvpRf0Si+unjANlZd87qhEp"), -1);
+    // more key than a key has
+    test.assert_eq(role_of("owner ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGMWNj3sFySrryCSjZvn0dvpRf0Si+unjANlZd87qhEpAAAA"), -1);
+    return 0;
+}
+
+fn test_a_file_is_read_line_by_line_after_the_keys_already_there() -> [] int {
+    region a {
+        let table = alloc_slice[a](4 * 32, byte_of(0));
+        let roles = alloc_slice[a](4, 0);
+        let skipped = alloc_slice[a](1, 0);
+        // one key is there already (the one built into the image): it stays
+        table[0] = byte_of(77);
+        roles[0] = keys.owner();
+        let file = "# who may log in\nreader ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ9IxfNjM2SnUvQB+IWaJ0yLTkq0mozBPdgGMSd8GJ0F a reader\r\n\nnot a key at all\nowner ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJzKJticikISXfccz/mM7nngFA54aE1jFKivDTiOue1T\n";
+        test.assert_eq(keys.load(file, len(file), table, roles, 1, skipped), 3);
+        test.assert_eq(skipped[0], 1);
+        test.assert_eq(int_of(table[0]), 77);
+        test.assert_eq(roles[0], keys.owner());
+        test.assert(is_key(table, 32, second()));
+        test.assert_eq(roles[1], keys.reader());
+        test.assert(is_key(table, 64, third()));
+        test.assert_eq(roles[2], keys.owner());
+        // the last line needs no line feed; and a table that is full takes no more
+        let more = "owner ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGMWNj3sFySrryCSjZvn0dvpRf0Si+unjANlZd87qhEp\nreader ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ9IxfNjM2SnUvQB+IWaJ0yLTkq0mozBPdgGMSd8GJ0F";
+        test.assert_eq(keys.load(more, len(more), table, roles, 3, skipped), 4);
+        test.assert_eq(skipped[0], 1);
+        test.assert(is_key(table, 96, first()));
+    }
+    return 0;
+}
+
+fn test_no_damage_to_a_line_makes_it_trap() -> [] int {
+    region a {
+        let l = alloc_slice[a](100, byte_of(0));
+        let key = alloc_slice[a](32, byte_of(0));
+        let table = alloc_slice[a](64, byte_of(0));
+        let roles = alloc_slice[a](2, 0);
+        let skipped = alloc_slice[a](1, 0);
+        let good = "owner ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGMWNj3sFySrryCSjZvn0dvpRf0Si+unjANlZd87qhEp x\n";
+        var i = 0;
+        while i < len(good) {
+            l[i] = good[i];
+            i = i + 1;
+        }
+        let n = len(good);
+        var at = 0;
+        var tried = 0;
+        while at < n {
+            let kept = l[at];
+            var v = 0;
+            while v < 256 {
+                l[at] = byte_of(v);
+                var cut = 0;
+                while cut <= n {
+                    let r = keys.line(l, 0, cut, key);
+                    test.assert(r >= -1 && r <= 2);
+                    cut = cut + 11;
+                }
+                let c = keys.load(l, n, table, roles, 0, skipped);
+                test.assert(c >= 0 && c <= 2);
+                tried = tried + 1;
+                v = v + 1;
+            }
+            l[at] = kept;
+            at = at + 1;
+        }
+        test.assert_eq(tried, n * 256);
+    }
+    return 0;
+}
