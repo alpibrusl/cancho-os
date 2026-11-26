@@ -64,6 +64,8 @@
 - Next in the compiler: a rule that refuses a hosted builtin on the bare target instead of leaving it to
   clang; interrupt entry (issue 04) when preemption needs it. Found on the way: in cancho a narrowed `Fs` passes
   for a wider one (cancho `docs/mmio.md` 3), not fixed yet.
+- Pi 4: **booted on a real board 2026-11-26** (0.0.17; README, "On a real Pi 4"): console, timer, GIC, MMU,
+  fault report, the arm's arithmetic. The first time anything here ran outside QEMU.
 - Pi 5: written 2026-11-26 from a running board's device tree (docs/pi5.md): console, GIC, timer, MMU, shell.
   Never run: QEMU has no model, and the first boot needs a cable for the debug connector and an SD card.
 

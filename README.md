@@ -177,9 +177,21 @@ change when the network was added.
 
 ## On a real Pi 4
 
-**Not tried yet.** Every claim in this file was measured in QEMU. The steps below are what
-should boot it on a board; if you run them, what the serial console prints (or does not) is
-worth an issue.
+**It boots.** On 2026-11-26 version 0.0.17 ran on a real Raspberry Pi 4 Model B, from the
+steps below, with the Pi's firmware of April 2021. One board, one session:
+
+- `about` said `(Raspberry Pi 4)`; `help`, `echo` and `mem` answered as in QEMU.
+- **The timer and the interrupt controller:** `ticks` rose by 100 a second, and over 21.006 s of
+  another machine's clock `uptime` advanced 21.000 s.
+- **The MMU and the caches** were on throughout. `crash null` gave `data abort: address not
+  mapped`, with `far 0x0000000000000000`, and halted.
+- **Floating point:** `arm zero` printed `gripper at x 391361 y -9 z 226469 um`, the same digits
+  as in QEMU and as the reference it is checked against.
+- `servo scan` found no servo, and `random` no generator: both as expected (below).
+
+The console was a second Pi's header UART, read over SSH: three wires, pin 6 to pin 6 and pins 8
+and 10 crossed. Everything else in this file was still measured in QEMU. Not tried on the board:
+the network (no link to carry it there), a second boot's worth of anything.
 
 You need a Raspberry Pi 4, a microSD card and a USB-serial cable with **3.3 V** levels (a
 5 V one damages the pins).
@@ -215,7 +227,8 @@ You need a Raspberry Pi 4, a microSD card and a USB-serial cable with **3.3 V** 
 What QEMU does not model, so where a real board may differ:
 
 - **The data cache.** The kernel turns it on with the MMU and does not invalidate it first.
-  QEMU has no cache. A hang right after boot points here.
+  QEMU has no cache. It did not hang on the one board tried, which says the firmware left the
+  cache clean that time, not that the kernel is right to rely on it.
 - **The UART clock.** The divisor is for 48 MHz, the Pi 4's default. Garbage on the console
   points here (`init_uart_clock=48000000` in `config.txt` pins it).
 - **The servo bus does not work on a Pi 4 header yet.** It is the mini UART, whose only

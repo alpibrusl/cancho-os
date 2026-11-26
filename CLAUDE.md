@@ -33,6 +33,8 @@ Rules of the road
   A change to TCP is tried against a real stack before it is believed: `MACHINE=virt TCPFILE=... ./test.sh`
   (QEMU's own TCP) here, `sudo ./ping.sh` (Linux's) in CI. Twice every test passed and a real stack
   showed the code wrong (docs/network.md, section 7): never take back window that was offered.
+- A real Pi 4 has booted it (README, "On a real Pi 4"): one board, one session. Say exactly that, and
+  keep "measured in QEMU" on everything that was not seen on the board.
 - The Pi 5 (docs/pi5.md) is the one board whose code no test runs: QEMU has none. Do not describe it as
   working, and do not add a Pi 5 driver (RP1, the RNG200, USB) before the console has been seen on a real board.
 - Three files, none near 2,000 lines: `src/kernel.cho` (boot, memory, shell, servo and arm), `src/base.cho`
