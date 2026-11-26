@@ -66,6 +66,8 @@
   for a wider one (cancho `docs/mmio.md` 3), not fixed yet.
 - `load` (docs/load.md): a kernel sent over the serial console replaces the running one. A tool for bringing up
   hardware on the real boards without moving the SD card for every build; `board/send.py` is the sender.
+- Writing, first slice (2026-11-26): a file added, added to, or copied, in QEMU, in the order permissions.md
+  sets; judged by macOS's and Linux's own checkers. Next slice: the SSH host key and a keys file with two roles.
 - Who may do what (docs/permissions.md, 2026-11-26, design only): keys instead of users, grants instead of
   permissions, every write a version, a record nobody can rewrite, approval for what cannot be undone. Decided
   with the first reading slice, so that writing is built to it.

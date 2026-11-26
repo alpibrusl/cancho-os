@@ -1,6 +1,7 @@
 # Storage
 
-> **Status: reading works, in QEMU.** No writing yet, and no real card: slices 1 to 3 of the order below.
+> **Status: reading and a first kind of writing work, in QEMU.** A file can be added, and added to; nothing
+> that is there can be changed or removed yet. No real card.
 
 ## What is wanted
 
@@ -61,11 +62,37 @@ through capabilities the network card already used.
 A file with a long name was there too: it is listed as `A-LONG~9.TEX` and reads correctly under that
 name. macOS also left its own `._` files beside each, which `ls` shows as it finds them.
 
-## What writing will be
+## Writing
 
 Not "write a sector". [`permissions.md`](permissions.md) is the design: who may change what (keys and
 grants, not users), every write a new version, a record that is only added to, and an order of writes in
-which a power cut never leaves a file half changed. It is written before any code that writes.
+which a power cut never leaves a file half changed. It was written before any code that writes.
+
+**Its first slice is built**: `write <name> <text>` makes a new file, `append <name> <text>` adds a line
+to one, `copy <from> <to>` makes a new file with another's contents. Nothing replaces or removes a file:
+`write` to a name that exists is refused, because replacing waits for versions.
+
+- **`fat.cho` still writes nothing.** It changes the bytes of a sector it is handed (a free cluster
+  found, an entry of the table set, a directory entry made) and is still pure. `disk.cho` decides what
+  goes to the disk and when.
+- **The order.** A file's contents and the table's chain for them first; the directory sector that
+  names them last. Until that sector is written the disk reads exactly as it did. For `append`, the
+  new bytes go past the file's end, where nothing reads them, and the length is changed last.
+- **A FAT32 directory that is full is given another cluster;** a FAT16 top directory is a fixed size and
+  can be full. FAT32's count of free clusters is brought down by what was taken.
+
+Measured, at the commit that adds this section:
+
+| | what | result |
+|---|---|---|
+| `cancho test tests/fat_test.cho src/fat.cho --std` | 18 tests (11 before) | an entry made here has the bytes of the entry macOS made for the same file (name, kind, first cluster, length); a free cluster found where the second implementation finds it; the top four bits of a FAT32 entry kept; 39,936 names, none traps |
+| the kernel in QEMU writing to copies of the three volumes macOS made: a new file, a 300,000-byte copy, a line added, twenty more files, thirteen lines added across clusters | then macOS's own `fsck_msdos -n` and macOS mounting the result | the checker finds nothing to fix; the copy is the original byte for byte; the thirteen lines are the thirteen lines; the files that were there are untouched |
+| in CI | the same on three volumes Linux's tools made, judged by `fsck.fat -n`, `mcopy` and `mdir` | the same |
+
+What this slice does not do: replace or remove a file; write below the top directory; survive a power cut
+*provably* (the order is the argument; nothing here cuts the power); set a date (files are dated 1 January
+1980, the kernel having no clock); or ask who is writing (that is the next slice: until then whoever has
+the shell may add files).
 
 ## What it does not do, yet
 

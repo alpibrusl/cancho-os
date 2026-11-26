@@ -111,6 +111,33 @@ jobs:
           # and with no disk, the commands say so
           MACHINE=virt ./test.sh disk > nodisk.txt; ./test.sh ls >> nodisk.txt; cat nodisk.txt
           test "$(grep -c "^no disk" nodisk.txt)" = 2
+      - name: files written to a disk
+        # docs/permissions.md, slice 1. The kernel adds files to copies of the three volumes and adds to one
+        # of them; then Linux's own tools judge the result: fsck.fat must find nothing wrong, and mcopy must
+        # read back what was written, byte for byte, with the files that were there untouched.
+        run: |
+          L="0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzAB"
+          echo "line 0" > want.txt
+          set -- 'write LOG.TXT line 0'
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12; do set -- "$@" "append LOG.TXT $i $L"; echo "$i $L" >> want.txt; done
+          for i in 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20; do set -- "$@" "write F$i.TXT file $i"; done
+          for img in fat32 fat16 part; do
+            cp $img.img w-$img.img
+            MACHINE=virt DISKRW=w-$img.img ./test.sh "$@" 'copy BIG.BIN COPY.BIN' 'write LOG.TXT again' 'write bad/name x' 'sum COPY.BIN' ls disk > w-$img.txt; tail -40 w-$img.txt
+            grep -q "^copied: 300000 bytes" w-$img.txt
+            grep -q "^there is a file of that name" w-$img.txt
+            grep -q "^not a short name" w-$img.txt
+            # the volume itself, for the tools: the image, or the partition inside it
+            vol=w-$img.img
+            if [ $img = part ]; then dd if=w-part.img of=w-part-vol.img bs=512 skip=2048 status=none; vol=w-part-vol.img; fi
+            fsck.fat -n $vol
+            mcopy -i $vol ::COPY.BIN copy.out && cmp copy.out big.bin
+            mcopy -i $vol ::BIG.BIN big.out && cmp big.out big.bin
+            mcopy -i $vol ::LOG.TXT log.out && cmp log.out want.txt
+            mcopy -i $vol ::F20.TXT f20.out && test "$(cat f20.out)" = "file 20"
+            test "$(mdir -i $vol :: | grep -c '^F[0-9][0-9] *TXT')" = 20
+            rm -f copy.out big.out log.out f20.out
+          done
       - name: a kernel loaded over the serial console
         # the running kernel takes another (this build, renamed 0.0.99) and starts it: a wrong checksum
         # must forget it, the right one must run it, and the fault report must still work afterwards

@@ -8,6 +8,8 @@
 #   MACHINE=virt TCP=hello ./test.sh 'net up' net     the same over a TCP connection (the host's stack opens it)
 #   MACHINE=virt TCPFILE=path ./test.sh 'net up' net  a whole file over one, and whether it came back the same
 #   MACHINE=virt DISK=image ./test.sh disk ls 'sum BIG.BIN'
+#   MACHINE=virt DISKRW=image ./test.sh 'write NEW.TXT hello' 'copy BIG.BIN COPY.BIN'
+#                                        the same, and the kernel may write to it: the file is changed
 #                                        with that file as the machine's disk, read-only (docs/storage.md)
 #   MACHINE=virt SSHKEY=key SSHCMD=about ./test.sh 'net up' 'net ssh on' net
 #                                        OpenSSH's client logs in with that key and runs the command
@@ -45,7 +47,7 @@ if [ "$MACHINE" = virt ]; then
     # QEMU's own board: one serial port (no servo bus), RAM at 1 GB. A Cortex-A57 is how the kernel knows it.
     # A network card on QEMU's own user-mode network: the host is 10.0.0.1, the kernel 10.0.0.2, and a
     # datagram sent to this machine's port 5507 reaches the kernel's port 7, and so does a connection.
-    MACHINE="virt -cpu cortex-a57 -m 1G -global virtio-mmio.force-legacy=false -netdev user,id=n0,net=10.0.0.0/24,host=10.0.0.1,hostfwd=udp:127.0.0.1:5507-10.0.0.2:7,hostfwd=tcp:127.0.0.1:5507-10.0.0.2:7,hostfwd=tcp:127.0.0.1:5523-10.0.0.2:23,hostfwd=tcp:127.0.0.1:5522-10.0.0.2:22 -device virtio-net-device,netdev=n0 ${NORNG:--device virtio-rng-device} ${DISK:+-drive file=$DISK,format=raw,if=none,id=d0,readonly=on -device virtio-blk-device,drive=d0} ${DUMP:+-object filter-dump,id=f0,netdev=n0,file=$DUMP}"
+    MACHINE="virt -cpu cortex-a57 -m 1G -global virtio-mmio.force-legacy=false -netdev user,id=n0,net=10.0.0.0/24,host=10.0.0.1,hostfwd=udp:127.0.0.1:5507-10.0.0.2:7,hostfwd=tcp:127.0.0.1:5507-10.0.0.2:7,hostfwd=tcp:127.0.0.1:5523-10.0.0.2:23,hostfwd=tcp:127.0.0.1:5522-10.0.0.2:22 -device virtio-net-device,netdev=n0 ${NORNG:--device virtio-rng-device} ${DISK:+-drive file=$DISK,format=raw,if=none,id=d0,readonly=on -device virtio-blk-device,drive=d0} ${DISKRW:+-drive file=$DISKRW,format=raw,if=none,id=d0 -device virtio-blk-device,drive=d0} ${DUMP:+-object filter-dump,id=f0,netdev=n0,file=$DUMP}"
     KERNEL=build/kernel-virt.elf
     BUS=
 fi

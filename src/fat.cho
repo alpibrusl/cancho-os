@@ -487,3 +487,18 @@ pub fn summary_unknown[&b](s: &!b [byte]) -> [] int {
     }
     return 0;
 }
+
+// The same sector, when `taken` clusters have just been put to use: the count goes down by that many, if it
+// was a count. 0, or -1 if `s` is not that sector.
+pub fn summary_less[&b](s: &!b [byte], taken: int) -> [] int {
+    if len(s) < 512 || le32(s, 0) != 1096897106 || le32(s, 484) != 1631679090 {
+        return -1;
+    }
+    let free = le32(s, 488);
+    if taken < 0 || free == 4294967295 || free < taken {
+        return 0;
+    }
+    put16(s, 488, (free - taken) % 65536);
+    put16(s, 490, (free - taken) / 65536);
+    return 0;
+}

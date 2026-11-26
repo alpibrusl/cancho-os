@@ -1,7 +1,8 @@
 # Who may do what: keys, grants, versions and a record
 
-> **Status: design. Nothing here is built.** It is written before the kernel can write a single byte to
-> a disk, because it decides how writing must work. The slices at the end say what comes first.
+> **Status: design, with its first slice built** (adding a file and adding to one, in QEMU:
+> [`storage.md`](storage.md)). Keys, grants, versions, the record and approval are not built. It was
+> written before the kernel could write a single byte to a disk, because it decides how writing must work.
 
 ## What is wanted
 
@@ -59,8 +60,8 @@ what is running.
 | `LOG.TXT` | the record, in text, a line an action |
 | `OLD/` | the versions: what a file held before each write or delete, under a number the record names |
 
-**A write never changes what is there.** The new contents go to clusters that were free; then the table
-that chains them; then, last, the one directory sector that names them. A power cut before that last
+**A write never changes what is there.** The new contents go to clusters that were free, and the table
+is made to chain them; then, last, the one directory sector that names them. A power cut before that last
 sector leaves the file as it was and some clusters used by nothing, which any FAT checker frees. There
 is no moment at which the file is half one thing and half another.
 
