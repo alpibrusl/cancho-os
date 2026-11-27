@@ -17,12 +17,15 @@ the typing is scripted ([`docs/demo/session.py`](docs/demo/session.py)); re-rend
   - it reads two real SO-101 arms (which servos are there, where each is), through a second board that has their
     USB adapters. It cannot move them.
 - **In QEMU, on every change:** all of that, as a Pi 3 and QEMU's `virt` machine.
-- **Tools an agent calls:** six of [cancho-tools](https://github.com/alpibrusl/cancho-tools) are built into the
+- **Tools an agent calls:** seven of [cancho-tools](https://github.com/alpibrusl/cancho-tools) are built into the
   kernel as they are written, and answer the same bytes as on a Mac ([docs/tools.md](docs/tools.md)). `hash`, `peek`,
   `seek` and `list` read, and run on the board. `replace` changes a file, through the same writer as `put` (the old
   contents kept, a line in the record), and `move` a name, and `write` makes one from what it is sent; all run on the board. The build needs a checkout of them:
   `git clone https://github.com/alpibrusl/cancho-tools ../cancho-tools`.
-- **Not yet:** separate programs, moving a servo, keys and grants for agents, USB, the Pi 5 (its code is written
+- **An agent's key:** a line of `KEYS.TXT` gives a key what it may read and what it may write, by directory. Its
+  session runs only the tools, and everything they touch is asked about in one place
+  ([docs/permissions.md](docs/permissions.md)). In QEMU, with OpenSSH; not yet on the board.
+- **Not yet:** separate programs, moving a servo, signed grants and approval, USB, the Pi 5 (its code is written
   from the board's device tree and has never run).
 
 | | |

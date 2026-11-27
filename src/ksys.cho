@@ -6,6 +6,7 @@ import base;
 import disk;
 import fat;
 import files;
+import keys;
 
 // ksys.cho -- the system the kernel lends to a program that was written for one (cancho docs/bare-system.md).
 // A program's standard output and its error stream are the shell's output (`putc`, so the console or the SSH
@@ -222,6 +223,32 @@ fn held[&hd](h: &!hd [int], fd: int, kind: int) -> [] int {
     return (fd - 3) * 6;
 }
 
+// ---- grants (docs/permissions.md, slice 5) ---------------------------------------------------------
+// An agent's key (k[4179] is 3, over SSH) reaches only what its line of KEYS.TXT grants it: the shell has put those
+// grants in k[4280..] before the program began (`keys.grants_for`). Every name a program opens, lists, asks about,
+// makes or renames comes through one of the functions below, and each asks here first. `want` is 1 to read and 2 to
+// write; 0 is to pass through a directory or to ask what a name is, which is also allowed above what is granted.
+// Anyone else, an owner, a reader or the console, is not asked: what they may do is the shell's to say.
+fn may[&s, &hd, &r](k: &!s [int], h: &!hd [int], dir: int, name: &r [byte], want: int) -> [] bool {
+    if k[4179] != 3 || k[26] == 0 {
+        return true;
+    }
+    var yes = false;
+    region r {
+        let full = alloc_slice[r](600, byte_of(0));
+        let n = pathed(h, dir, name, full);
+        if n >= 0 && len(k) >= 4280 + keys.grant_room() {
+            let gr = k[4280..4280 + keys.grant_room()];
+            if want == 0 {
+                yes = keys.covers(gr, 1, full[0..n]) || keys.reaches(gr, full[0..n]);
+            } else {
+                yes = keys.covers(gr, want, full[0..n]);
+            }
+        }
+    }
+    return yes;
+}
+
 // The name `text[from..to]` in directory `dir`, as a `kind` (1 a directory, 2 a file): a handle, or minus why not.
 fn named[&mc, &mv, &md, &mg, &s, &l, &hd, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), k: &!s [int], line: &!l [byte], h: &!hd [int], dir: int, text: &r [byte], from: int, to: int, kind: int) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000")] int {
     if to <= from || int_of(text[from]) == '.' {
@@ -271,7 +298,10 @@ fn walked[&mc, &mv, &md, &mg, &s, &l, &hd, &r](con: &!mc Mmio("0x9000000..0x9000
         while end < to && int_of(path[end]) != '/' {
             end = end + 1;
         }
-        var under = named(con, vio, dma, stage, k, line, h, h[(dir - 3) * 6 + 1], path, at, end, 1);
+        var under = 0 - 13;
+        if may(k, h, dir, path[at..end], 0) {
+            under = named(con, vio, dma, stage, k, line, h, h[(dir - 3) * 6 + 1], path, at, end, 1);
+        }
         if under >= 0 && !path_join(h, under, dir, path, at, end) {
             h[(under - 3) * 6] = 0;
             under = 0 - 36;
@@ -299,6 +329,14 @@ pub fn step[&mc, &mv, &md, &mg, &s, &l, &hd, &r](con: &!mc Mmio("0x9000000..0x90
     let at = held(h, dir, 1);
     if at < 0 {
         return 0 - 9;
+    }
+    // (to pass into a directory, to read a file, to make one or to hold its lock)
+    var want = which;
+    if which >= 2 {
+        want = 2;
+    }
+    if !may(k, h, dir, name, want) {
+        return 0 - 13;
     }
     if which == 3 {
         if !ends(name, ".lexsys-lock") {
@@ -352,6 +390,9 @@ pub fn step[&mc, &mv, &md, &mg, &s, &l, &hd, &r](con: &!mc Mmio("0x9000000..0x90
 pub fn open[&mc, &mv, &md, &mg, &s, &l, &hd, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), k: &!s [int], line: &!l [byte], h: &!hd [int], path: &r [byte], mode: int) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000")] int {
     if mode != 0 {
         return 0 - 30;
+    }
+    if !may(k, h, 0 - 1, path, 1) {
+        return 0 - 13;
     }
     var leaf = len(path);
     while leaf > 0 && int_of(path[leaf - 1]) != '/' {
@@ -487,6 +528,9 @@ pub fn list[&mc, &mv, &md, &mg, &s, &l, &hd](con: &!mc Mmio("0x9000000..0x900004
     if at < 0 {
         return 0 - 9;
     }
+    if !may(k, h, dir, "", 1) {
+        return 0 - 13;
+    }
     return fresh(h, 3, h[at + 1], 0);
 }
 
@@ -572,6 +616,9 @@ pub fn stat[&mc, &mv, &md, &mg, &s, &l, &hd, &q](con: &!mc Mmio("0x9000000..0x90
     if len(name) == 0 || int_of(name[0]) == '.' {
         return 0 - 2;
     }
+    if !may(k, h, dir, name, 0) {
+        return 0 - 13;
+    }
     var answer = 0 - 5;
     region r {
         let sec = alloc_slice[r](512, byte_of(0));
@@ -642,13 +689,16 @@ fn drafted[&hd, &r](h: &!hd [int], dir: int, name: &r [byte]) -> [] bool {
 
 // The path of `name` under directory handle `dir`, into `full`: its length, or -1 if it is longer than `full`.
 fn pathed[&hd, &r, &f](h: &!hd [int], dir: int, name: &r [byte], full: &!f [byte]) -> [] int {
-    let theirs = paths() + (dir - 3) * 257;
+    var theirs = paths();
     var n = 0;
-    while n < h[theirs] {
+    if dir >= 3 {
+        theirs = paths() + (dir - 3) * 257;
+    }
+    while dir >= 3 && n < h[theirs] && n < len(full) {
         full[n] = byte_of(h[theirs + 1 + n]);
         n = n + 1;
     }
-    if n > 0 {
+    if n > 0 && n < len(full) {
         full[n] = byte_of('/');
         n = n + 1;
     }
@@ -702,6 +752,9 @@ pub fn lock[&mc, &mv, &md, &mg, &s, &l, &hd](con: &!mc Mmio("0x9000000..0x900004
 pub fn rename[&mc, &mv, &md, &mg, &s, &l, &hd, &p, &q](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), k: &!s [int], line: &!l [byte], h: &!hd [int], dir: int, from: &p [byte], to: &q [byte], fresh: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x220000..0x420000,0x40220000..0x40420000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
     if held(h, dir, 1) < 0 {
         return 0 - 9;
+    }
+    if !may(k, h, dir, from, 2) || !may(k, h, dir, to, 2) {
+        return 0 - 13;
     }
     if !drafted(h, dir, from) {
         // a file of the disk: its name is changed, and only to one that is not taken
@@ -788,6 +841,9 @@ pub fn rename[&mc, &mv, &md, &mg, &s, &l, &hd, &p, &q](con: &!mc Mmio("0x9000000
 pub fn remove[&mc, &mv, &md, &mg, &s, &l, &hd, &p](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), k: &!s [int], line: &!l [byte], h: &!hd [int], dir: int, name: &p [byte]) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000")] int {
     if held(h, dir, 1) < 0 {
         return 0 - 9;
+    }
+    if !may(k, h, dir, name, 2) {
+        return 0 - 13;
     }
     if drafted(h, dir, name) {
         h[draft()] = 0;

@@ -85,6 +85,9 @@
   ran on the real Pi 4. Then an input for programs (typed until Ctrl-D, or what an SSH client sends) and `write` in place of the shell's
   own `write` and `append`, which are gone. `count` and `names`, the two programs written here to try a lent system's files
   before the tools could be built in, are gone too: `hash` and `list` do what they did (0.0.42). Next: keys for agents with grants.
+- An agent's key and its grants (2026-11-27, docs/permissions.md): a line of KEYS.TXT gives a key `read:` and
+  `write:` on directories; its session runs only the tools, and everything they touch is asked about in one place.
+  In QEMU, with OpenSSH. Next: the shell's `ls`, `cat` and `sum` as the tools; signed statements and approval.
 - Long names (2026-11-26, docs/storage.md): read, written, replaced and removed; the pieces made here are the
   pieces macOS makes. With directories, a source tree can live on the card.
 - Directories (2026-11-26, docs/storage.md): a name may be a path; `mkdir`, `ls <path>`.
