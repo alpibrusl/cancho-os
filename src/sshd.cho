@@ -24,6 +24,7 @@ import ssh_sha256 as sha;
 //    k[4179] what the key that logged in may do: 2 an owner's, 1 a reader's, 3 an agent's (k[4273]: which keys are agents')
 //    k[4258] bytes of a file still to come (`put`; 0: none is being received)   k[4259] bytes of it that came
 //    k[4260] how many of them `step` has just left in `rline` (it then answers 4)
+//    k[4279] what the session ends with: what the program it ran ended with, 126 for a line the key may not run, else 0
 //    k[4268] 1: what is being received is a program's input, which ends when the client closes its side (kernel.cho)
 //    k[4184] k[4185] the first eight bytes of that key's SHA-256 fingerprint, as two 32-bit numbers
 
@@ -357,7 +358,7 @@ pub fn step[&s, &t, &g, &h, &l, &w, &i, &b, &x](k: &!s [int], tcp: &!t [int], bu
             k[4152] = 1;
         }
         if k[4163] != 0 && k[4152] != 0 && k[27] == 0 {
-            if ssh.exit_session(si, sb, 0) == 0 {
+            if ssh.exit_session(si, sb, k[4279]) == 0 {
                 k[4163] = 0;
                 k[4152] = 0;
                 moved = true;
