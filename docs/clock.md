@@ -1,6 +1,6 @@
 # The date
 
-> **Status: built**, in QEMU and tried against a real clock. What uses the date so far is small: the times of files
+> **Status: built**, in QEMU and on the Raspberry Pi 4. What uses the date so far is small: the times of files
 > the kernel writes, a line in the record, and the `time` command. A grant that ends on a day
 > ([`permissions.md`](permissions.md)) and the checking of a certificate are what it is for, and are not built.
 
@@ -62,3 +62,10 @@ In `qemu-system-aarch64` as `virt` (2026-11-27), with `tests/sntp.py` on the Mac
 | `net time` with no address, or a port that is not a number | how it is used |
 
 macOS's `fsck_msdos` finds nothing wrong with the volume.
+
+On the Raspberry Pi 4, from its card (2026-11-27, 0.0.46), with `tests/sntp.py` on the Raspberry Pi 5 beside it
+(port 12300, saying the Pi 5's own time, which it keeps by NTP): `net time 10.42.0.1 12300` over SSH gave the
+date, and `time` three seconds later was one second from what the Mac's clock said at that moment; a file written
+then is dated, by `ls`, four seconds before the Mac's clock when it was read. The Pi 5 has no time server of its
+own running: for the board to know the date at every start, `BOOT.TXT` needs a `net time` line and a machine that
+answers on port 123.
