@@ -218,6 +218,38 @@ pub fn entry[&b, &m, &o](s: &b [byte], i: int, name: &!m [byte], out: &!o [int])
     return entry_file();
 }
 
+// When entry `i` of the sector was last written, as seconds since 1970. FAT keeps a date and a time of day to two
+// seconds, and does not say in which zone: they are read here as if they were UTC. A month or a day that cannot
+// be is read as the first, and an hour, minute or second past its range as written: no bytes make this trap.
+pub fn changed[&b](s: &b [byte], i: int) -> [] int {
+    if len(s) < 512 || i < 0 || i > 15 {
+        return 0;
+    }
+    let at = i * 32;
+    let time = le16(s, at + 22);
+    let date = le16(s, at + 24);
+    var y = 1980 + date / 512;
+    var m = date / 32 % 16;
+    var d = date % 32;
+    if m < 1 || m > 12 {
+        m = 1;
+    }
+    if d < 1 {
+        d = 1;
+    }
+    // days since 1970 of a date: the year is counted from March, so that the leap day is its last
+    if m <= 2 {
+        y = y - 1;
+        m = m + 12;
+    }
+    let era = y / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * (m - 3) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146097 + doe - 719468;
+    return days * 86400 + time / 2048 * 3600 + time / 32 % 64 * 60 + time % 32 * 2;
+}
+
 // ---- long names --------------------------------------------------------------------------------
 // A name longer than eight letters, a dot and three is kept in entries of its own, before the entry that has
 // the short form: thirteen characters each, the last piece first, each with a sum of the short name's eleven

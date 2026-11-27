@@ -793,3 +793,52 @@ fn test_no_damage_to_a_directory_makes_reading_long_names_trap() -> [] int {
     }
     return 0;
 }
+
+// An entry's date and time, as seconds since 1970. What is wanted here was worked out by Python's `calendar.timegm`
+// from the same year, month, day, hour, minute and second: among them a leap day, the first and the last moment FAT
+// can write, and the two sides of the February that 2100 does not lengthen.
+fn when[&b](s: &!b [byte], date: int, time: int) -> [] int {
+    s[5 * 32 + 22] = byte_of(time % 256);
+    s[5 * 32 + 23] = byte_of(time / 256);
+    s[5 * 32 + 24] = byte_of(date % 256);
+    s[5 * 32 + 25] = byte_of(date / 256);
+    return fat.changed(s, 5);
+}
+
+fn test_an_entrys_time_is_the_seconds_another_implementation_counts() -> [] int {
+    region a {
+        let s = alloc_slice[a](512, byte_of(0));
+        test.assert_eq(when(s, 22382, 45482), 1700000000);
+        test.assert_eq(when(s, 22621, 24605), 1709208058);
+        test.assert_eq(when(s, 10143, 49021), 946684798);
+        test.assert_eq(when(s, 33, 0), 315532800);
+        test.assert_eq(when(s, 65439, 49021), 4354819198);
+        test.assert_eq(when(s, 10337, 0), 951868800);
+        test.assert_eq(when(s, 61532, 49021), 4107542398);
+        test.assert_eq(when(s, 61537, 0), 4107542400);
+        // an entry that is not one of the sixteen, and a sector that is short
+        test.assert_eq(fat.changed(s, 16), 0);
+        test.assert_eq(fat.changed(s, -1), 0);
+        test.assert_eq(fat.changed(s[0..511], 5), 0);
+    }
+    return 0;
+}
+
+fn test_no_date_and_no_time_make_reading_them_trap() -> [] int {
+    region a {
+        let s = alloc_slice[a](512, byte_of(0));
+        var tried = 0;
+        // every date with the latest time there is, and every time with the latest date: each within what FAT spans
+        var v = 0;
+        while v < 65536 {
+            let late = when(s, v, 65535);
+            test.assert(late >= 315532800 && late < 4354992000);
+            let last = when(s, 65535, v);
+            test.assert(last >= 315532800 && last < 4354992000);
+            tried = tried + 2;
+            v = v + 1;
+        }
+        test.assert_eq(tried, 131072);
+    }
+    return 0;
+}

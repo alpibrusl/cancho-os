@@ -17,6 +17,9 @@ the typing is scripted ([`docs/demo/session.py`](docs/demo/session.py)); re-rend
   - it reads two real SO-101 arms (which servos are there, where each is), through a second board that has their
     USB adapters. It cannot move them.
 - **In QEMU, on every change:** all of that, as a Pi 3 and QEMU's `virt` machine.
+- **In QEMU, not yet on the board:** four of [cancho-tools](https://github.com/alpibrusl/cancho-tools) (`hash`, `peek`,
+  `seek`, `list`) are built into the kernel as they are written, and answer the same bytes as on a Mac
+  ([docs/tools.md](docs/tools.md)). The build needs a checkout of them: `git clone https://github.com/alpibrusl/cancho-tools ../cancho-tools`.
 - **Not yet:** separate programs, moving a servo, keys and grants for agents, USB, the Pi 5 (its code is written
   from the board's device tree and has never run).
 
@@ -26,6 +29,7 @@ the typing is scripted ([`docs/demo/session.py`](docs/demo/session.py)); re-rend
 | The SD card | [docs/sdcard.md](docs/sdcard.md) |
 | A kernel sent over SSH; restart | [docs/update.md](docs/update.md), [docs/restart.md](docs/restart.md) |
 | SSH, the network, the Pi 4's Ethernet | [docs/ssh.md](docs/ssh.md), [docs/network.md](docs/network.md), [docs/genet.md](docs/genet.md) |
+| Programs written for a system, and cancho-tools, inside the kernel | [docs/tools.md](docs/tools.md) |
 | The arms, read through another machine | [docs/netbus.md](docs/netbus.md) |
 | What the kernel can touch | [docs/authority.txt](docs/authority.txt) |
 
@@ -55,6 +59,8 @@ src/disk.cho     a disk (virtio-blk, or a Pi's SD card: src/sdcard.cho), its tab
 src/ledger.cho   the record on the disk; src/record.cho makes and checks its lines
 src/files.cho    the commands that read and change files, and a file that comes over SSH
 src/sshd.cho     the loop between cancho-ssh and the shell
+src/ksys.cho     what the kernel answers a program written for a system (streams, arguments, files to read)
+src/programs.cho the programs of this repository written that way (tell, count, names)
 src/inet.cho     the network's packets: SLIP, Ethernet, IPv4, UDP, TCP, DHCP, DNS; holds no hardware
 sim/servos.cho   six simulated servos for QEMU: a program for the host, not in the image
 sim/expect.cho   what `arm pose` must print for them, computed on the host

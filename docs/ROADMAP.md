@@ -66,6 +66,18 @@
   for a wider one (cancho `docs/mmio.md` 3), not fixed yet.
 - `load` (docs/load.md): a kernel sent over the serial console replaces the running one. A tool for bringing up
   hardware on the real boards without moving the SD card for every build; `board/send.py` is the sender.
+- A lent system (2026-11-27, cancho docs/bare-system.md): `tell`, a function written against `Io` and `Args` with
+  nothing of the kernel in it, runs inside the kernel, answered by `src/ksys.cho`. The first step towards the tools
+  of cancho-tools: streams and arguments. In QEMU.
+- A lent system's files (2026-11-27): `count <path>`, a function written against `Fs`, reads a file of the card;
+  `ksys` answers its opens and reads from the FAT volume, read only. Its count of a 300,000-byte file is what
+  Python counts. In QEMU.
+- A lent system's directories (2026-11-27): `names [path]`, written against `dir_list`, `dir_next` and `dir_stat`,
+  lists a directory with each name's length and time; on volumes macOS made, both are what was put there. The
+  hosted programs moved to `src/programs.cho`. In QEMU.
+- The tools, inside the kernel (2026-11-27, docs/tools.md): cancho-tools' `hash`, `peek`, `seek` and `list`, built in as
+  they are written. On the same files they answer the same bytes as the same tools on a Mac, but for FAT's time having
+  no zone. Next: writing through `files` and the record, then keys for agents with grants. In QEMU.
 - Long names (2026-11-26, docs/storage.md): read, written, replaced and removed; the pieces made here are the
   pieces macOS makes. With directories, a source tree can live on the card.
 - Directories (2026-11-26, docs/storage.md): a name may be a path; `mkdir`, `ls <path>`.

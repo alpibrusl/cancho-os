@@ -5,6 +5,8 @@ env:
   CANCHO_REF: main
   # cancho-ssh (docs/ssh.md) is taken at one commit: a newer one is a change to try, not to drift into
   SSH_REF: e2e8386d29e1d182ff7349d66cf8b2ea9692f311
+  # cancho-tools (docs/tools.md), the same way
+  TOOLS_REF: cc18da95bcbd11dd5b9e0bb7f4307b36bb824387
 jobs:
   boot:
     runs-on: ubuntu-24.04
@@ -22,11 +24,15 @@ jobs:
         run: |
           git clone https://github.com/alpibrusl/cancho-ssh /tmp/cancho-ssh
           git -C /tmp/cancho-ssh checkout -q "$SSH_REF"
+      - name: cancho-tools, at the commit this kernel was tried with
+        run: |
+          git clone https://github.com/alpibrusl/cancho-tools /tmp/cancho-tools
+          git -C /tmp/cancho-tools checkout -q "$TOOLS_REF"
       - name: build
         # with a key made here as the one that may log in over SSH
         run: |
           ssh-keygen -q -t ed25519 -N "" -C "cancho-os CI" -f /tmp/sshkey
-          SSH=/tmp/cancho-ssh AUTHORIZED=/tmp/sshkey.pub CANCHO=/tmp/cancho-out/cancho ./build.sh
+          SSH=/tmp/cancho-ssh TOOLS=/tmp/cancho-tools AUTHORIZED=/tmp/sshkey.pub CANCHO=/tmp/cancho-out/cancho ./build.sh
       - name: the network stack, on this machine
         # src/inet.cho holds no hardware, so its tests run here: published checksum vectors, packets a
         # second implementation built, and every one-byte damage to a packet (nothing traps)
@@ -45,7 +51,7 @@ jobs:
           # the gateway, datagrams, names and a given address
           /tmp/cancho-out/cancho test tests/addr_test.cho src/inet.cho --std
       - name: what the kernel can touch
-        run: SSH=/tmp/cancho-ssh CANCHO=/tmp/cancho-out/cancho ./authority.sh
+        run: SSH=/tmp/cancho-ssh TOOLS=/tmp/cancho-tools CANCHO=/tmp/cancho-out/cancho ./authority.sh
       - name: boot and drive the shell
         run: |
           ./test.sh about 'echo ci' ticks crash about > out.txt
@@ -326,6 +332,106 @@ jobs:
           grep -q "^ssh: a file the board starts from" boot2.txt
           grep -q "^echo the board is up" boot2.txt
           fsck.fat -n b.img
+      - name: a system lent to a program written for one
+        # cancho docs/bare-system.md. `tell` takes an Io and an Args and nothing of the kernel; what it writes and
+        # the arguments it reads are answered by src/ksys.cho. At the console and over SSH.
+        run: |
+          ./test.sh 'tell one two three' tell 'echo still here' > tell.txt; cat tell.txt
+          grep -q "^argument 1: one" tell.txt
+          grep -q "^argument 3: three" tell.txt
+          test "$(grep -c "^that was a program written for a system, answered by the kernel" tell.txt)" = 2
+          grep -q "^still here" tell.txt
+          MACHINE=virt SSHKEY=/tmp/sshkey SSHCMD='tell over ssh' ./test.sh 'net up' 'net ssh on' > tell-ssh.txt; cat tell-ssh.txt
+          grep -q "^ssh: argument 2: ssh" tell-ssh.txt
+      - name: a hosted program reads the disk
+        # cancho docs/bare-system.md, step 3. `count` takes an `Fs` and nothing of the kernel: it opens a file and adds
+        # its bytes up, and every open and read is answered by src/ksys.cho from the FAT volume. What it counts is
+        # held against what Python counts in the same file, on three volumes Linux's tools made, in a directory
+        # under a long name, on the Pi 3's SD card and over SSH.
+        run: |
+          want=$(python3 -c 'd=open("big.bin","rb").read(); print("%d bytes, which add up to %d" % (len(d), sum(d)))')
+          small=$(python3 -c 'd=open("hello.txt","rb").read(); print("%d bytes, which add up to %d" % (len(d), sum(d)))')
+          for img in fat32 fat16 part; do
+            MACHINE=virt DISK=$img.img ./test.sh 'count BIG.BIN' 'count /hello.txt' 'count nothere' 'count ../BIG.BIN' count 'echo still here' > count-$img.txt; cat count-$img.txt
+            test "$(grep -c "^$want" count-$img.txt)" = 1
+            test "$(grep -c "^$small" count-$img.txt)" = 1
+            grep -q "^no such file" count-$img.txt
+            grep -q "^not a path" count-$img.txt
+            grep -q "^count <path>" count-$img.txt
+            grep -q "^still here" count-$img.txt
+          done
+          cp fat32.img c.img
+          mmd -i c.img ::deep ::deep/er
+          mcopy -i c.img big.bin ::deep/er/a-long-name-for-a-big-file.bin
+          printf 'not to be read' > HOSTKEY.BIN; mcopy -i c.img HOSTKEY.BIN ::
+          MACHINE=virt DISK=c.img ./test.sh 'count deep/er/a-long-name-for-a-big-file.bin' 'count deep' 'count deep/er/' 'count HOSTKEY.BIN' 'count /HOSTKEY.BIN' > count-deep.txt; cat count-deep.txt
+          test "$(grep -c "^$want" count-deep.txt)" = 1
+          test "$(grep -c "^no such file" count-deep.txt)" = 4
+          test "$(grep -c "bytes, which add up to" count-deep.txt)" = 1
+          SD=c.img ./test.sh 'count BIG.BIN' > count-sd.txt; cat count-sd.txt
+          grep -q "^$want" count-sd.txt
+          MACHINE=virt DISK=fat32.img SSHKEY=/tmp/sshkey SSHCMD='count BIG.BIN' ./test.sh 'net up' 'net ssh on' > count-ssh.txt; cat count-ssh.txt
+          grep -q "^ssh: $want" count-ssh.txt
+      - name: a hosted program lists a directory
+        # cancho docs/bare-system.md, step 4. `names` takes an `Fs` and nothing of the kernel: `dir_list`, `dir_next`
+        # and `dir_stat` are answered by src/ksys.cho. Four files of known lengths and times are put on two volumes by
+        # mtools (`-m` keeps a file's time; FAT has no zone, so everything here is UTC), and each line `names` writes
+        # is held against what Python says of the file that was copied. Also on the Pi 3's SD card and over SSH.
+        run: |
+          export TZ=UTC
+          mkdir lst
+          printf 'hello\n' > lst/NOTE.TXT; head -c 5000 /dev/urandom > lst/FIVE.BIN; : > lst/EMPTY
+          printf x > "lst/a rather long name here.text"
+          touch -d '2023-11-14 22:13:20' lst/NOTE.TXT; touch -d '2024-02-29 12:00:58' lst/FIVE.BIN
+          touch -d '1999-12-31 23:59:58' "lst/a rather long name here.text"; touch -d '2026-11-27 01:02:04' lst/EMPTY
+          python3 -c 'import os; [print(os.stat("lst/"+f).st_size, int(os.stat("lst/"+f).st_mtime), f) for f in sorted(os.listdir("lst"))]' > names-want.txt; cat names-want.txt
+          test "$(wc -l < names-want.txt)" = 4
+          for img in fat32 fat16; do
+            cp $img.img n-$img.img
+            mmd -i n-$img.img ::SUB
+            mcopy -m -i n-$img.img lst/NOTE.TXT lst/FIVE.BIN lst/EMPTY "lst/a rather long name here.text" ::SUB/
+            MACHINE=virt DISK=n-$img.img ./test.sh 'names SUB' 'names /SUB/' names 'names nothere' 'names ../SUB' 'echo still here' > names-$img.txt; cat names-$img.txt
+            while IFS= read -r line; do test "$(grep -c "^$line" names-$img.txt)" = 2; done < names-want.txt
+            test "$(grep -c "^4 names" names-$img.txt)" = 2
+            grep -q "^0 [0-9]* SUB/" names-$img.txt
+            grep -q "^no such directory" names-$img.txt
+            grep -q "^not a path" names-$img.txt
+            grep -q "^still here" names-$img.txt
+          done
+          SD=n-fat32.img ./test.sh 'names SUB' > names-sd.txt; cat names-sd.txt
+          while IFS= read -r line; do grep -q "^$line" names-sd.txt; done < names-want.txt
+          MACHINE=virt DISK=n-fat16.img SSHKEY=/tmp/sshkey SSHCMD='names SUB' ./test.sh 'net up' 'net ssh on' > names-ssh.txt; cat names-ssh.txt
+          while IFS= read -r line; do grep -q "^ssh: $line" names-ssh.txt; done < names-want.txt
+          grep -q "^ssh: 4 names" names-ssh.txt
+      - name: the tools, inside the kernel and on this machine
+        # docs/tools.md. cancho-tools' hash, peek, seek and list are built into the image as they are, and built for
+        # this machine by the same compiler. The same six commands are run in both on the same files (the volumes of
+        # the step before, the directory they were copied from), and every line of the answers must be the same:
+        # hashes, matches, names, lengths and, with the zone UTC, times. Then over SSH, and many times in one boot.
+        run: |
+          export TZ=UTC
+          for t in hash peek seek list; do
+            (cd /tmp/cancho-tools && /tmp/cancho-out/cancho build contract/*.cho tools/$t/$t.cho generated/$t/built.cho --std -o /tmp/tool-$t)
+          done
+          rm -rf host && mkdir -p host/SUB && cp -p lst/* host/SUB/ && cp -p hello.txt host/hello.txt
+          (cd host && { /tmp/tool-hash SUB/FIVE.BIN SUB/NOTE.TXT SUB/EMPTY hello.txt nothere; /tmp/tool-peek SUB/NOTE.TXT; /tmp/tool-seek hello SUB/NOTE.TXT SUB/FIVE.BIN hello.txt; /tmp/tool-seek hello SUB; /tmp/tool-list --long SUB; /tmp/tool-hash ../x; } > ../tools-want.txt 2>&1 || true)
+          cat tools-want.txt
+          test "$(wc -l < tools-want.txt)" -ge 20
+          for img in fat32 fat16; do
+            MACHINE=virt DISK=n-$img.img ./test.sh 'hash SUB/FIVE.BIN SUB/NOTE.TXT SUB/EMPTY hello.txt nothere' 'peek SUB/NOTE.TXT' 'seek hello SUB/NOTE.TXT SUB/FIVE.BIN hello.txt' 'seek hello SUB' 'list --long SUB' 'hash ../x' 'echo still here' > tools-$img.raw
+            tr -d '\r' < tools-$img.raw | grep '^{' > tools-$img.txt; cat tools-$img.txt
+            diff tools-want.txt tools-$img.txt
+            grep -q "^still here" tools-$img.raw
+          done
+          want=$(/tmp/tool-hash big.bin | head -1 | sed 's/big.bin/BIG.BIN/')
+          test "$(echo "$want" | grep -c "$(sha256sum big.bin | cut -d' ' -f1)")" = 1
+          MACHINE=virt DISK=fat32.img SSHKEY=/tmp/sshkey SSHCMD='hash BIG.BIN' ./test.sh 'net up' 'net ssh on' > tools-ssh.txt; cat tools-ssh.txt
+          grep -qF "ssh: $want" tools-ssh.txt
+          set -- ; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do set -- "$@" 'hash hello.txt' 'list --long SUB'; done
+          MACHINE=virt DISK=n-fat16.img ./test.sh "$@" 'echo still here' > tools-many.txt
+          test "$(grep -c '"command":"hash","schema":"hash.v1","complete":true' tools-many.txt)" = 20
+          test "$(grep -c '"command":"list","schema":"list.v1","complete":true' tools-many.txt)" = 20
+          grep -q "^still here" tools-many.txt
       - name: the heap
         # cancho docs/freestanding.md, section 8: a JSON object made on the heap and printed, growing buffers read
         # back, and a block made and given back so many times that it must have been used again.

@@ -77,7 +77,7 @@ Rules of the road
   keep "measured in QEMU" on everything that was not seen on the board.
 - The Pi 5 (docs/pi5.md) is the one board whose code no test runs: QEMU has none. Do not describe it as
   working, and do not add a Pi 5 driver (RP1, the RNG200, USB) before the console has been seen on a real board.
-- Files, none near 2,000 lines (network.cho, at 1,560, is the one to watch): `src/kernel.cho` (boot, memory, shell, servo and arm), `src/base.cho`
+- Files, none near 2,000 lines (network.cho, at 1,560, is the one to watch): `src/kernel.cho` (boot, memory, shell, servo and arm; 1,650), `src/base.cho`
   (console output, clock, bus bytes), `src/network.cho` (links, generator, session, network commands). A
   new network command goes in `network.net_command`, never in the shell's loop.
 - The kernel's address, mask, gateway and name server are k[4154..4157] (docs/addresses.md); nothing may
@@ -101,6 +101,23 @@ Rules of the road
   `name` buffer and the number of pieces in o[9]; `disk.named_at` writes the pieces and the entry into ONE sector.
   A sector passed over while looking for a row must get `fat.close_end`, or the directory ends before the new
   name (macOS's checker found that). A name is taken away with `disk.unname`, pieces first.
+- A lent system (cancho docs/bare-system.md): `hosted` in kernel.cho is the ONE `system ksys(con, vio, dma, k, line, h) in { }`
+  block of the image (the compiler takes one, and no `return` inside it); `which` picks the program, and the programs are in
+  `src/programs.cho`, which imports nothing of the kernel: a new one goes there. `src/ksys.cho` answers a
+  hosted program's streams, arguments and files; its functions' first parameters are what is lent, in that order. Its files are
+  the disk's, READ ONLY: `step` and `open` refuse every way of opening that writes (-30), and nothing in ksys may write the disk
+  until it goes through `files` and the record as the shell's commands do. `HOSTKEY.BIN` is refused there too (`files.secret`).
+  A listing (`list`, `next`) keeps only how many names it has given and walks the directory again each time; names that begin
+  with a dot are not given, as `named` opens none. `stat` answers one thing a call (kind, length, time): `fat.changed` reads
+  FAT's date and time as UTC, and its vectors are Python's `calendar.timegm`.
+  A trap in a hosted program is a trap of the kernel: one that takes a path from a person refuses `..` itself (`count` does),
+  because the language traps on it. The kernel's rows carry `io_write`, `args`, `fs_read("")`, `dir_read`, `file_read` up to
+  `main` until the compiler discharges them, and `docs/authority.txt` shows that.
+- The tools (docs/tools.md): cancho-tools' `hash`, `peek`, `seek` and `list` are built in as they are, from `../cancho-tools`
+  (or `TOOLS=`), pinned by `TOOLS_REF` in the workflow: change a tool there, never here. build.sh turns each into a module in
+  `build/tools/` (text only: a `module` line, `run` made public, `main` left out); `program` in kernel.cho says which word runs
+  which. Only tools that read are built in, and a new one is believed when its answers are the same bytes as the same tool's
+  on another machine (the CI step does that). authority.sh needs build.sh to have run.
 - BOOT.TXT (docs/boot.md): `src/boot.cho` (pure) holds the list of lines the kernel may type to itself at its
   start. Adding a command to that list is a decision: nothing that changes the disk, loads a kernel or restarts.
   The file is written at the console only (`files.boot_name`, `files.put_name`). A key in the first second stops it.
