@@ -95,6 +95,9 @@
   form. One program lists a directory, and it is the one held to grants.
 - The date (2026-11-27, docs/clock.md): `net time <address>` asks a machine on the network; files the kernel writes
   are dated and the record has a line for it. Believed, not proved.
+- What a tool is comes from the compiler (2026-11-27, 0.0.49, epic #60 task #49, the kernel's half): who may run a
+  tool, and whether it is lent anything to write with, follow from its effect row, read at build time. `tally` and
+  `jsonq` built in by two words in a list.
 - A grant that ends on a day (2026-11-27, 0.0.47): `until:YYYY-MM-DD` on an agent's line; the date does not go
   back before the record's last line; a board not told the date takes such a grant to have ended.
 - Long names (2026-11-26, docs/storage.md): read, written, replaced and removed; the pieces made here are the

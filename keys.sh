@@ -49,6 +49,7 @@ say 'net ssh on' 4
     sent "$READER" 'written by a reader' 'write --create --stdin R.TXT'
     as "$READER" 'replace --old owner --new reader O.TXT'
     as "$READER" 'ping 10.0.0.1'
+    as "$READER" 'tally O.TXT'
     as "$READER" 'cat HOSTKEY.BIN'
     as "$OWNER" 'copy HOSTKEY.BIN STOLEN.BIN'
     as "$OWNER" 'cat O.TXT'
@@ -85,6 +86,8 @@ grep -q "^    20[[:space:]].*[[:space:]]O.TXT$" build/keys-ssh.out || ok=1
 grep -q "^    peek: io.permission-denied" build/keys-ssh.out || ok=1
 [ "$(grep -c "^    1[[:space:]]written by an owner" build/keys-ssh.out)" = 2 ] || ok=1
 grep -q "Permission denied" build/keys-ssh.out || ok=1
+# a tool the kernel has no line for (docs/tools.md): the compiler says `tally` only reads, so a reader may run it
+grep -q '^    {"ok":true,"command":"tally"' build/keys-ssh.out || ok=1
 # and neither refused write left a file behind
 cat build/keys-ls.out
 grep -q "[[:space:]]O.TXT$" build/keys-ls.out || ok=1

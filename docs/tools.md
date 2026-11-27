@@ -1,9 +1,9 @@
 # The tools, inside the kernel
 
 cancho-tools (https://github.com/alpibrusl/cancho-tools) are the programs an agent reads and changes files with on
-Linux and macOS: each answers in JSON, says what it may touch, and is small. Seven of them are built into this kernel
+Linux and macOS: each answers in JSON, says what it may touch, and is small. Nine of them are built into this kernel
 as they are written: `hash`, `peek`, `seek` and `list`, which only read, `write` and `replace`, which change a file,
-and `move`, which changes a name. `write` is the kernel's one way of writing a file's contents: the shell had a
+`move`, which changes a name, and `tally` and `jsonq`, which read a file or their input. `write` is the kernel's one way of writing a file's contents: the shell had a
 `write` and an `append` of its own, which wrote over whatever was there, and they are gone. Not a
 line of them was changed for it and none of them knows it is not on a system.
 
@@ -16,16 +16,42 @@ docs/bare-system.md), and inside it a tool's `write_bytes` is the shell's output
 was typed, and its `open_dir`, `dir_open_read`, `file_read`, `dir_list`, `dir_stat` the FAT volume, through
 `src/ksys.cho`.
 
-`build.sh` takes the tools from a checkout beside this one (`../cancho-tools`, or `TOOLS=`), and for each of the seven:
+`build.sh` takes the tools from a checkout beside this one (`../cancho-tools`, or `TOOLS=`), and for each of them:
 
 - puts `module tool_<name>;` after the first line and makes `run` public;
 - leaves out `main`, the last function of the file: the kernel has its own;
 - gives the generated module that says how the tool was built (`toolbox.built`, one for each tool, all of one name)
-  the tool's name, so that seven can be in one image.
+  the tool's name, so that all of them can be in one image.
 
 That is text moved by `awk` and `sed`, into `build/tools/`; the build stops if a tool is not written the way this
 expects. What the tools share (`contract/`) is built in as it is. `TOOLS_REF` in the workflow is the commit they are
 taken at.
+
+## What each tool is, from the compiler
+
+Nothing about a tool is written in the kernel (0.0.49). `build.sh` has one list of names. For each it asks the
+compiler what the tool, as cancho-tools ships it, can perform (`cancho authority --output json`), and writes
+`build/tools/rows.cho` from the answers:
+
+- `name(i)`: what is typed to run it;
+- `writes(i)`: its row has `dir_write`, `file_write` or `fs_write`;
+- `reads_input(i)`: its row has `io_read`;
+- `run(i, heap, args, fs, io)`: the one function that calls each tool's `run`, whose own row is what the tools
+  perform between them, label for label. The compiler checks that row is exact: a tool that came to perform
+  something more would stop the kernel building until the list says so.
+
+The kernel reads only that. A key that may only read may run a tool whose row has nothing that writes, and no other;
+the shell collects input for one that reads it; `help` lists the names. And a program whose row has nothing that
+writes is lent nothing to write with: `ksys` refuses it the draft, the lock, the rename and the removal whoever runs
+it (`k[4278]`). That is a second lock on a door the compiler has already shut: such a tool cannot contain a call that
+writes and still have that row.
+
+So `tally` and `jsonq` were added by adding two words to the list. `git diff` of that change has no line of
+`src/kernel.cho`.
+
+What it is not: the compiler's word on what a tool performs is about the tool's source as built here. The kernel's own
+row still names every effect the tools have between them (`cancho authority` of the kernel lists `dir_write` and
+the rest): the block that lends the system does not discharge them yet. That is the compiler's half of this task.
 
 ## The shell's short names
 
@@ -119,8 +145,7 @@ are the shell's output), and already had `heap`, `args`, `io_write` and the thre
   take a trap inside the block that lends the system to the block's end (cancho docs/bare-system.md).
 - **The status a tool ends with is dropped.** Over SSH the session ends with 0 whatever the tool answered; the JSON
   says `"ok":false`.
-- **`tally` and `jsonq`**, which read their input, are not built in yet, though a program now has one; nor is
-  `archive`, which makes directories.
+- **`archive`**, which makes directories, is not built in.
 - **What a tool prints is cut at 4,000 bytes over SSH** (the shell's queue). `write` and `replace` print the lines
   that changed: `--max-diff-lines 0` keeps the answer short.
 - **`disk.extend`**, which added to a file in place for the shell's `append`, has no caller now.
@@ -189,3 +214,9 @@ then answers `about` and `hash`; `fail trap` in the first seconds leaves it halt
 card, over SSH: `fail trap` and `fail memory` each reset the board, and it answered again by itself, through
 `BOOT.TXT`, within about forty seconds; with `watch on` typed at its console, `fail spin` was ended by the watchdog
 and the board answered again as soon after. The record followed afterwards, 44 lines.
+
+What each tool is, from the compiler (2026-11-27, 0.0.49), in QEMU as `virt`: the table made at build time says
+`replace`, `move` and `write` write and `write`, `tally` and `jsonq` read their input, which is what had been
+written by hand for the first seven. `tally` of a file and `jsonq` of a typed document answer; a key that may only
+read runs `tally` and is refused `write` (`./keys.sh`); an agent's key is held to its grants as before
+(`./agents.sh`). The image is 844,848 bytes with the nine tools.

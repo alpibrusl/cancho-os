@@ -113,6 +113,10 @@ Rules of the road
   A trap in a hosted program is a trap of the kernel: one that takes a path from a person refuses `..` itself (the tools do),
   because the language traps on it. The kernel's rows carry `io_write`, `args`, `fs_read("")`, `dir_read`, `file_read` up to
   `main` until the compiler discharges them, and `docs/authority.txt` shows that.
+- What a tool is comes from the compiler, not from the kernel (docs/tools.md): `build.sh` has the list of names and
+  writes `build/tools/rows.cho` from `cancho authority` of each (name, whether it writes, whether it reads input, and
+  the one `run` whose row is theirs together). `program`, `changes`, `takes_input` and `help` in kernel.cho read that
+  table: do not add a tool's name, or a list of which tools write, to kernel.cho. A tool is added in build.sh's list.
 - The tools (docs/tools.md): cancho-tools' `hash`, `peek`, `seek`, `list`, `write`, `replace` and `move` are built in as they are, from `../cancho-tools`
   (or `TOOLS=`), pinned by `TOOLS_REF` in the workflow: change a tool there, never here. build.sh turns each into a module in
   `build/tools/` (text only: a `module` line, `run` made public, `main` left out); `program` in kernel.cho says which word runs
