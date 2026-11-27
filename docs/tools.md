@@ -143,8 +143,9 @@ are the shell's output), and already had `heap`, `args`, `io_write` and the thre
 - **What is still wanted**: a trap that ends the program and not the kernel, so that the session goes on and the
   one who ran it is told. That needs the program's memory to be its own, thrown away whole, and the compiler to
   take a trap inside the block that lends the system to the block's end (cancho docs/bare-system.md).
-- **The status a tool ends with is dropped.** Over SSH the session ends with 0 whatever the tool answered; the JSON
-  says `"ok":false`.
+- **The status a tool ends with is the session's** (0.0.50): `ssh host 'hash nothere'; echo $?` says 3, as the same
+  tool does on Linux and macOS; 126 for a line the key may not run, 127 for a command there is none of. At the console
+  nothing shows it.
 - **`archive`**, which makes directories, is not built in.
 - **What a tool prints is cut at 4,000 bytes over SSH** (the shell's queue). `write` and `replace` print the lines
   that changed: `--max-diff-lines 0` keeps the answer short.
@@ -220,3 +221,7 @@ What each tool is, from the compiler (2026-11-27, 0.0.49), in QEMU as `virt`: th
 written by hand for the first seven. `tally` of a file and `jsonq` of a typed document answer; a key that may only
 read runs `tally` and is refused `write` (`./keys.sh`); an agent's key is held to its grants as before
 (`./agents.sh`). The image is 844,848 bytes with the nine tools.
+
+What a tool ends with (2026-11-27, 0.0.50), over SSH with OpenSSH's client in QEMU: `hash` of a file ends with 0, of
+one that is not there with 3, of a path with `..` with 2, and a dry run of `replace` with 9: the four the same tools
+give on the Mac. A command there is none of ends with 127.

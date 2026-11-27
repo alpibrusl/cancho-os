@@ -418,6 +418,16 @@ jobs:
             diff tools-want.txt tools-$img.txt
             grep -q "^still here" tools-$img.raw
           done
+          # what a tool ends with is what the SSH session ends with: the status the same tool gives on this machine,
+          # for a file hashed, one that is not there and a path refused; 127 for a command there is none of
+          for c in 'hash hello.txt' 'hash nothere' 'hash ../x'; do
+            set -- $c; t=$1; shift
+            (cd host && "/tmp/tool-$t" "$@" > /dev/null 2>&1; echo "ssh: exit status $?" > ../status-want.txt) || true
+            cp n-fat16.img st.img
+            MACHINE=virt DISKRW=st.img SSHKEY=/tmp/sshkey SSHCMD="$c" ./test.sh 'net up' 'net ssh on' | tr -d '\r' | grep '^ssh: exit status' > status-got.txt; cat status-want.txt status-got.txt
+            diff status-want.txt status-got.txt
+          done
+          MACHINE=virt SSHKEY=/tmp/sshkey SSHCMD=nosuchcommand ./test.sh 'net up' 'net ssh on' | tr -d '\r' | grep -q '^ssh: exit status 127'
           # two tools the kernel has no line for (docs/tools.md, "What each tool is"): they are in build.sh's list, and
           # what the compiler says they perform is all the kernel knows of them. A file counted, and a document read
           # from what is typed, answer as on this machine; `help` lists them, with a mark on the ones that write.
@@ -494,6 +504,12 @@ jobs:
           grep -q "^6[[:space:]]6 [0-9]* key:[0-9a-f]* owner write TEXT.TXT " replace-ssh.txt
           fsck.fat -n tw-fat16.img
           mcopy -i tw-fat16.img ::TEXT.TXT back.out && cmp back.out wsrc/TEXT.TXT
+          # and a dry run ends as it does on this machine (9: nothing was changed, and this is what would be)
+          (cd wsrc && /tmp/tool-replace --old hello --new x --dry-run NOTE.TXT > /dev/null 2>&1; echo "ssh: exit status $?" > ../dry-want.txt) || true
+          mkfs.fat -F 16 -C dry.img 16384 > /dev/null; mcopy -i dry.img wsrc/NOTE.TXT ::
+          MACHINE=virt DISKRW=dry.img SSHKEY=/tmp/sshkey SSHCMD='replace --old hello --new x --dry-run NOTE.TXT' ./test.sh 'net up' 'net ssh on' | tr -d '\r' | grep '^ssh: exit status' > dry-got.txt; cat dry-want.txt dry-got.txt
+          diff dry-want.txt dry-got.txt
+          grep -q "exit status 9" dry-got.txt
       - name: a tool renames a file
         # docs/tools.md. cancho-tools' move, built in as it is: a name is changed to one that is not taken, a
         # directory's too, and never over another. The same commands by the same tool on this machine must answer
