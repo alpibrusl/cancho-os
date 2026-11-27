@@ -1,0 +1,142 @@
+edition 14;
+
+module programs;
+
+// programs.cho -- the programs built into the image that were written for a system, not for this kernel: each
+// takes an `Io`, an `Args` or an `Fs` and has no word of the kernel in it (no `Mmio`, no `k`, no import of the
+// kernel's modules). `hosted` in kernel.cho runs them inside the one block that lends them `ksys`
+// (cancho docs/bare-system.md). A new one goes here, and gets a number in `hosted`.
+
+// `tell <words>`: a function written as any program for a system is, with an `Io` and an `Args` and no word of
+// this kernel in it. What it writes and the arguments it reads are answered by `ksys`, which the shell lends the
+// console, the kernel's state and the line (cancho docs/bare-system.md). It is the first thing in the image
+// that reaches the kernel only by asking it.
+pub fn tell[&i, &g](io: &!i Io, args: &g Args) -> [io_write, args] int {
+    var n = 1;
+    while n < arg_count(args) {
+        write_bytes(io, "argument ");
+        putchar(io, '0' + n % 10);
+        write_bytes(io, ": ");
+        write_bytes(io, arg(args, n));
+        putchar(io, 10);
+        n = n + 1;
+    }
+    write_bytes(io, "that was a program written for a system, answered by the kernel\n");
+    flush_out(io);
+    return n - 1;
+}
+
+// `count <path>`: another, with an `Fs`: the bytes of a file, counted and added up. A name alone is opened under the
+// top directory, as cancho-tools open theirs (`open_dir`, then `dir_open_read`); a path with a `/` in it by
+// `open_read`. Each `file_read` is answered by `ksys` from the disk.
+fn count_file[&i, &f](io: &!i Io, file: &!f File) -> [io_write, file_read] int {
+    var bytes = 0;
+    var total = 0;
+    var failed = 0;
+    region q {
+        let room = alloc_slice[q](700, byte_of(0));
+        var more = true;
+        while more {
+            match file_read(file, room) {
+                Read::Got(n) => {
+                    var j = 0;
+                    while j < n {
+                        total = total + int_of(room[j]);
+                        j = j + 1;
+                    }
+                    bytes = bytes + n;
+                }
+                Read::End => {
+                    more = false;
+                }
+                Read::Failed(e) => {
+                    more = false;
+                    failed = e;
+                }
+            }
+        }
+    }
+    if failed != 0 {
+        write_bytes(io, "the file could not be read\n");
+        return 1;
+    }
+    number_out(io, bytes);
+    write_bytes(io, " bytes, which add up to ");
+    number_out(io, total);
+    putchar(io, 10);
+    return 0;
+}
+
+fn number_out[&i](io: &!i Io, v: int) -> [io_write] int {
+    var div = 1;
+    while v / div >= 10 {
+        div = div * 10;
+    }
+    while div > 0 {
+        putchar(io, '0' + v / div % 10);
+        div = div / 10;
+    }
+    return 0;
+}
+
+pub fn count[&i, &g, &f](io: &!i Io, args: &g Args, fs: &f Fs("")) -> [io_write, args, fs_read(""), dir_read, file_read] int {
+    if arg_count(args) != 2 {
+        write_bytes(io, "count <path>\n");
+        flush_out(io);
+        return 1;
+    }
+    let path = arg(args, 1);
+    var slash = false;
+    var dots = false;
+    var j = 0;
+    while j < len(path) {
+        slash = slash || int_of(path[j]) == '/';
+        dots = dots || j > 0 && int_of(path[j]) == '.' && int_of(path[j - 1]) == '.';
+        j = j + 1;
+    }
+    var status = 1;
+    if dots {
+        // the language holds a path to its capability and traps on `..`, and a trap here stops the kernel:
+        // a program that takes a path from a person looks first, as cancho-tools do
+        write_bytes(io, "not a path: no `..` in it\n");
+    } else if slash {
+        match open_read(fs, path) {
+            Opened::Ok(f) => {
+                var file = f;
+                borrow mut file as &!h in {
+                    status = count_file(io, h);
+                }
+                file_close(file);
+            }
+            Opened::Failed(e) => {
+                write_bytes(io, "no such file\n");
+            }
+        }
+    } else {
+        match open_dir(fs, "/") {
+            DirOpened::Ok(d) => {
+                var top = d;
+                borrow top as &t in {
+                    match dir_open_read(t, path) {
+                        Opened::Ok(f) => {
+                            var file = f;
+                            borrow mut file as &!h in {
+                                status = count_file(io, h);
+                            }
+                            file_close(file);
+                        }
+                        Opened::Failed(e) => {
+                            write_bytes(io, "no such file\n");
+                        }
+                    }
+                }
+                dir_close(top);
+            }
+            DirOpened::Failed(e) => {
+                write_bytes(io, "there is no disk\n");
+            }
+        }
+    }
+    flush_out(io);
+    return status;
+}

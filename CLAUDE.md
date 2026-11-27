@@ -77,7 +77,7 @@ Rules of the road
   keep "measured in QEMU" on everything that was not seen on the board.
 - The Pi 5 (docs/pi5.md) is the one board whose code no test runs: QEMU has none. Do not describe it as
   working, and do not add a Pi 5 driver (RP1, the RNG200, USB) before the console has been seen on a real board.
-- Files, none near 2,000 lines (network.cho, at 1,560, is the one to watch): `src/kernel.cho` (boot, memory, shell, servo and arm), `src/base.cho`
+- Files, none near 2,000 lines (network.cho, at 1,560, is the one to watch): `src/kernel.cho` (boot, memory, shell, servo and arm; 1,650), `src/base.cho`
   (console output, clock, bus bytes), `src/network.cho` (links, generator, session, network commands). A
   new network command goes in `network.net_command`, never in the shell's loop.
 - The kernel's address, mask, gateway and name server are k[4154..4157] (docs/addresses.md); nothing may
@@ -102,7 +102,8 @@ Rules of the road
   A sector passed over while looking for a row must get `fat.close_end`, or the directory ends before the new
   name (macOS's checker found that). A name is taken away with `disk.unname`, pieces first.
 - A lent system (cancho docs/bare-system.md): `hosted` in kernel.cho is the ONE `system ksys(con, vio, dma, k, line, h) in { }`
-  block of the image (the compiler takes one, and no `return` inside it); `which` picks the program. `src/ksys.cho` answers a
+  block of the image (the compiler takes one, and no `return` inside it); `which` picks the program, and the programs are in
+  `src/programs.cho`, which imports nothing of the kernel: a new one goes there. `src/ksys.cho` answers a
   hosted program's streams, arguments and files; its functions' first parameters are what is lent, in that order. Its files are
   the disk's, READ ONLY: `step` and `open` refuse every way of opening that writes (-30), and nothing in ksys may write the disk
   until it goes through `files` and the record as the shell's commands do. `HOSTKEY.BIN` is refused there too (`files.secret`).
