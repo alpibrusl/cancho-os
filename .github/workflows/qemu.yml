@@ -353,40 +353,37 @@ jobs:
           grep -q "^still here" tell.txt
           MACHINE=virt SSHKEY=/tmp/sshkey SSHCMD='tell over ssh' ./test.sh 'net up' 'net ssh on' > tell-ssh.txt; cat tell-ssh.txt
           grep -q "^ssh: argument 2: ssh" tell-ssh.txt
-      - name: a hosted program reads the disk
-        # cancho docs/bare-system.md, step 3. `count` takes an `Fs` and nothing of the kernel: it opens a file and adds
-        # its bytes up, and every open and read is answered by src/ksys.cho from the FAT volume. What it counts is
-        # held against what Python counts in the same file, on three volumes Linux's tools made, in a directory
-        # under a long name, on the Pi 3's SD card and over SSH.
+      - name: a program reads the disk
+        # cancho docs/bare-system.md, step 3. cancho-tools' `hash` takes an `Fs` and nothing of the kernel: every open
+        # and read is answered by src/ksys.cho from the FAT volume. The SHA-256 it gives a file of 300,000 bytes is held
+        # against what this machine's sha256sum gives it, on three volumes Linux's tools made, in a directory under a
+        # long name and on the Pi 3's SD card; and what a program may not open is refused it.
         run: |
-          want=$(python3 -c 'd=open("big.bin","rb").read(); print("%d bytes, which add up to %d" % (len(d), sum(d)))')
-          small=$(python3 -c 'd=open("hello.txt","rb").read(); print("%d bytes, which add up to %d" % (len(d), sum(d)))')
+          want="\"hex\":\"$(sha256sum big.bin | cut -d' ' -f1)\",\"bytes\":300000"
+          small="\"hex\":\"$(sha256sum hello.txt | cut -d' ' -f1)\""
           for img in fat32 fat16 part; do
-            MACHINE=virt DISK=$img.img ./test.sh 'count BIG.BIN' 'count /hello.txt' 'count nothere' 'count ../BIG.BIN' count 'echo still here' > count-$img.txt; cat count-$img.txt
-            test "$(grep -c "^$want" count-$img.txt)" = 1
-            test "$(grep -c "^$small" count-$img.txt)" = 1
-            grep -q "^no such file" count-$img.txt
-            grep -q "^not a path" count-$img.txt
-            grep -q "^count <path>" count-$img.txt
-            grep -q "^still here" count-$img.txt
+            MACHINE=virt DISK=$img.img ./test.sh 'hash BIG.BIN' 'hash /hello.txt' 'hash nothere' 'hash ../BIG.BIN' hash 'echo still here' > hash-$img.txt; cat hash-$img.txt
+            test "$(grep -c "$want" hash-$img.txt)" = 1
+            test "$(grep -c "$small" hash-$img.txt)" = 1
+            grep -q '"rule":"io.not-found"' hash-$img.txt
+            grep -q '"rule":"path.dotdot"' hash-$img.txt
+            grep -q '"rule":"args.missing-operand"' hash-$img.txt
+            grep -q "^still here" hash-$img.txt
           done
           cp fat32.img c.img
           mmd -i c.img ::deep ::deep/er
           mcopy -i c.img big.bin ::deep/er/a-long-name-for-a-big-file.bin
           printf 'not to be read' > HOSTKEY.BIN; mcopy -i c.img HOSTKEY.BIN ::
-          MACHINE=virt DISK=c.img ./test.sh 'count deep/er/a-long-name-for-a-big-file.bin' 'count deep' 'count deep/er/' 'count HOSTKEY.BIN' 'count /HOSTKEY.BIN' > count-deep.txt; cat count-deep.txt
-          test "$(grep -c "^$want" count-deep.txt)" = 1
-          test "$(grep -c "^no such file" count-deep.txt)" = 4
-          test "$(grep -c "bytes, which add up to" count-deep.txt)" = 1
-          SD=c.img ./test.sh 'count BIG.BIN' > count-sd.txt; cat count-sd.txt
-          grep -q "^$want" count-sd.txt
-          MACHINE=virt DISK=fat32.img SSHKEY=/tmp/sshkey SSHCMD='count BIG.BIN' ./test.sh 'net up' 'net ssh on' > count-ssh.txt; cat count-ssh.txt
-          grep -q "^ssh: $want" count-ssh.txt
-      - name: a hosted program lists a directory
-        # cancho docs/bare-system.md, step 4. `names` takes an `Fs` and nothing of the kernel: `dir_list`, `dir_next`
-        # and `dir_stat` are answered by src/ksys.cho. Four files of known lengths and times are put on two volumes by
-        # mtools (`-m` keeps a file's time; FAT has no zone, so everything here is UTC), and each line `names` writes
-        # is held against what Python says of the file that was copied. Also on the Pi 3's SD card and over SSH.
+          MACHINE=virt DISK=c.img ./test.sh 'hash deep/er/a-long-name-for-a-big-file.bin' 'hash deep' 'hash deep/er/' 'hash HOSTKEY.BIN' 'hash /HOSTKEY.BIN' > hash-deep.txt; cat hash-deep.txt
+          test "$(grep -c "$want" hash-deep.txt)" = 1
+          test "$(grep -c '^{"type":"error".*"rule":"io.is-a-directory"' hash-deep.txt)" = 2
+          test "$(grep -c '^{"type":"error".*"rule":"io.permission-denied"' hash-deep.txt)" = 2
+          test "$(grep -c '"type":"hash"' hash-deep.txt)" = 1
+          SD=c.img ./test.sh 'hash BIG.BIN' > hash-sd.txt; cat hash-sd.txt
+          grep -q "$want" hash-sd.txt
+      - name: volumes with files of known lengths and times
+        # For the step after this one. Four files of known lengths and times are put on two volumes by mtools (`-m`
+        # keeps a file's time; FAT has no zone, so everything here is UTC), in a directory.
         run: |
           export TZ=UTC
           mkdir lst
@@ -394,25 +391,11 @@ jobs:
           printf x > "lst/a rather long name here.text"
           touch -d '2023-11-14 22:13:20' lst/NOTE.TXT; touch -d '2024-02-29 12:00:58' lst/FIVE.BIN
           touch -d '1999-12-31 23:59:58' "lst/a rather long name here.text"; touch -d '2026-11-27 01:02:04' lst/EMPTY
-          python3 -c 'import os; [print(os.stat("lst/"+f).st_size, int(os.stat("lst/"+f).st_mtime), f) for f in sorted(os.listdir("lst"))]' > names-want.txt; cat names-want.txt
-          test "$(wc -l < names-want.txt)" = 4
           for img in fat32 fat16; do
             cp $img.img n-$img.img
             mmd -i n-$img.img ::SUB
             mcopy -m -i n-$img.img lst/NOTE.TXT lst/FIVE.BIN lst/EMPTY "lst/a rather long name here.text" ::SUB/
-            MACHINE=virt DISK=n-$img.img ./test.sh 'names SUB' 'names /SUB/' names 'names nothere' 'names ../SUB' 'echo still here' > names-$img.txt; cat names-$img.txt
-            while IFS= read -r line; do test "$(grep -c "^$line" names-$img.txt)" = 2; done < names-want.txt
-            test "$(grep -c "^4 names" names-$img.txt)" = 2
-            grep -q "^0 [0-9]* SUB/" names-$img.txt
-            grep -q "^no such directory" names-$img.txt
-            grep -q "^not a path" names-$img.txt
-            grep -q "^still here" names-$img.txt
           done
-          SD=n-fat32.img ./test.sh 'names SUB' > names-sd.txt; cat names-sd.txt
-          while IFS= read -r line; do grep -q "^$line" names-sd.txt; done < names-want.txt
-          MACHINE=virt DISK=n-fat16.img SSHKEY=/tmp/sshkey SSHCMD='names SUB' ./test.sh 'net up' 'net ssh on' > names-ssh.txt; cat names-ssh.txt
-          while IFS= read -r line; do grep -q "^ssh: $line" names-ssh.txt; done < names-want.txt
-          grep -q "^ssh: 4 names" names-ssh.txt
       - name: the tools, inside the kernel and on this machine
         # docs/tools.md. cancho-tools' hash, peek, seek and list are built into the image as they are, and built for
         # this machine by the same compiler. The same six commands are run in both on the same files (the volumes of
@@ -433,6 +416,12 @@ jobs:
             diff tools-want.txt tools-$img.txt
             grep -q "^still here" tools-$img.raw
           done
+          # a listing with lengths and times, on the Pi 3's SD card and over SSH: the lines the same tool gives here
+          (cd host && /tmp/tool-list --long SUB) > list-want.txt
+          SD=n-fat32.img ./test.sh 'list --long SUB' | tr -d '\r' | grep '^{' > list-sd.txt; cat list-sd.txt
+          diff list-want.txt list-sd.txt
+          MACHINE=virt DISK=n-fat16.img SSHKEY=/tmp/sshkey SSHCMD='list --long SUB' ./test.sh 'net up' 'net ssh on' | tr -d '\r' | grep '^ssh: {' | sed 's/^ssh: //' > list-ssh.txt; cat list-ssh.txt
+          diff list-want.txt list-ssh.txt
           want=$(/tmp/tool-hash big.bin | head -1 | sed 's/big.bin/BIG.BIN/')
           test "$(echo "$want" | grep -c "$(sha256sum big.bin | cut -d' ' -f1)")" = 1
           MACHINE=virt DISK=fat32.img SSHKEY=/tmp/sshkey SSHCMD='hash BIG.BIN' ./test.sh 'net up' 'net ssh on' > tools-ssh.txt; cat tools-ssh.txt

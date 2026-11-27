@@ -110,7 +110,7 @@ Rules of the road
   A listing (`list`, `next`) keeps only how many names it has given and walks the directory again each time; names that begin
   with a dot are not given, as `named` opens none. `stat` answers one thing a call (kind, length, time): `fat.changed` reads
   FAT's date and time as UTC, and its vectors are Python's `calendar.timegm`.
-  A trap in a hosted program is a trap of the kernel: one that takes a path from a person refuses `..` itself (`count` does),
+  A trap in a hosted program is a trap of the kernel: one that takes a path from a person refuses `..` itself (the tools do),
   because the language traps on it. The kernel's rows carry `io_write`, `args`, `fs_read("")`, `dir_read`, `file_read` up to
   `main` until the compiler discharges them, and `docs/authority.txt` shows that.
 - The tools (docs/tools.md): cancho-tools' `hash`, `peek`, `seek`, `list`, `write`, `replace` and `move` are built in as they are, from `../cancho-tools`

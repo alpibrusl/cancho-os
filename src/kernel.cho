@@ -843,9 +843,9 @@ fn run[&f, &mc, &mu, &mt, &mx, &mz, &s, &r, &nv, &nd, &nn, &na, &nb, &nw, &nt, &
         return 0;
     }
     if same(line, n, "help") {
-        base.puts(con, k, "commands: help, about, echo <text>, uptime, ticks, mem, board, random, disk, ls, cat <name>, sum <name>, copy <from> <to>, remove <name>, mkdir <path>, ls <path>, versions, purge <number>, record, put <name> <bytes> <sha256> (over SSH), restart, heap, tell <words>, count <path>, names [path], hash <path>.., peek <path>, seek <text> <path>.., list [path], replace --old <text> --new <text> <path>, move <from> <to>, write (--create | --if-sha256 <hex>) --stdin <path> (then the text, and Ctrl-D), net [up|down|eth|dhcp], net ssh [on|off], lookup <name>, ping <address or name>, http <address or name> <port>, servo via <address> <port>|off, servo scan, servo pos, arm zero, arm pose, arm check <5 angles>, crash [null|write], load <bytes>\r\n");
+        base.puts(con, k, "commands: help, about, echo <text>, uptime, ticks, mem, board, random, disk, ls, cat <name>, sum <name>, copy <from> <to>, remove <name>, mkdir <path>, ls <path>, versions, purge <number>, record, put <name> <bytes> <sha256> (over SSH), restart, heap, tell <words>, hash <path>.., peek <path>, seek <text> <path>.., list [path], replace --old <text> --new <text> <path>, move <from> <to>, write (--create | --if-sha256 <hex>) --stdin <path> (then the text, and Ctrl-D), net [up|down|eth|dhcp], net ssh [on|off], lookup <name>, ping <address or name>, http <address or name> <port>, servo via <address> <port>|off, servo scan, servo pos, arm zero, arm pose, arm check <5 angles>, crash [null|write], load <bytes>\r\n");
     } else if same(line, n, "about") {
-        base.puts(con, k, "cancho-os 0.0.41: a kernel written in cancho (");
+        base.puts(con, k, "cancho-os 0.0.42: a kernel written in cancho (");
         if k[1] >= 3 {
             base.puts(con, k, "Raspberry Pi ");
             base.put_dec(con, k, k[1]);
@@ -948,18 +948,12 @@ fn load_keys[&mv, &md, &s, &x](vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..
     return k[4164];
 }
 
-// Which of the programs built into the image the line asks for (`hosted` runs it), or -1: 0 `tell`, 1 `count`,
-// 2 `names`, and cancho-tools' own: 3 `hash`, 4 `peek`, 5 `seek`, 6 `list`, which only read, and 7 `replace`, 8 `move` and 9 `write`, which write.
+// Which of the programs built into the image the line asks for (`hosted` runs it), or -1: 0 `tell`, the
+// kernel's own check of a lent system, and cancho-tools' (1 and 2 were two programs the tools replaced): 3 `hash`, 4 `peek`, 5 `seek`, 6 `list`, which only read, and 7 `replace`, 8 `move` and 9 `write`, which write.
 // `write` is the one that reads its input (`takes_input`).
 fn program[&r](line: &r [byte], n: int) -> [] int {
     if same(line, n, "tell") || n > 5 && same(line, 5, "tell ") {
         return 0;
-    }
-    if same(line, n, "count") || n > 6 && same(line, 6, "count ") {
-        return 1;
-    }
-    if same(line, n, "names") || n > 6 && same(line, 6, "names ") {
-        return 2;
     }
     if same(line, n, "hash") || n > 5 && same(line, 5, "hash ") {
         return 3;
@@ -1189,11 +1183,7 @@ fn hosted[&mc, &mv, &md, &mg, &s, &l, &hd, &i, &g, &f, &hp](con: &!mc Mmio("0x90
     // (and at the console its input has not ended)
     k[4271] = 0;
     system ksys(con, vio, dma, stage, k, line, h) in {
-        if which == 1 {
-            said = programs.count(io, args, fs);
-        } else if which == 2 {
-            said = programs.names(io, args, fs);
-        } else if which == 3 {
+        if which == 3 {
             said = tool_hash.run(heap, args, fs, io);
         } else if which == 4 {
             said = tool_peek.run(heap, args, fs, io);
