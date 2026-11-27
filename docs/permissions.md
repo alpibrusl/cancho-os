@@ -8,7 +8,7 @@
 
 > **Status: design, with three slices built**, in QEMU: adding a file and adding to one
 > ([`storage.md`](storage.md)); the host key kept, the keys file read, and two roles; and versions and
-> the record ("What is built" below, twice). Grants for agents and approval by a key are not built, and
+> the record; and an agent's key with grants ("What is built" below, three times). Approval by a key is not built, and
 > only the driver's own session ([`sdcard.md`](sdcard.md)) has run it on a real card. It was written before the kernel could write a single byte to a
 > disk, because it decides how writing must work.
 
@@ -189,6 +189,68 @@ What it does not do:
 - **Nothing is ever purged by itself**: a disk that is written over and over fills.
 - **No grants.** An owner's key may still do everything but purge; there are no keys for agents yet.
 
+## What is built (slice 5, first part): an agent's key and its grants
+
+A third kind of line in `KEYS.TXT`:
+
+```
+agent ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... read:DOCS write:WORK/OUT the builder
+```
+
+- **A grant is a right and a directory**: `read:<path>` or `write:<path>`, the directory and everything under it;
+  `/` is the whole disk. `write` is `read` too. The first word that is not one of those ends them, and the rest of
+  the line is for people. Four grants a key, a path of 62 bytes at most. A key with no `agent` line is granted
+  nothing, and one that is also an owner's is an owner's.
+- **An agent runs the tools and nothing else**: `hash`, `peek`, `seek`, `list`, `write`, `replace`, `move`, and
+  `help` and `about`. Every command of the shell's own is refused it, the ones that only read too (`ls`, `cat`):
+  they do not ask about grants, and the tools do.
+- **One place asks.** Everything a tool does with a file comes through `src/ksys.cho`, and each of its functions
+  asks `may` first: to pass into a directory, to list one, to read a file, to ask what a name is, to make a file, to
+  hold its lock, to rename. Reading needs a grant that covers the path; writing one of `write`. A directory above
+  what is granted may be passed through and seen to be a directory, and nothing in it listed. What is refused is
+  refused as a system refuses it (13), so a tool says `io.permission-denied`.
+- **The grants are read when they are used.** Before each line of an agent's session the kernel reads `KEYS.TXT`
+  again and takes that key's grants from it (`keys.grants_for`). A grant taken out of the file is gone at the next
+  command, with no session to end.
+- **Giving one is an owner's act, and is recorded as one.** `KEYS.TXT` is written by an owner's key or at the
+  console, with `write`; the record's line for that write says who. The record's lines for what the agent then
+  does say `key:` and its digits, and `agent`.
+- `src/keys.cho` reads the line and answers whether a path is covered, and is pure: `tests/keys_test.cho` holds it to
+  what is and is not covered (a name that only begins like a granted one, letters of either case, the top of the
+  disk), and no bytes of a file make it trap.
+
+Seen in `qemu-system-aarch64` as `virt`, with OpenSSH's client (`./agents.sh`, FAT32 made by macOS), a key granted
+`read:DOCS write:WORK/OUT`:
+
+| who | does | sees |
+|---|---|---|
+| the agent | `list DOCS`, `peek docs/readme.txt` | the listing; the file's text |
+| the agent | `write --create --stdin WORK/OUT/R.TXT`, `replace` in it, `move` it to `DONE.TXT`, `hash` | each done |
+| the agent | `hash SECRET.TXT`, `peek KEYS.TXT`, `list .`, `list WORK`, `hash` and `seek` in `WORK/OTHER`, `hash OLD/00000001.V` | `io.permission-denied`, seven times, and no byte of any |
+| the agent | `write` to `DOCS`, to `WORK/OTHER` and to the top; `replace` in `DOCS`; `move` in `DOCS` | `io.permission-denied`, five times; no file made |
+| the agent | `ls`, `cat SECRET.TXT`, `remove`, `copy`, `net ssh off`, `restart` | "this key is an agent's", six times |
+| the owner | `cat LOG.TXT` | three lines by `key:... agent`: two `write` and a `move`; none for what was refused |
+| the owner | writes `KEYS.TXT` again with `read:WORK/OUT` | written |
+| the agent | the same `write` to `WORK/OUT`; `hash WORK/OUT/DONE.TXT` | refused; answered |
+
+macOS's `fsck_msdos` finds nothing wrong with the volume afterwards, and `./keys.sh` passes as before.
+
+What this part is not:
+
+- **Not a statement signed by a person's key.** "The shape" says an agent's key comes with one. Here the grant is a
+  line of a file only an owner or the console may write, and the chain back to a person is the record's line for
+  that write. A grant cannot yet be passed on narrower by the agent itself.
+- **No "until when".** The kernel has no clock that knows the date. A grant lasts until its line is changed.
+- **Two rights of the six.** There is no `append`, `delete`, `purge` or `control` for an agent: no tool does them.
+- **No approval step** for what cannot be undone: an agent can do nothing of that kind yet.
+- **Owners and readers are not asked about grants.** Their sessions are as they were; a reader still may not write.
+- **A directory's short alias is another name.** A grant on `long-directory-name` does not cover the same directory
+  reached as `LONG-D~1`: that is refused, which is the safe way to be wrong.
+- **An agent can stop the board.** A trap in a tool is a trap of the kernel (docs/tools.md), and a tool that asks
+  for all the memory traps. Grants bound what an agent can read and change, not whether the board stays up.
+- Eight keys in all, and a `KEYS.TXT` of 2,048 bytes at most, as before.
+- Not tried on a real board.
+
 ## The slices
 
 1. **Writing, in QEMU.** `fat.cho` learns to add a file and to add to one, in the order above. Checked
@@ -198,4 +260,5 @@ What it does not do:
    checked for every command of an SSH session.
 3. **Versions and the record**, before any agent is let near a write.
 4. **The real card**: the Pi 4's SD controller, on the board. Built: [`sdcard.md`](sdcard.md).
-5. **Grants for agents, and approval.**
+5. **Grants for agents, and approval.** The first part is built (above): an agent's key, `read` and `write` on
+   directories, the tools held to them. Signed statements, passing a grant on, and approval are not.

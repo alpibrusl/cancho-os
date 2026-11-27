@@ -118,6 +118,11 @@ Rules of the road
   `build/tools/` (text only: a `module` line, `run` made public, `main` left out); `program` in kernel.cho says which word runs
   which. A new one is believed when its answers are the same bytes as the same tool's on another machine (the CI steps do
   that). authority.sh needs build.sh to have run.
+- Grants (docs/permissions.md, slice 5): an `agent` line of KEYS.TXT gives a key `read:`/`write:` on directories.
+  `src/keys.cho` (pure) reads the line and says what a path is covered by; `may` in `src/ksys.cho` is the ONE place
+  that asks, and every function there that takes a name calls it first: a new one must too. An agent's session runs
+  only programs (kernel.cho), because the shell's own commands do not ask. Grants are read from the file before each
+  line (`load_grants`, into k[4280..]). `./agents.sh` is the test; a change here is believed when it passes.
 - A program's writes (docs/tools.md, the end of `src/ksys.cho`): `write`, `replace` and `move` are the tools that write, and `write` is the only way a file's contents are written:
   the shell has no `write` or `append` (do not bring them back: they wrote over a file blind). A program never
   writes the disk: it makes a draft in memory and the rename of the draft is one call of `files.store_as`, `put`'s

@@ -567,6 +567,27 @@ jobs:
             grep -q "^4 lines, 0 that do not follow" klog.txt
             rm -f klog.out
           done
+      - name: an agent's key, and what it is granted
+        # docs/permissions.md, slice 5, with OpenSSH's client and a key made here. KEYS.TXT gives it DOCS to read and
+        # WORK/OUT to write. What it is granted works; twelve other things the tools could do are refused, and so is
+        # every command of the shell's that is not a tool; the record names an agent's key for its three changes;
+        # and when the owner takes the grant to write away, the next write is refused. Then Linux's tools judge the volume.
+        run: |
+          ssh-keygen -q -t ed25519 -N "" -C "an agent" -f /tmp/agentkey
+          for img in fat32 fat16; do
+            cp $img.img a-$img.img
+            ./agents.sh a-$img.img /tmp/sshkey /tmp/agentkey > agents-$img.txt 2>&1 || { cat agents-$img.txt; exit 1; }
+            cat agents-$img.txt
+            fsck.fat -n a-$img.img
+            rm -rf aout; mkdir -p aout/WORK/OUT aout/DOCS
+            for n in LOG.TXT WORK/OUT/DONE.TXT DOCS/README.TXT; do mcopy -i a-$img.img "::$n" aout/$n; done
+            test "$(cat aout/WORK/OUT/DONE.TXT)" = "made by an AGENT"
+            test "$(cat aout/DOCS/README.TXT)" = "what the agent may read"
+            python3 tests/checklog.py aout/LOG.TXT aout > alog.txt || { cat alog.txt; exit 1; }
+            cat alog.txt
+            grep -q " 0 that do not follow" alog.txt
+            if mdir -/ -b -i a-$img.img | grep -q 'NEW.TXT\|TOP.TXT\|GONE.TXT\|R2.TXT\|lexsys'; then exit 1; fi
+          done
       - name: a kernel loaded over the serial console
         # the running kernel takes another (this build, renamed 0.0.99) and starts it: a wrong checksum
         # must forget it, the right one must run it, and the fault report must still work afterwards

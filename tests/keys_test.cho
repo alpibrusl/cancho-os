@@ -127,7 +127,7 @@ fn test_no_damage_to_a_line_makes_it_trap() -> [] int {
                 var cut = 0;
                 while cut <= n {
                     let r = keys.line(l, 0, cut, key);
-                    test.assert(r >= -1 && r <= 2);
+                    test.assert(r >= -1 && r <= 3);
                     cut = cut + 11;
                 }
                 let c = keys.load(l, n, table, roles, 0, skipped);
@@ -139,6 +139,142 @@ fn test_no_damage_to_a_line_makes_it_trap() -> [] int {
             at = at + 1;
         }
         test.assert_eq(tried, n * 256);
+    }
+    return 0;
+}
+
+// ---- grants --------------------------------------------------------------------------------------
+
+fn agent_file() -> [] &static [byte] {
+    return "owner ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGMWNj3sFySrryCSjZvn0dvpRf0Si+unjANlZd87qhEp a person\nagent ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ9IxfNjM2SnUvQB+IWaJ0yLTkq0mozBPdgGMSd8GJ0F read:/DOCS write:work/out/ the builder, since tuesday write:/\r\nagent ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ9IxfNjM2SnUvQB+IWaJ0yLTkq0mozBPdgGMSd8GJ0F read:LOGS\n";
+}
+
+// The key of line `which` (0 the owner's, 1 the agent's) of `agent_file`, into `key`.
+fn key_of[&k](which: int, key: &!k [byte]) -> [] int {
+    let f = agent_file();
+    var from = 0;
+    var seen = 0;
+    while from < len(f) {
+        var to = from;
+        while to < len(f) && int_of(f[to]) != 10 && int_of(f[to]) != 13 {
+            to = to + 1;
+        }
+        if seen == which {
+            return keys.line(f, from, to, key);
+        }
+        seen = seen + 1;
+        from = to + 1;
+    }
+    return -1;
+}
+
+fn test_an_agents_line_grants_what_its_words_say_and_no_more() -> [] int {
+    region a {
+        let key = alloc_slice[a](32, byte_of(0));
+        let gr = alloc_slice[a](keys.grant_room(), 0);
+        let f = agent_file();
+        test.assert_eq(key_of(1, key), keys.agent());
+        // two words of the first line and one of the second; `write:/` after the words for people is not a grant
+        test.assert_eq(keys.grants_for(f, len(f), key, gr), 3);
+        test.assert(keys.covers(gr, 1, "DOCS"));
+        test.assert(keys.covers(gr, 1, "docs/a/b.txt"));
+        test.assert(keys.covers(gr, 1, "/DOCS/"));
+        test.assert(keys.covers(gr, 1, "LOGS/x"));
+        // writing is under WORK/OUT only, and reading comes with it
+        test.assert(keys.covers(gr, 2, "WORK/OUT/result.txt"));
+        test.assert(keys.covers(gr, 1, "work/out/result.txt"));
+        test.assert(!keys.covers(gr, 2, "DOCS/a.txt"));
+        test.assert(!keys.covers(gr, 2, "WORK/other.txt"));
+        test.assert(!keys.covers(gr, 2, "WORK"));
+        // a name that only begins like a granted one is another name
+        test.assert(!keys.covers(gr, 1, "DOCS2/a.txt"));
+        test.assert(!keys.covers(gr, 1, "DOC"));
+        test.assert(!keys.covers(gr, 2, "WORK/OUTSIDE/a.txt"));
+        // nothing else: the top of the disk, the kernel's own names
+        test.assert(!keys.covers(gr, 1, ""));
+        test.assert(!keys.covers(gr, 1, "KEYS.TXT"));
+        test.assert(!keys.covers(gr, 1, "OLD/00000001.V"));
+        // the directories above what is granted may be passed through, and nothing beside them
+        test.assert(keys.reaches(gr, ""));
+        test.assert(keys.reaches(gr, "WORK"));
+        test.assert(keys.reaches(gr, "work/"));
+        test.assert(!keys.reaches(gr, "WORK/OUT"));
+        test.assert(!keys.reaches(gr, "WOR"));
+        test.assert(!keys.reaches(gr, "OLD"));
+    }
+    return 0;
+}
+
+fn test_a_key_with_no_agents_line_is_granted_nothing() -> [] int {
+    region a {
+        let key = alloc_slice[a](32, byte_of(0));
+        let gr = alloc_slice[a](keys.grant_room(), 0);
+        let f = agent_file();
+        // the owner's key: it is not an agent's, and no line grants it anything
+        test.assert_eq(key_of(0, key), keys.owner());
+        test.assert_eq(keys.grants_for(f, len(f), key, gr), 0);
+        test.assert(!keys.covers(gr, 1, "DOCS"));
+        test.assert(!keys.covers(gr, 1, ""));
+        test.assert(!keys.reaches(gr, ""));
+        // the whole disk is granted by `/`, and then everything is covered
+        let all = "agent ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGMWNj3sFySrryCSjZvn0dvpRf0Si+unjANlZd87qhEp read:/";
+        test.assert_eq(keys.grants_for(all, len(all), key, gr), 1);
+        test.assert(keys.covers(gr, 1, ""));
+        test.assert(keys.covers(gr, 1, "ANY/THING"));
+        test.assert(!keys.covers(gr, 2, "ANY/THING"));
+        // words that are not grants grant nothing: a path with `..`, a hidden part, an empty part, nothing at all
+        let bad = "agent ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGMWNj3sFySrryCSjZvn0dvpRf0Si+unjANlZd87qhEp write:A/../B";
+        test.assert_eq(keys.grants_for(bad, len(bad), key, gr), 0);
+        let dot = "agent ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGMWNj3sFySrryCSjZvn0dvpRf0Si+unjANlZd87qhEp read:.x";
+        test.assert_eq(keys.grants_for(dot, len(dot), key, gr), 0);
+        let gap = "agent ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGMWNj3sFySrryCSjZvn0dvpRf0Si+unjANlZd87qhEp read:A//B";
+        test.assert_eq(keys.grants_for(gap, len(gap), key, gr), 0);
+        let none = "agent ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGMWNj3sFySrryCSjZvn0dvpRf0Si+unjANlZd87qhEp read:";
+        test.assert_eq(keys.grants_for(none, len(none), key, gr), 0);
+        // five words: the four there is room for
+        let many = "agent ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGMWNj3sFySrryCSjZvn0dvpRf0Si+unjANlZd87qhEp read:A read:B read:C read:D write:E";
+        test.assert_eq(keys.grants_for(many, len(many), key, gr), 4);
+        test.assert(!keys.covers(gr, 1, "E"));
+    }
+    return 0;
+}
+
+fn test_no_bytes_make_reading_grants_trap() -> [] int {
+    region a {
+        let key = alloc_slice[a](32, byte_of(0));
+        let gr = alloc_slice[a](keys.grant_room(), 0);
+        let good = agent_file();
+        let l = alloc_slice[a](len(good), byte_of(0));
+        var i = 0;
+        while i < len(good) {
+            l[i] = good[i];
+            i = i + 1;
+        }
+        key_of(1, key);
+        var at = 0;
+        var tried = 0;
+        while at < len(good) {
+            let kept = l[at];
+            var v = 0;
+            while v < 256 {
+                l[at] = byte_of(v);
+                let c = keys.grants_for(l, len(good), key, gr);
+                test.assert(c >= 0 && c <= 4);
+                keys.covers(gr, 2, l[at..len(good)]);
+                keys.reaches(gr, l[0..at]);
+                tried = tried + 1;
+                v = v + 37;
+            }
+            l[at] = kept;
+            at = at + 1;
+        }
+        test.assert(tried > 1000);
+        // and grants that are not well made: lengths no path has
+        gr[0] = 9;
+        gr[2] = 0 - 5;
+        gr[66] = 4000;
+        test.assert(!keys.covers(gr, 1, "A"));
+        keys.reaches(gr, "A");
     }
     return 0;
 }
