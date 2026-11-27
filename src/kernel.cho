@@ -223,6 +223,23 @@ fn getc[&f, &mc, &mi, &mu, &mr, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l, &s
         if k[37] < 16 && k[34] != 0 {
             network.rng_fill(rng, vio, dma, k);
         }
+        if k[10] == 2 && k[4158] > 0 && k[4277] > 0 && base.uptime_ms(cpu) - k[4277] > k[4158] * 500 {
+            // half the time the address was lent for is over: it is asked for again, while nothing else is being
+            // done (docs/network.md). What the asking would print is not printed; one line says how it went.
+            let lent = k[4277];
+            k[4267] = 1;
+            network.net_dhcp(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox);
+            k[4267] = 0;
+            if k[4277] != lent {
+                base.puts(con, k, "\r\n(the address was asked for again, and is lent for another ");
+                base.put_dec(con, k, k[4158]);
+                base.puts(con, k, " s)\r\n> ");
+            } else {
+                // nobody answered: the address is kept, and asked for again in a minute
+                k[4277] = base.uptime_ms(cpu) - k[4158] * 500 + 60000;
+                base.puts(con, k, "\r\n(the address was asked for again and nobody answered: it is kept, and asked for in a minute)\r\n> ");
+            }
+        }
         if k[10] != 0 {
             let ready = network.net_poll(bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, rline, si, sb, sx, base.uptime_ms(cpu), cpu_read(cpu, "cntvct_el0"));
             if ready != 0 {
@@ -846,7 +863,7 @@ fn run[&f, &mc, &mu, &mt, &mx, &mz, &s, &r, &nv, &nd, &nn, &na, &nb, &nw, &nt, &
     if same(line, n, "help") {
         base.puts(con, k, "commands: help, about, echo <text>, uptime, ticks, mem, board, random, disk, ls [path], cat <path>, sum <path> (list, peek and hash, in text), copy <from> <to>, remove <name>, mkdir <path>, ls <path>, versions, purge <number>, record, put <name> <bytes> <sha256> (over SSH), restart, heap, tell <words>, fail trap|spin|memory, watch on|off (at the console), hash <path>.., peek <path>, seek <text> <path>.., list [path], replace --old <text> --new <text> <path>, move <from> <to>, write (--create | --if-sha256 <hex>) --stdin <path> (then the text, and Ctrl-D), net [up|down|eth|dhcp], net ssh [on|off], net time <address> [port] [back], time, lookup <name>, ping <address or name>, http <address or name> <port>, servo via <address> <port>|off, servo scan, servo pos, arm zero, arm pose, arm check <5 angles>, crash [null|write], load <bytes>\r\n");
     } else if same(line, n, "about") {
-        base.puts(con, k, "cancho-os 0.0.47: a kernel written in cancho (");
+        base.puts(con, k, "cancho-os 0.0.48: a kernel written in cancho (");
         if k[1] >= 3 {
             base.puts(con, k, "Raspberry Pi ");
             base.put_dec(con, k, k[1]);

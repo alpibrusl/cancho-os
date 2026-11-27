@@ -809,6 +809,9 @@ jobs:
           grep -q "10.0.0.2 lladdr 52:54:00:12:34:56" eping.txt
           # dnsmasq gave the address and answered for the names; then 10.0.0.1 was reached by the gateway
           grep -q "DHCPACK(tap0) 172.31.77.5" eping.txt
+          # and half the two minutes it was lent for later, the kernel asked again by itself and was acknowledged again
+          test "$(grep -c "DHCPACK(tap0) 172.31.77.5" eping.txt)" -ge 2
+          grep -q "^(the address was asked for again, and is lent for another 120 s)" eping.txt
           grep -q "^address 172.31.77.5[0-9], mask 255.255.255.0, gateway 172.31.77.1, names from 172.31.77.1" eping.txt
           grep -q "^www.cancho-os.test is 172.31.77.1" eping.txt
           grep -q "^no such name: nothing.cancho-os.test" eping.txt

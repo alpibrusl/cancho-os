@@ -122,7 +122,7 @@ if [ -n "$ready" ]; then
         # kernel is no longer on 10.0.0.1's network, and its ping of 10.0.0.1 below goes by the gateway.
         ip addr add 172.31.77.1/24 dev tap0
         dnsmasq --keep-in-foreground --user=root --conf-file=/dev/null --interface=tap0 --bind-interfaces \
-            --dhcp-range=172.31.77.50,172.31.77.60,255.255.255.0,1h --dhcp-option=3,172.31.77.1 \
+            --dhcp-range=172.31.77.50,172.31.77.60,255.255.255.0,2m --dhcp-option=3,172.31.77.1 \
             --dhcp-option=6,172.31.77.1 --address=/www.cancho-os.test/172.31.77.1 --local=/cancho-os.test/ \
             --no-resolv --no-hosts --dhcp-leasefile="$PWD/build/leases" --log-dhcp --log-queries \
             --log-facility="$PWD/build/dnsmasq.log" &
@@ -138,12 +138,17 @@ if [ -n "$ready" ]; then
         sleep 2
         printf 'http www.cancho-os.test 8099\r' >&3
         sleep 3
+        # the address is lent for two minutes, the shortest dnsmasq lends: with nothing typed, the kernel asks for
+        # it again when one of them is over, and dnsmasq acknowledges a second time
+        sleep 62
         kill $DNSMASQ $WWW 2>/dev/null
         echo "what dnsmasq saw:"
         grep -E "DHCP(DISCOVER|OFFER|REQUEST|ACK)|query\[A\]" build/dnsmasq.log | sed 's/^.*dnsmasq[^:]*: /  /'
         grep -q "^address 172.31.77.5[0-9], mask 255.255.255.0, gateway 172.31.77.1, names from 172.31.77.1" build/ping-uart.out || status=1
         grep -q "^www.cancho-os.test is 172.31.77.1" build/ping-uart.out || status=1
         grep -q "^no such name: nothing.cancho-os.test" build/ping-uart.out || status=1
+        grep -q "^(the address was asked for again, and is lent for another 120 s)" build/ping-uart.out || { echo "the address was not asked for again"; status=1; }
+        test "$(grep -c "DHCPACK(tap0) 172.31.77.5" build/dnsmasq.log)" -ge 2 || { echo "dnsmasq acknowledged once"; status=1; }
         test "$(grep -c "a page from linux, for cancho-os" build/ping-uart.out)" = 2 || status=1
     fi
     # the kernel speaks first: it asks who 10.0.0.1 is (on the card) and pings it; Linux answers both

@@ -50,3 +50,16 @@ many. The request now carries a `Host` line with the name as it was typed.
 - **Whoever answers first is believed.** DHCP and DNS have no authentication, and nothing here adds
   any: a machine on the same cable can hand the kernel a false address or a false name.
 - **One gateway, no other routes.**
+
+## The address is asked for again (0.0.48)
+
+An address is lent for a time, and the kernel used to ask once: when the time was over it went on using an address
+the server was free to give to another machine. Now, when half the time is over and nothing else is being done (the
+shell is waiting for a key), the kernel asks again, the same way as the first time, and says so in one line on its
+console. If nobody answers it keeps the address and asks again a minute later. It does not unicast a renewal to the
+server that lent the address, as RFC 2131 would have it first do: it asks whoever is there, which the same server
+answers with the same address.
+
+Shown by `ping.sh` (Linux, CI): dnsmasq lends the address for two minutes, the shortest it will, and a minute later
+its log has a second DHCPACK for the kernel's card with nothing typed. QEMU's own server lends for a day, so this is
+not seen there.
