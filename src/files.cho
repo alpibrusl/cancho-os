@@ -616,6 +616,73 @@ fn change[&mc, &mv, &md, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000
     return 1;
 }
 
+// Is `text[from..to]` a file of the top directory that the board starts from (`boot_name`)? A program is not given
+// those to change: a wrong one stops the board, and `put` is the way that checks every byte.
+pub fn tool_kept[&r](text: &r [byte], from: int, to: int) -> [] bool {
+    return leaf(text, from, to) == from && boot_name(text, from, to);
+}
+
+// A file's name, or a directory's, changed to another in the same directory, for a program that asked for it (`ksys.rename`): `old[of..ot]`
+// becomes `new[nf..nt]`, two paths with the same directories before the last name. Nothing of the file moves and
+// no version is made: what it holds does not change. A name that is taken is not replaced. The record first, then the
+// new name, then the old one taken away: between the last two the file has both, and has lost nothing.
+// A directory keeps what is in it: its entries are in its own clusters, and the directory above it is the same one.
+// 0; or the number a system gives the reason: 2 no such name, 5 the disk, 13 a name that is the kernel's, 17 taken.
+// Nothing is printed.
+pub fn rename[&mc, &mv, &md, &s, &r, &t](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], old: &r [byte], of: int, ot: int, new: &t [byte], nf: int, nt: int, who: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+    if !put_name(old, of, ot) || !put_name(new, nf, nt) || tool_kept(old, of, ot) || tool_kept(new, nf, nt) {
+        return 13;
+    }
+    var answer = 5;
+    region r {
+        let sec = alloc_slice[r](512, byte_of(0));
+        let tab = alloc_slice[r](512, byte_of(0));
+        let rtab = alloc_slice[r](512, byte_of(0));
+        let info = alloc_slice[r](fat.facts(), 0);
+        let name = alloc_slice[r](12, byte_of(0));
+        let hd = alloc_slice[r](32, byte_of(0));
+        let out = alloc_slice[r](3, 0);
+        let o = alloc_slice[r](12, 0);
+        let pd = alloc_slice[r](4, 0);
+        let w = alloc_slice[r](8, 0);
+        w[5] = -1;
+        if disk.volume(vio, dma, k, sec, info) == 0 && ledger.ready(con, vio, dma, k, sec, tab, rtab, info, name, out, o, w, who) == 0 && paths(con, vio, dma, k, sec, rtab, info, name, out, o, old, of, ot, ot, 0, pd) == 0 {
+            let at = leaf(new, nf, nt);
+            if disk.look(vio, dma, k, sec, rtab, info, name, out, o, pd[0], old, pd[1], ot) != 0 {
+                answer = 5;
+            } else if o[0] == 0 {
+                answer = 2;
+            } else if o[8] != fat.entry_file() && o[8] != fat.entry_directory() {
+                answer = 2;
+            } else {
+                let folder_too = o[8] == fat.entry_directory();
+                let es = o[1];
+                let ei = o[2];
+                let cluster = o[3];
+                let size = o[4];
+                let long = o[9];
+                let long_s = o[10];
+                let long_i = o[11];
+                if disk.look(vio, dma, k, sec, rtab, info, name, out, o, pd[0], new, at, nt) != 0 {
+                    answer = 5;
+                } else if o[0] != 0 {
+                    answer = 17;
+                } else if disk.place(con, vio, dma, k, sec, tab, rtab, info, name, out, o, w, pd[0], new, at, nt) == 0 {
+                    let slot = o[5];
+                    var bad = ledger.record_add(vio, dma, k, info, w, who, "move", new, nf, nt, old, of, ot, 0, size, hd, false) != 0;
+                    bad = bad || disk.read(vio, dma, k, slot, sec) != 0 || disk.named_at(sec, o, name, new, at, nt, cluster, size, folder_too) != 0 || disk.write(vio, dma, k, slot, sec) != 0;
+                    bad = bad || disk.unname(vio, dma, k, sec, rtab, info, pd[0], es, ei, long, long_s, long_i) != 0;
+                    if !bad {
+                        disk.counted(vio, dma, k, sec, info, w);
+                        answer = 0;
+                    }
+                }
+            }
+        }
+    }
+    return answer;
+}
+
 // `put`: a whole file that came over SSH and is waiting in memory (`size` bytes from `at`) becomes the file
 // `text[from..to]`, new or in place of the one of that name. `want` is the SHA-256 the sender gave, as 64 hex
 // digits: the bytes that came must have it, and so must the bytes the disk gives back once they are

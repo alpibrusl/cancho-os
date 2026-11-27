@@ -599,6 +599,29 @@ fn drafted[&hd, &r](h: &!hd [int], dir: int, name: &r [byte]) -> [] bool {
     return true;
 }
 
+// The path of `name` under directory handle `dir`, into `full`: its length, or -1 if it is longer than `full`.
+fn pathed[&hd, &r, &f](h: &!hd [int], dir: int, name: &r [byte], full: &!f [byte]) -> [] int {
+    let theirs = paths() + (dir - 3) * 257;
+    var n = 0;
+    while n < h[theirs] {
+        full[n] = byte_of(h[theirs + 1 + n]);
+        n = n + 1;
+    }
+    if n > 0 {
+        full[n] = byte_of('/');
+        n = n + 1;
+    }
+    if n + len(name) >= len(full) {
+        return 0 - 1;
+    }
+    var i = 0;
+    while i < len(name) {
+        full[n + i] = name[i];
+        i = i + 1;
+    }
+    return n + len(name);
+}
+
 // Bytes for the draft: how many were taken, which is all of them, or minus why not (27: more than the memory holds).
 pub fn write[&mc, &mv, &md, &mg, &s, &l, &hd, &p](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), k: &!s [int], line: &!l [byte], h: &!hd [int], file: int, bytes: &p [byte]) -> [mmio("0x220000..0x420000,0x40220000..0x40420000")] int {
     if held(h, file, 4) < 0 || h[draft()] == 0 {
@@ -632,17 +655,38 @@ pub fn lock[&mc, &mv, &md, &mg, &s, &l, &hd](con: &!mc Mmio("0x9000000..0x900004
     return 0;
 }
 
-// The draft `from` becomes the file `to`, both under `dir`; `fresh` 1 refuses a name that is taken (17). Only a draft
-// is renamed: a file of the disk is not moved (30). What the name may be is what `put` may write (13 if not).
+// The draft `from` becomes the file `to`, both under `dir`; `fresh` 1 refuses a name that is taken (17). A file of
+// the disk is renamed only with `fresh` 1 (`files.rename`): one is never renamed over another (30). What a name may
+// be is what `put` may write (13 if not).
 pub fn rename[&mc, &mv, &md, &mg, &s, &l, &hd, &p, &q](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), k: &!s [int], line: &!l [byte], h: &!hd [int], dir: int, from: &p [byte], to: &q [byte], fresh: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x220000..0x420000,0x40220000..0x40420000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
     if held(h, dir, 1) < 0 {
         return 0 - 9;
     }
     if !drafted(h, dir, from) {
-        if stat(con, vio, dma, stage, k, line, h, dir, from, 0) >= 0 {
-            return 0 - 30;
+        // a file of the disk: its name is changed, and only to one that is not taken
+        if fresh == 0 {
+            if stat(con, vio, dma, stage, k, line, h, dir, from, 0) >= 0 {
+                return 0 - 30;
+            }
+            return 0 - 2;
         }
-        return 0 - 2;
+        var moved = 0 - 36;
+        region r {
+            let a = alloc_slice[r](512, byte_of(0));
+            let b = alloc_slice[r](512, byte_of(0));
+            let an = pathed(h, dir, from, a);
+            let bn = pathed(h, dir, to, b);
+            if an >= 0 && bn >= 0 {
+                var who = 0;
+                if k[26] != 0 {
+                    who = 1;
+                }
+                k[4267] = 1;
+                moved = 0 - files.rename(con, vio, dma, k, a, 0, an, b, 0, bn, who);
+                k[4267] = 0;
+            }
+        }
+        return moved;
     }
     let kind = stat(con, vio, dma, stage, k, line, h, dir, to, 0);
     if kind == 2 {
@@ -676,7 +720,7 @@ pub fn rename[&mc, &mv, &md, &mg, &s, &l, &hd, &p, &q](con: &!mc Mmio("0x9000000
                 i = i + 1;
             }
             n = n + len(to);
-            if !files.put_name(full, 0, n) {
+            if !files.put_name(full, 0, n) || files.tool_kept(full, 0, n) {
                 answer = 0 - 13;
             } else {
                 // who: a key over SSH while a line from the network is being run, else the console

@@ -1,8 +1,9 @@
 # The tools, inside the kernel
 
 cancho-tools (https://github.com/alpibrusl/cancho-tools) are the programs an agent reads and changes files with on
-Linux and macOS: each answers in JSON, says what it may touch, and is small. Five of them are built into this kernel
-as they are written: `hash`, `peek`, `seek` and `list`, which only read, and `replace`, which changes a file. Not a
+Linux and macOS: each answers in JSON, says what it may touch, and is small. Six of them are built into this kernel
+as they are written: `hash`, `peek`, `seek` and `list`, which only read, `replace`, which changes a file, and
+`move`, which changes a name. Not a
 line of them was changed for it and none of them knows it is not on a system.
 
 ## How
@@ -14,12 +15,12 @@ docs/bare-system.md), and inside it a tool's `write_bytes` is the shell's output
 was typed, and its `open_dir`, `dir_open_read`, `file_read`, `dir_list`, `dir_stat` the FAT volume, through
 `src/ksys.cho`.
 
-`build.sh` takes the tools from a checkout beside this one (`../cancho-tools`, or `TOOLS=`), and for each of the five:
+`build.sh` takes the tools from a checkout beside this one (`../cancho-tools`, or `TOOLS=`), and for each of the six:
 
 - puts `module tool_<name>;` after the first line and makes `run` public;
 - leaves out `main`, the last function of the file: the kernel has its own;
 - gives the generated module that says how the tool was built (`toolbox.built`, one for each tool, all of one name)
-  the tool's name, so that five can be in one image.
+  the tool's name, so that six can be in one image.
 
 That is text moved by `awk` and `sed`, into `build/tools/`; the build stops if a tool is not written the way this
 expects. What the tools share (`contract/`) is built in as it is. `TOOLS_REF` in the workflow is the commit they are
@@ -51,11 +52,19 @@ Here those five steps are one write of the disk, and it is not the tool that mak
 What a program may not do through `ksys`, each refused with the number a system would give:
 
 - write a name `put` may not write (13): `HOSTKEY.BIN`, `LOG.TXT`, `BOOT.TXT`, anything under `OLD`;
-- rename or remove a file of the disk (30): only the draft is renamed, so `move` is not built in, and no tool deletes;
+- rename a file of the disk over another, or remove one (30): no tool deletes;
+- change a file the board starts from (13): the kernel's image, `config.txt`, what the firmware loads. `put` does
+  that, and checks every byte;
 - add to a file, or open one to write in place (30): a file changes whole or not at all;
 - make a second draft while one is waiting (24), or any while a `put` is being received (16).
 
-A key that may only read is refused `replace` by the shell, before the tool runs, as it is refused `write`.
+`move PATH NEWNAME` is the one other change: a name of the disk, a file's or a directory's, becomes another in the
+same directory (`files.rename`). Never over a name that is taken (17). Nothing of the file moves and no version is
+made, since what it holds does not change; the record gains a line, `move`, with both names and who. The record is
+written first, then the new name, then the old one is taken away: a board that loses power between the last two has
+the file under both names.
+
+A key that may only read is refused `replace` and `move` by the shell, before the tool runs, as it is refused `write`.
 
 `cancho authority` of the kernel gains `dir_write` and `file_write` with `replace`, and `err_write` with the first four (a tool writes its usage errors there; here both streams
 are the shell's output), and already had `heap`, `args`, `io_write` and the three that read files from step 3.
@@ -68,17 +77,18 @@ are the shell's output), and already had `heap`, `args`, `io_write` and the thre
 - **The status a tool ends with is dropped.** Over SSH the session ends with 0 whatever the tool answered; the JSON
   says `"ok":false`.
 - **The tools that read their input** (`tally`, `jsonq`) are not built in, and of the ones that write only `replace`
-  is. `write` takes its contents from its input or from a file, and its name is the shell's own `write`; `move`
-  renames a file of the disk, which `ksys` does not do; `archive` makes directories.
+and `move` are. `write` takes its contents from its input, which a program here does not have yet, and its name
+  is the shell's own `write`; `archive` makes directories.
 - **Why a write failed is mostly lost.** `files.store_as` says why in words, which are not printed for a tool, and
   answers yes or no: a full disk and a disk that could not be read are both 5 to the tool.
-- **A tool's write is recorded as `write`**, the shell's word: the record does not say a tool made it.
+- **A tool's write is recorded as `write`**, the shell's word: the record does not say a tool made it. A `move` has
+  no hash in its line, so `checklog.py` does not check the file under its new name.
 - **Grants.** A tool may write what its caller may. There are two kinds of caller, owner and reader; a key for an
   agent that may write under one directory only is docs/permissions.md, not built.
 - **Time.** FAT keeps local time and no zone; `list --long` gives it as if it were UTC.
 - **A listing walks the directory again for each name** (`ksys.next`), and `dir_stat` three times for each: a
   directory of a thousand names would be slow. None here is that long.
-- `replace` is not tried on a real board. The four that read are: they ran on the Raspberry Pi 4 from its card on
+- `replace` and `move` are not tried on a real board. The four that read are: they ran on the Raspberry Pi 4 from its card on
   2026-11-27, and `hash KERNEL8.IMG` there gave what `shasum` gives the same file on a Mac.
 
 ## Measured
@@ -108,3 +118,9 @@ directory and one with a long name:
 - on the Pi 3's SD card in QEMU the same; over SSH with the owner's key the record's line says `key:` and its
   first sixteen digits, and `owner`; with a key that may only read the shell refuses (`./keys.sh`).
 - the image is 677,008 bytes with the five tools.
+
+`move`, the same way: seven commands (three files renamed, one of them to and one from a long name, a directory
+renamed, a name that is taken, one that is not there, a new name with a `/` in it) and the hashes of the four files
+afterwards answer the same twelve lines as on the Mac; the files are the same bytes under their new names;
+`fsck_msdos` finds nothing wrong; the record has four lines that follow. `move` to `KERNEL8.IMG` is refused (13).
+The image is 723,024 bytes with the six tools.

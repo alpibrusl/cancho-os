@@ -486,6 +486,35 @@ jobs:
           grep -q "^5 [0-9]* key:[0-9a-f]* owner write TEXT.TXT " replace-ssh.txt
           fsck.fat -n w-fat16.img
           mcopy -i w-fat16.img ::TEXT.TXT back.out && cmp back.out wsrc/TEXT.TXT
+      - name: a tool renames a file
+        # docs/tools.md. cancho-tools' move, built in as it is: a name is changed to one that is not taken, a
+        # directory's too, and never over another. The same commands by the same tool on this machine must answer
+        # the same lines; then fsck.fat, the files' bytes, and the record.
+        run: |
+          (cd /tmp/cancho-tools && /tmp/cancho-out/cancho build contract/*.cho tools/move/move.cho generated/move/built.cho --std -o /tmp/tool-move)
+          rm -rf mhost && cp -r wsrc mhost
+          (cd mhost && { /tmp/tool-move NOTE.TXT NOTE2.TXT; /tmp/tool-move TEXT.TXT longer_name_file.text; /tmp/tool-move SUB/INNER.TXT a_new_long_name.txt; /tmp/tool-move longer_name_file.text SHORT.TXT; /tmp/tool-move NONE.TXT X.TXT; /tmp/tool-move NOTE2.TXT a/b; /tmp/tool-move SUB SUB2; /tmp/tool-hash NOTE2.TXT SUB2/a_new_long_name.txt SHORT.TXT TEXT.TXT; } > ../move-want.txt 2>&1 || true)
+          cat move-want.txt
+          test "$(grep -c '"changed":true' move-want.txt)" = 4
+          mkfs.fat -F 32 -s 1 -C m-fat32.img 65536 > /dev/null
+          mkfs.fat -F 16 -C m-fat16.img 16384 > /dev/null
+          for img in fat32 fat16; do
+            mcopy -s -i m-$img.img wsrc/TEXT.TXT wsrc/NOTE.TXT wsrc/SUB wsrc/longer_name_file.text ::
+            MACHINE=virt DISKRW=m-$img.img ./test.sh 'move NOTE.TXT NOTE2.TXT' 'move TEXT.TXT longer_name_file.text' 'move SUB/INNER.TXT a_new_long_name.txt' 'move longer_name_file.text SHORT.TXT' 'move NONE.TXT X.TXT' 'move NOTE2.TXT a/b' 'move SUB SUB2' 'hash NOTE2.TXT SUB2/a_new_long_name.txt SHORT.TXT TEXT.TXT' 'move SHORT.TXT KERNEL8.IMG' record 'echo still here' > move-$img.raw
+            tr -d '\r' < move-$img.raw | grep '^{' > move-$img.txt; cat move-$img.txt
+            head -n "$(wc -l < move-want.txt)" move-$img.txt | diff move-want.txt -
+            tail -1 move-$img.txt | grep -q '"rule":"io.permission-denied"'
+            grep -q "^the record: 4 lines, each following from the one before" move-$img.raw
+            grep -q "^still here" move-$img.raw
+            fsck.fat -n m-$img.img
+            rm -rf mout; mkdir -p mout/SUB2
+            for n in TEXT.TXT NOTE2.TXT SHORT.TXT SUB2/a_new_long_name.txt LOG.TXT; do mcopy -i m-$img.img "::$n" mout/$n; done
+            for n in TEXT.TXT NOTE2.TXT SHORT.TXT SUB2/a_new_long_name.txt; do cmp mout/$n mhost/$n; done
+            test "$(mdir -/ -b -i m-$img.img | grep -c 'NOTE.TXT\|INNER.TXT\|longer_name\|lexsys')" = 0
+            python3 tests/checklog.py mout/LOG.TXT mout > mlog.txt || { cat mlog.txt; exit 1; }
+            cat mlog.txt
+            grep -q "^4 lines, 0 that do not follow" mlog.txt
+          done
       - name: the heap
         # cancho docs/freestanding.md, section 8: a JSON object made on the heap and printed, growing buffers read
         # back, and a block made and given back so many times that it must have been used again.
