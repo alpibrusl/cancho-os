@@ -130,15 +130,18 @@ jobs:
         run: |
           L="0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzAB"
           echo "line 0" > want.txt
-          set -- 'write NOTES.TXT line 0'
-          for i in 1 2 3 4 5 6 7 8 9 10 11 12; do set -- "$@" "append NOTES.TXT $i $L"; echo "$i $L" >> want.txt; done
-          for i in 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20; do set -- "$@" "write F$i.TXT file $i"; done
+          # (`write` is cancho-tools' own, built in: what is typed after it is the file, until Ctrl-D, which test.sh sends for `^D`)
+          set -- 'write --create --stdin NOTES.TXT' 'line 0'
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12; do set -- "$@" "$i $L"; echo "$i $L" >> want.txt; done
+          set -- "$@" '^D'
+          for i in 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20; do set -- "$@" "write --create --stdin F$i.TXT" "file $i" '^D'; done
           for img in fat32 fat16 part; do
             cp $img.img w-$img.img
-            MACHINE=virt DISKRW=w-$img.img ./test.sh "$@" 'copy BIG.BIN COPY.BIN' 'copy BIG.BIN NOTES.TXT' 'write bad:name x' 'sum COPY.BIN' ls disk > w-$img.txt; tail -40 w-$img.txt
+            MACHINE=virt DISKRW=w-$img.img ./test.sh "$@" 'copy BIG.BIN COPY.BIN' 'copy BIG.BIN NOTES.TXT' 'write --create --stdin bad:name' x '^D' 'sum COPY.BIN' ls disk > w-$img.txt; tail -40 w-$img.txt
+            test "$(grep -c '"command":"write","schema":"write.v1","data":{"path":"[A-Z0-9.]*","changed":true,"created":true' w-$img.txt)" = 21
             grep -q "^copied: 300000 bytes" w-$img.txt
             grep -q "^there is something of that name already" w-$img.txt
-            grep -q "^not a name" w-$img.txt
+            grep -q '"rule":"io.permission-denied".*"path":"bad:name"' w-$img.txt
             # the volume itself, for the tools: the image, or the partition inside it
             vol=w-$img.img
             if [ $img = part ]; then dd if=w-part.img of=w-part-vol.img bs=512 skip=2048 status=none; vol=w-part-vol.img; fi
@@ -158,17 +161,22 @@ jobs:
         # must hold what their lines say. Then the same disk is started again, and then one byte of the
         # record is changed from outside: the kernel must say which line, and take no change over SSH.
         run: |
+          one=$(printf 'one\n' | sha256sum | cut -d' ' -f1)
+          two=$(printf 'two\n' | sha256sum | cut -d' ' -f1)
           for img in fat32 fat16 part; do
             cp $img.img v-$img.img
-            MACHINE=virt DISKRW=v-$img.img ./test.sh record 'write A.TXT one' 'write A.TXT two' 'append A.TXT more' 'remove BIG.BIN' 'copy OLD/00000002.V C.BIN' 'cat OLD/00000001.V' 'purge 1' versions 'remove LOG.TXT' 'write OLD x' record > v-$img.txt; tail -28 v-$img.txt
+            MACHINE=virt DISKRW=v-$img.img ./test.sh record 'write --create --stdin A.TXT' one '^D' "write --if-sha256 $one --stdin A.TXT" two '^D' "write --if-sha256 $one --stdin A.TXT" stale '^D' "write --if-sha256 $two --stdin A.TXT" two more '^D' 'remove BIG.BIN' 'copy OLD/00000003.V C.BIN' 'cat OLD/00000001.V' 'purge 1' versions 'remove LOG.TXT' 'write --create --stdin OLD' x '^D' record > v-$img.txt; tail -28 v-$img.txt
             grep -q "^no record on this disk yet" v-$img.txt
-            grep -q "^written: 4 bytes; what was there is OLD/00000001.V" v-$img.txt
-            grep -q "^removed; what it held is OLD/00000002.V" v-$img.txt
+            # a file is written over only by one who says what it holds: the write with the old hash changes nothing
+            test "$(grep -c '"path":"A.TXT","changed":true,"created":false' v-$img.txt)" = 2
+            grep -q '"rule":"precondition.hash-mismatch"' v-$img.txt
+            grep -q "^removed; what it held is OLD/00000003.V" v-$img.txt
             grep -q "^copied: 300000 bytes" v-$img.txt
             grep -q "^one" v-$img.txt
             grep -q "^purged: OLD/00000001.V, 1 clusters given back" v-$img.txt
-            grep -q "^1 versions kept" v-$img.txt
-            test "$(grep -c "^that name is the kernel's" v-$img.txt)" = 2
+            grep -q "^2 versions kept" v-$img.txt
+            test "$(grep -c "^that name is the kernel's" v-$img.txt)" = 1
+            grep -q '"rule":"io.is-a-directory".*"path":"OLD"' v-$img.txt
             grep -q "^the record: 6 lines, each following from the one before" v-$img.txt
             vol=v-$img.img
             if [ $img = part ]; then dd if=v-part.img of=v-part-vol.img bs=512 skip=2048 status=none; vol=v-part-vol.img; fi
@@ -177,14 +185,14 @@ jobs:
             mcopy -i $vol ::LOG.TXT vout/LOG.TXT
             mcopy -i $vol ::A.TXT vout/A.TXT
             mcopy -i $vol ::C.BIN vout/C.BIN
-            mcopy -i $vol ::OLD/00000002.V v2.out && cmp v2.out big.bin && cmp vout/C.BIN big.bin
+            mcopy -i $vol ::OLD/00000003.V v2.out && cmp v2.out big.bin && cmp vout/C.BIN big.bin
             test "$(cat vout/A.TXT)" = "$(printf 'two\nmore')"
             python3 tests/checklog.py vout/LOG.TXT vout > vlog.txt || { cat vlog.txt; exit 1; }
             cat vlog.txt
             grep -q "^6 lines, 0 that do not follow" vlog.txt
             grep -q "^C.BIN holds what the record says" vlog.txt
             # the same disk, started again: the next line follows the last one of the first start
-            MACHINE=virt DISKRW=v-$img.img ./test.sh 'write B.TXT after a restart' record > v2-$img.txt; tail -4 v2-$img.txt
+            MACHINE=virt DISKRW=v-$img.img ./test.sh 'write --create --stdin B.TXT' 'after a restart' '^D' record > v2-$img.txt; tail -4 v2-$img.txt
             grep -q "^the record: 7 lines, each following from the one before" v2-$img.txt
           done
           # an owner's key cannot purge: that is the console's
@@ -192,10 +200,10 @@ jobs:
           grep -q "^ssh: purge gives up a version for good, and is taken at the serial console only" v-purge.txt
           # one letter of the first line changed, by another machine
           python3 -c 'p="v-fat32.img"; d=bytearray(open(p,"rb").read()); i=d.find(b" console console write A.TXT "); assert i > 0; d[i+23]=66; open(p,"wb").write(d)'
-          MACHINE=virt DISKRW=v-fat32.img SSHKEY=/tmp/sshkey SSHCMD='write S.TXT over ssh' ./test.sh 'net up' 'net ssh on' record 'write T.TXT at the console' ls > v-broken.txt; cat v-broken.txt
+          MACHINE=virt DISKRW=v-fat32.img SSHKEY=/tmp/sshkey SSHCMD='write --create --stdin S.TXT' SSHSTDIN=hello.txt ./test.sh 'net up' 'net ssh on' record 'write --create --stdin T.TXT' 'at the console' '^D' ls > v-broken.txt; cat v-broken.txt
           grep -q "line 1 does not follow from the one before it" v-broken.txt
-          grep -q "^ssh: the record does not follow at line 1" v-broken.txt
-          grep -q "^written: 15 bytes" v-broken.txt
+          grep -q '^ssh: {"ok":false,"command":"write"' v-broken.txt
+          grep -q '"path":"T.TXT","changed":true,"created":true,"bytes":15' v-broken.txt
           grep -Eq "^T.TXT +15" v-broken.txt
           if grep -Eq "^S.TXT " v-broken.txt; then exit 1; fi
       - name: an SD card
@@ -205,10 +213,10 @@ jobs:
           want=$(python3 -c 'import zlib,sys; print("%08x" % zlib.adler32(open("big.bin","rb").read()))')
           for img in fat32 fat16; do
             cp $img.img sd-$img.img
-            SD=sd-$img.img ./test.sh disk 'sum BIG.BIN' 'write A.TXT one' 'write A.TXT two' 'copy BIG.BIN C.BIN' 'remove BIG.BIN' 'sum OLD/00000002.V' record > sd-$img.txt; cat sd-$img.txt
+            SD=sd-$img.img ./test.sh disk 'sum BIG.BIN' 'write --create --stdin A.TXT' one '^D' "write --if-sha256 $(printf 'one\n' | sha256sum | cut -d' ' -f1) --stdin A.TXT" two '^D' 'copy BIG.BIN C.BIN' 'remove BIG.BIN' 'sum OLD/00000002.V' record > sd-$img.txt; cat sd-$img.txt
             grep -q "^an SD card of " sd-$img.txt
             test "$(grep -c "^300000 bytes, adler32 $want" sd-$img.txt)" = 2
-            grep -q "^written: 4 bytes; what was there is OLD/00000001.V" sd-$img.txt
+            grep -q '"path":"A.TXT","changed":true,"created":false,"bytes":4' sd-$img.txt
             grep -q "^the record: 4 lines, each following from the one before" sd-$img.txt
             fsck.fat -n sd-$img.img
             rm -rf sdout; mkdir sdout
@@ -235,8 +243,8 @@ jobs:
           grep -q "what came does not have the SHA-256 that was given: nothing was written" put3.txt
           MACHINE=virt DISKRW=u.img SSHKEY=/tmp/sshkey SSHCMD='remove KERNEL8.IMG' ./test.sh 'net up' 'net ssh on' > put4.txt; cat put4.txt
           grep -q "^ssh: a file the board starts from" put4.txt
-          MACHINE=virt DISKRW=u.img SSHKEY=/tmp/sshkey SSHCMD='write CONFIG.TXT x' ./test.sh 'net up' 'net ssh on' > put5.txt; cat put5.txt
-          grep -q "^ssh: a file the board starts from" put5.txt
+          MACHINE=virt DISKRW=u.img SSHKEY=/tmp/sshkey SSHCMD='write --create --stdin CONFIG.TXT' SSHSTDIN=hello.txt ./test.sh 'net up' 'net ssh on' > put5.txt; cat put5.txt
+          grep -q '^ssh: {"ok":false,"command":"write".*"rule":"io.permission-denied"' put5.txt
           fsck.fat -n u.img
           rm -rf uout; mkdir uout
           mcopy -i u.img ::LOG.TXT uout/LOG.TXT
@@ -276,12 +284,14 @@ jobs:
         run: |
           for img in fat32 fat16; do
             cp $img.img d-$img.img
-            MACHINE=virt DISKRW=d-$img.img ./test.sh 'mkdir SRC' 'write SRC/A.TXT one' 'write SRC/A.TXT two' 'copy BIG.BIN SRC/B.BIN' 'mkdir SRC/DEEP' 'copy SRC/B.BIN SRC/DEEP/C.BIN' ls 'ls SRC' 'cat OLD/00000001.V' 'write OLD/X y' 'write SRC/../HOSTKEY.BIN x' 'cat NOPE/A.TXT' 'remove SRC' record > d-$img.txt; tail -24 d-$img.txt
+            MACHINE=virt DISKRW=d-$img.img ./test.sh 'mkdir SRC' 'write --create --stdin SRC/A.TXT' one '^D' "write --if-sha256 $(printf 'one\n' | sha256sum | cut -d' ' -f1) --stdin SRC/A.TXT" two '^D' 'copy BIG.BIN SRC/B.BIN' 'mkdir SRC/DEEP' 'copy SRC/B.BIN SRC/DEEP/C.BIN' ls 'ls SRC' 'cat OLD/00000001.V' 'write --create --stdin OLD/X' y '^D' 'copy SRC/A.TXT OLD/Y' 'write --create --stdin SRC/../HOSTKEY.BIN' x '^D' 'cat SRC/../HOSTKEY.BIN' 'cat NOPE/A.TXT' 'remove SRC' record > d-$img.txt; tail -24 d-$img.txt
             test "$(grep -c "^made: a directory" d-$img.txt)" = 2
             grep -q "^SRC/" d-$img.txt
             grep -q "^DEEP/" d-$img.txt
             grep -q "^one" d-$img.txt
             grep -q "^that name is the kernel's" d-$img.txt
+            grep -q '"rule":"io.permission-denied".*"path":"OLD/X"' d-$img.txt
+            grep -q '"rule":"path.dotdot"' d-$img.txt
             grep -q "^not a path" d-$img.txt
             grep -q "^no such directory" d-$img.txt
             grep -q "^that is a directory" d-$img.txt
@@ -300,10 +310,10 @@ jobs:
             cp $img.img l-$img.img
             mcopy -i l-$img.img hello.txt "::made-by-another-system.text"
             set -- 'mkdir sources'
-            for i in 1 2 3 4 5 6 7 8 9 10 11 12; do set -- "$@" "write sources/a-rather-long-source-file-name-$i.cho fn f$i"; done
-            MACHINE=virt DISKRW=l-$img.img ./test.sh "$@" 'cat made-by-another-system.text' 'write made-by-another-system.text replaced' 'copy BIG.BIN sources/a-big-binary-file.bin' 'remove sources/a-rather-long-source-file-name-3.cho' 'ls sources' 'write bad:name x' record > l-$img.txt; tail -22 l-$img.txt
+            for i in 1 2 3 4 5 6 7 8 9 10 11 12; do set -- "$@" "write --create --stdin sources/a-rather-long-source-file-name-$i.cho" "fn f$i" '^D'; done
+            MACHINE=virt DISKRW=l-$img.img ./test.sh "$@" 'cat made-by-another-system.text' "write --if-sha256 $(sha256sum hello.txt | cut -d' ' -f1) --stdin made-by-another-system.text" replaced '^D' 'copy BIG.BIN sources/a-big-binary-file.bin' 'remove sources/a-rather-long-source-file-name-3.cho' 'ls sources' 'copy BIG.BIN bad:name' record > l-$img.txt; tail -22 l-$img.txt
             grep -q "^hello from a file, to cancho-os" l-$img.txt
-            grep -q "^written: 9 bytes; what was there is OLD/00000001.V" l-$img.txt
+            grep -q '"path":"made-by-another-system.text","changed":true,"created":false,"bytes":9' l-$img.txt
             grep -q "^a-rather-long-source-file-name-12.cho " l-$img.txt
             grep -q "^a-big-binary-file.bin 300000" l-$img.txt
             if grep -q "^a-rather-long-source-file-name-3.cho " l-$img.txt; then exit 1; fi
@@ -322,14 +332,14 @@ jobs:
         # OpenSSH, which can then log in, must not be able to change the file.
         run: |
           cp fat16.img b.img
-          MACHINE=virt DISKRW=b.img ./test.sh 'write BOOT.TXT # at the start' 'append BOOT.TXT net up' 'append BOOT.TXT restart' 'append BOOT.TXT net ssh on' 'append BOOT.TXT echo the board is up' > boot1.txt; tail -4 boot1.txt
-          MACHINE=virt DISKRW=b.img SSHKEY=/tmp/sshkey SSHCMD='write BOOT.TXT from ssh' ./test.sh 'echo a' 'echo b' net 'cat BOOT.TXT' > boot2.txt; cat boot2.txt
+          MACHINE=virt DISKRW=b.img ./test.sh 'write --create --stdin BOOT.TXT' '# at the start' 'net up' 'restart' 'net ssh on' 'echo the board is up' '^D' > boot1.txt; tail -4 boot1.txt
+          MACHINE=virt DISKRW=b.img SSHKEY=/tmp/sshkey SSHCMD="write --if-sha256 $(printf '# at the start\nnet up\nrestart\nnet ssh on\necho the board is up\n' | sha256sum | cut -d' ' -f1) --stdin BOOT.TXT" SSHSTDIN=hello.txt ./test.sh 'echo a' 'echo b' net 'cat BOOT.TXT' > boot2.txt; cat boot2.txt
           grep -q "^BOOT.TXT: 3 lines to run, 1 not run" boot2.txt
           grep -q "^the board is up" boot2.txt
           grep -q "^link up: virtio-net" boot2.txt
           grep -q "^ssh on port 22" boot2.txt
           test "$(grep -c "^cancho-os booted" boot2.txt)" = 1
-          grep -q "^ssh: a file the board starts from" boot2.txt
+          grep -q '^ssh: {"ok":false,"command":"write".*"rule":"io.permission-denied"' boot2.txt
           grep -q "^echo the board is up" boot2.txt
           fsck.fat -n b.img
       - name: a system lent to a program written for one
@@ -534,7 +544,7 @@ jobs:
           test "$(grep -c "a kernel written in cancho" restart.txt)" = 2
           grep -q "^after" restart.txt
           cp fat16.img r-sd.img
-          SD=r-sd.img ./test.sh 'write A.TXT x' restart record > restart-sd.txt; cat restart-sd.txt
+          SD=r-sd.img ./test.sh 'write --create --stdin A.TXT' x '^D' restart record > restart-sd.txt; cat restart-sd.txt
           grep -q "^the record: 2 lines, each following from the one before" restart-sd.txt
           mcopy -i r-sd.img ::LOG.TXT rlog.out && python3 tests/checklog.py rlog.out > rlog.txt; cat rlog.txt
           grep -q "^2 [0-9]* console console restart board " rlog.txt

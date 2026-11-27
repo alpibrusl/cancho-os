@@ -1,5 +1,11 @@
 # Who may do what: keys, grants, versions and a record
 
+> **Since 2026-11-27** the shell has no `write` and no `append`. A file's contents are written by cancho-tools' `write`,
+> built into the kernel: `write --create --stdin NAME`, or `--if-sha256 HEX` for a file that is there, then the text and
+> Ctrl-D at the console, or the text as the command's input over SSH ([tools.md](tools.md)). It goes through the same
+> writer: the old contents to `OLD`, a line in the record. Where a table below says `write NAME text` or `append`, that
+> is what was typed when it was measured.
+
 > **Status: design, with three slices built**, in QEMU: adding a file and adding to one
 > ([`storage.md`](storage.md)); the host key kept, the keys file read, and two roles; and versions and
 > the record ("What is built" below, twice). Grants for agents and approval by a key are not built, and
@@ -94,8 +100,8 @@ policy (which company is given what). Neither should grow the other's half.
 - **Two roles.** A session over SSH has the role of the key that logged in. An owner's runs anything
   the shell has. A reader's runs what changes nothing and reaches nowhere (`ls`, `cat`, `sum`, `disk`,
   `about`, `mem` and the like) and is told so for anything else.
-- **A key is given by adding a line**: `append KEYS.TXT reader ssh-ed25519 AAAA...`, by an owner or at
-  the console. One is taken away by writing the file again without it, or by removing the file (slice
+- **A key is given by adding a line** to `KEYS.TXT`, `reader ssh-ed25519 AAAA...`: the file is written again with
+  the line in it (`write --if-sha256 HEX --stdin KEYS.TXT`), by an owner or at the console. One is taken away by writing the file again without it, or by removing the file (slice
   3): the keys are read again after either, and what the file held stays in `OLD`.
 
 Measured, at the commit that adds this section (`./keys.sh`, QEMU's `virt`, OpenSSH's client, three keys
@@ -179,8 +185,7 @@ What it does not do:
   it; no byte is lost). Cut between a line and its change, the record has a line for a change that did
   not happen: the file does not hold what the line's hash says.
 - **A version's name is a number.** Which file it was of is in the record, not in `OLD`.
-- **`append` leaves no version**, since it loses nothing; it has its line.
-- **`write` takes one line of text**, 500 bytes at most. Whole files come in by `copy`.
+- **A file is written whole.** Nothing adds to one in place; `write` and `replace` take up to a megabyte.
 - **Nothing is ever purged by itself**: a disk that is written over and over fills.
 - **No grants.** An owner's key may still do everything but purge; there are no keys for agents yet.
 

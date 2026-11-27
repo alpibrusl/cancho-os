@@ -1,5 +1,11 @@
 # Restart
 
+> **Since 2026-11-27** the shell has no `write` and no `append`. A file's contents are written by cancho-tools' `write`,
+> built into the kernel: `write --create --stdin NAME`, or `--if-sha256 HEX` for a file that is there, then the text and
+> Ctrl-D at the console, or the text as the command's input over SSH ([tools.md](tools.md)). It goes through the same
+> writer: the old contents to `OLD`, a line in the record. Where a table below says `write NAME text` or `append`, that
+> is what was typed when it was measured.
+
 > **Status: built**, in QEMU as a Pi 3 and a Pi 4, and used on the real Pi 4 (one board, one time). 0.0.29.
 
 `restart` starts the whole board again, as at power-on: the firmware runs, reads the card, and loads

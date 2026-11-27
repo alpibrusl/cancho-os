@@ -9,7 +9,7 @@ import files;
 
 // ksys.cho -- the system the kernel lends to a program that was written for one (cancho docs/bare-system.md).
 // A program's standard output and its error stream are the shell's output (`putc`, so the console or the SSH
-// session); it has no input; and its arguments are the words of the line that was typed, `line[0..k[4266]]`.
+// session); its input is `key`'s; and its arguments are the words of the line that was typed, `line[0..k[4266]]`.
 // Its files are the disk's: `h` holds what is open (`handles`), and what it writes is at the end of this file.
 // Each function is called by the compiler's own code, with what is lent before the operation's own arguments:
 // `system ksys(con, vio, dma, stage, k, line, h) in { .. }`, the console, the disk's two capabilities, the kernel's state,
@@ -31,9 +31,50 @@ pub fn err[&mc, &mv, &md, &mg, &s, &l, &hd, &p](con: &!mc Mmio("0x9000000..0x900
     return out(con, vio, dma, stage, k, line, h, p);
 }
 
-// There is nothing to read: the end of the input.
-pub fn key[&mc, &mv, &md, &mg, &s, &l, &hd](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), k: &!s [int], line: &!l [byte], h: &!hd [int]) -> [] int {
-    return 0 - 1;
+// The next byte of the program's input, or -1 at its end. Over SSH the input is what the client sent before it closed
+// its side, which the kernel collected before the program began (k[4268] is 2, k[4269] bytes of it, k[4270] of them
+// read; it waits in `stage`, a megabyte in). At the console it is what is typed, shown as it is typed, until Ctrl-D.
+// A program started any other way has no input.
+pub fn key[&mc, &mv, &md, &mg, &s, &l, &hd](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), k: &!s [int], line: &!l [byte], h: &!hd [int]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x220000..0x420000,0x40220000..0x40420000")] int {
+    if k[4268] == 2 {
+        if k[4270] >= k[4269] {
+            return 0 - 1;
+        }
+        let b = mmio_read8(stage, k[14] + 0x220000 + input_at() + k[4270]);
+        k[4270] = k[4270] + 1;
+        return b;
+    }
+    if k[26] != 0 || k[4271] != 0 {
+        return 0 - 1;
+    }
+    let uart = k[0];
+    while mmio_read32(con, uart + 0x18) & 16 != 0 {
+    }
+    var c = mmio_read32(con, uart) & 255;
+    if c == 4 {
+        k[4271] = 1;
+        return 0 - 1;
+    }
+    if c == 13 {
+        c = 10;
+        base.putc(con, k, 13);
+    }
+    base.putc(con, k, c);
+    return c;
+}
+
+// Where in `stage` a program's input waits, how much of it there may be, and where the line that started the
+// program is kept while its input is collected.
+pub fn input_at() -> [] int {
+    return 0x100000;
+}
+
+pub fn input_room() -> [] int {
+    return 0xf0000;
+}
+
+pub fn line_at() -> [] int {
+    return 0x1f8000;
 }
 
 // What is written has already gone to `putc`.
@@ -622,13 +663,13 @@ fn pathed[&hd, &r, &f](h: &!hd [int], dir: int, name: &r [byte], full: &!f [byte
     return n + len(name);
 }
 
-// Bytes for the draft: how many were taken, which is all of them, or minus why not (27: more than the memory holds).
+// Bytes for the draft: how many were taken, which is all of them, or minus why not (27: more than the megabyte it has).
 pub fn write[&mc, &mv, &md, &mg, &s, &l, &hd, &p](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), k: &!s [int], line: &!l [byte], h: &!hd [int], file: int, bytes: &p [byte]) -> [mmio("0x220000..0x420000,0x40220000..0x40420000")] int {
     if held(h, file, 4) < 0 || h[draft()] == 0 {
         return 0 - 9;
     }
     let size = h[draft() + 1];
-    if size + len(bytes) > 0x200000 - 1024 {
+    if size + len(bytes) > input_at() - 1024 {
         return 0 - 27;
     }
     var i = 0;
@@ -720,7 +761,9 @@ pub fn rename[&mc, &mv, &md, &mg, &s, &l, &hd, &p, &q](con: &!mc Mmio("0x9000000
                 i = i + 1;
             }
             n = n + len(to);
-            if !files.put_name(full, 0, n) || files.tool_kept(full, 0, n) {
+            // (BOOT.TXT is the one name `put` may not write that a program may, and only one started at the console)
+            let boot = k[26] == 0 && fat.named("BOOT.TXT", 8, full, 0, n);
+            if !boot && (!files.put_name(full, 0, n) || files.tool_kept(full, 0, n)) {
                 answer = 0 - 13;
             } else {
                 // who: a key over SSH while a line from the network is being run, else the console

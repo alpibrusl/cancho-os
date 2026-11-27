@@ -1,9 +1,10 @@
 # The tools, inside the kernel
 
 cancho-tools (https://github.com/alpibrusl/cancho-tools) are the programs an agent reads and changes files with on
-Linux and macOS: each answers in JSON, says what it may touch, and is small. Six of them are built into this kernel
-as they are written: `hash`, `peek`, `seek` and `list`, which only read, `replace`, which changes a file, and
-`move`, which changes a name. Not a
+Linux and macOS: each answers in JSON, says what it may touch, and is small. Seven of them are built into this kernel
+as they are written: `hash`, `peek`, `seek` and `list`, which only read, `write` and `replace`, which change a file,
+and `move`, which changes a name. `write` is the kernel's one way of writing a file's contents: the shell had a
+`write` and an `append` of its own, which wrote over whatever was there, and they are gone. Not a
 line of them was changed for it and none of them knows it is not on a system.
 
 ## How
@@ -15,12 +16,12 @@ docs/bare-system.md), and inside it a tool's `write_bytes` is the shell's output
 was typed, and its `open_dir`, `dir_open_read`, `file_read`, `dir_list`, `dir_stat` the FAT volume, through
 `src/ksys.cho`.
 
-`build.sh` takes the tools from a checkout beside this one (`../cancho-tools`, or `TOOLS=`), and for each of the six:
+`build.sh` takes the tools from a checkout beside this one (`../cancho-tools`, or `TOOLS=`), and for each of the seven:
 
 - puts `module tool_<name>;` after the first line and makes `run` public;
 - leaves out `main`, the last function of the file: the kernel has its own;
 - gives the generated module that says how the tool was built (`toolbox.built`, one for each tool, all of one name)
-  the tool's name, so that six can be in one image.
+  the tool's name, so that seven can be in one image.
 
 That is text moved by `awk` and `sed`, into `build/tools/`; the build stops if a tool is not written the way this
 expects. What the tools share (`contract/`) is built in as it is. `TOOLS_REF` in the workflow is the commit they are
@@ -31,9 +32,11 @@ taken at.
 The four that read: read. `HOSTKEY.BIN` is refused them as it is the shell (`files.secret`), and a name that begins
 with a dot is not found and not listed. A key that may only read may run them (`reading` in kernel.cho).
 
-## A tool that writes
+## The tools that write
 
-`replace --old TEXT --new TEXT PATH` changes a file the way the tools change one on a system: it holds a lock, makes
+`write (--create | --if-sha256 HEX) --stdin PATH` makes a file, or writes over one whose contents the caller has
+named by their hash; `replace --old TEXT --new TEXT PATH` changes text in one. Both change a file the way the tools
+change one on a system: it holds a lock, makes
 a temporary file beside the one it changes, writes the new contents to it, has it kept, and renames it over the name.
 Here those five steps are one write of the disk, and it is not the tool that makes it:
 
@@ -51,7 +54,8 @@ Here those five steps are one write of the disk, and it is not the tool that mak
 
 What a program may not do through `ksys`, each refused with the number a system would give:
 
-- write a name `put` may not write (13): `HOSTKEY.BIN`, `LOG.TXT`, `BOOT.TXT`, anything under `OLD`;
+- write a name `put` may not write (13): `HOSTKEY.BIN`, `LOG.TXT`, anything under `OLD`, and `BOOT.TXT`, which a
+  program started at the console may write and one started over SSH may not (docs/boot.md);
 - rename a file of the disk over another, or remove one (30): no tool deletes;
 - change a file the board starts from (13): the kernel's image, `config.txt`, what the firmware loads. `put` does
   that, and checks every byte;
@@ -64,7 +68,19 @@ made, since what it holds does not change; the record gains a line, `move`, with
 written first, then the new name, then the old one is taken away: a board that loses power between the last two has
 the file under both names.
 
-A key that may only read is refused `replace` and `move` by the shell, before the tool runs, as it is refused `write`.
+A key that may only read is refused `write`, `replace` and `move` by the shell, before the tool runs.
+
+## A program's input
+
+`write --stdin` reads what it is to write. `ksys.key` answers `getchar`:
+
+- **At the console** it is what is typed after the command, shown as it is typed, until Ctrl-D. Enter is a line feed.
+  Nothing else runs meanwhile: the network is not served while a program waits for a key.
+- **Over SSH**, for `ssh host 'write ...' < file`: the shell keeps the line, collects what the client sends until the
+  client closes its side, and then runs the line with those bytes as the program's input. They wait in memory, a
+  megabyte in from where a draft waits: 983,040 bytes at most, and more is refused before the program runs.
+- A program started from a shell session over SSH (not `ssh host command`) has no input: its first read is the end.
+
 
 `cancho authority` of the kernel gains `dir_write` and `file_write` with `replace`, and `err_write` with the first four (a tool writes its usage errors there; here both streams
 are the shell's output), and already had `heap`, `args`, `io_write` and the three that read files from step 3.
@@ -76,9 +92,11 @@ are the shell's output), and already had `heap`, `args`, `io_write` and the thre
   without them, and no memory left is a trap too (the heap is the kernel's, 16 MB of it).
 - **The status a tool ends with is dropped.** Over SSH the session ends with 0 whatever the tool answered; the JSON
   says `"ok":false`.
-- **The tools that read their input** (`tally`, `jsonq`) are not built in, and of the ones that write only `replace`
-and `move` are. `write` takes its contents from its input, which a program here does not have yet, and its name
-  is the shell's own `write`; `archive` makes directories.
+- **`tally` and `jsonq`**, which read their input, are not built in yet, though a program now has one; nor is
+  `archive`, which makes directories.
+- **What a tool prints is cut at 4,000 bytes over SSH** (the shell's queue). `write` and `replace` print the lines
+  that changed: `--max-diff-lines 0` keeps the answer short.
+- **`disk.extend`**, which added to a file in place for the shell's `append`, has no caller now.
 - **Why a write failed is mostly lost.** `files.store_as` says why in words, which are not printed for a tool, and
   answers yes or no: a full disk and a disk that could not be read are both 5 to the tool.
 - **A tool's write is recorded as `write`**, the shell's word: the record does not say a tool made it. A `move` has
@@ -88,7 +106,7 @@ and `move` are. `write` takes its contents from its input, which a program here 
 - **Time.** FAT keeps local time and no zone; `list --long` gives it as if it were UTC.
 - **A listing walks the directory again for each name** (`ksys.next`), and `dir_stat` three times for each: a
   directory of a thousand names would be slow. None here is that long.
-- `replace` and `move` are not tried on a real board. The four that read are: they ran on the Raspberry Pi 4 from its card on
+- `write`, `replace` and `move` are not tried on a real board. The four that read are: they ran on the Raspberry Pi 4 from its card on
   2026-11-27, and `hash KERNEL8.IMG` there gave what `shasum` gives the same file on a Mac.
 
 ## Measured
@@ -124,3 +142,10 @@ renamed, a name that is taken, one that is not there, a new name with a `/` in i
 afterwards answer the same twelve lines as on the Mac; the files are the same bytes under their new names;
 `fsck_msdos` finds nothing wrong; the record has four lines that follow. `move` to `KERNEL8.IMG` is refused (13).
 The image is 723,024 bytes with the six tools.
+
+`write` and a program's input (2026-11-27), in QEMU as `virt`: a file typed at the console (two lines and Ctrl-D) is
+those bytes; written over with `--if-sha256` of what it held, and refused with a hash it does not have; `--create`
+on a name that is taken is refused; `BOOT.TXT` is written at the console and refused over SSH, `KERNEL8.IMG` and
+`CONFIG.TXT` refused both ways. Over SSH with OpenSSH's client, 220,890 bytes sent as the command's input become a
+file whose SHA-256 is what `shasum` gives the bytes that were sent, and the record's line says which key. `./keys.sh`
+passes with `KEYS.TXT` written by `write`. The image is 766,000 bytes with the seven tools.

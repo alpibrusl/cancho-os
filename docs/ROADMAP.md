@@ -82,7 +82,8 @@
   file is a draft in memory and its rename is one write through `put`'s writer: read back, the old contents in OLD,
   a line in the record. Same answers and same files as the same tool on a Mac; `fsck_msdos` and `checklog.py` judge
   the volume. `move` the same day: a name changed, never over another, recorded. In QEMU; the four tools that read
-  ran on the real Pi 4. Next: an input for programs, then `write` in place of the shell's own; then keys for agents.
+  ran on the real Pi 4. Then an input for programs (typed until Ctrl-D, or what an SSH client sends) and `write` in place of the shell's
+  own `write` and `append`, which are gone. Next: keys for agents with grants.
 - Long names (2026-11-26, docs/storage.md): read, written, replaced and removed; the pieces made here are the
   pieces macOS makes. With directories, a source tree can live on the card.
 - Directories (2026-11-26, docs/storage.md): a name may be a path; `mkdir`, `ls <path>`.

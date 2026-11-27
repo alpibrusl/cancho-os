@@ -1,5 +1,11 @@
 # Storage
 
+> **Since 2026-11-27** the shell has no `write` and no `append`. A file's contents are written by cancho-tools' `write`,
+> built into the kernel: `write --create --stdin NAME`, or `--if-sha256 HEX` for a file that is there, then the text and
+> Ctrl-D at the console, or the text as the command's input over SSH ([tools.md](tools.md)). It goes through the same
+> writer: the old contents to `OLD`, a line in the record. Where a table below says `write NAME text` or `append`, that
+> is what was typed when it was measured.
+
 > **Status: reading and a first kind of writing work, in QEMU.** A file can be added, and added to; nothing
 > that is there can be changed or removed yet. No real card.
 
@@ -69,8 +75,8 @@ Not "write a sector". [`permissions.md`](permissions.md) is the design: who may 
 grants, not users), every write a new version, a record that is only added to, and an order of writes in
 which a power cut never leaves a file half changed. It was written before any code that writes.
 
-**Three slices are built**: `write <name> <text>` makes a file, `append <name> <text>` adds a line
-to one, `copy <from> <to>` makes a new file with another's contents. Since the third slice `write` to a
+**Three slices are built**: `write` makes a file (since 2026-11-27 cancho-tools' `write`; before it a command of
+the shell's, with `append`, which added a line to one), `copy <from> <to>` makes a new file with another's contents. Since the third slice `write` to a
 name that exists replaces it and `remove <name>` takes it away, and both keep what the file held, in the
 directory `OLD`; every change has a line in `LOG.TXT`. [`permissions.md`](permissions.md) has the order
 of writes and what was measured.
@@ -110,7 +116,7 @@ the shell may add files).
 ## Directories
 
 A name may have directories before it, with `/` between: `SRC/KERNEL.CHO`, to any depth. Every command
-that takes a name takes a path: `cat`, `sum`, `write`, `append`, `copy`, `remove`, and `put` over SSH.
+that takes a name takes a path: `cat`, `sum`, `write`, `copy`, `remove`, and `put` over SSH.
 `mkdir <path>` makes a directory (its one cluster first, holding the two entries every directory begins
 with; then its name, last, with a line in the record). `ls <path>` lists one; `ls` shows directories
 with a `/` after the name.

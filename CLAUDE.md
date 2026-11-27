@@ -113,16 +113,19 @@ Rules of the road
   A trap in a hosted program is a trap of the kernel: one that takes a path from a person refuses `..` itself (`count` does),
   because the language traps on it. The kernel's rows carry `io_write`, `args`, `fs_read("")`, `dir_read`, `file_read` up to
   `main` until the compiler discharges them, and `docs/authority.txt` shows that.
-- The tools (docs/tools.md): cancho-tools' `hash`, `peek`, `seek`, `list`, `replace` and `move` are built in as they are, from `../cancho-tools`
+- The tools (docs/tools.md): cancho-tools' `hash`, `peek`, `seek`, `list`, `write`, `replace` and `move` are built in as they are, from `../cancho-tools`
   (or `TOOLS=`), pinned by `TOOLS_REF` in the workflow: change a tool there, never here. build.sh turns each into a module in
   `build/tools/` (text only: a `module` line, `run` made public, `main` left out); `program` in kernel.cho says which word runs
   which. A new one is believed when its answers are the same bytes as the same tool's on another machine (the CI steps do
   that). authority.sh needs build.sh to have run.
-- A program's writes (docs/tools.md, the end of `src/ksys.cho`): `replace` and `move` are the tools that write. A program never
+- A program's writes (docs/tools.md, the end of `src/ksys.cho`): `write`, `replace` and `move` are the tools that write, and `write` is the only way a file's contents are written:
+  the shell has no `write` or `append` (do not bring them back: they wrote over a file blind). A program never
   writes the disk: it makes a draft in memory and the rename of the draft is one call of `files.store_as`, `put`'s
   writer (read back, old contents to OLD, a line in the record, the name last). `move` is `files.rename`, a name changed and never over
   another. Do not give `ksys` a third way to change the disk; what it refuses (renaming or removing a file of the disk, adding to one, the kernel's own names)
-  is listed in the doc. `k[4267]` silences `putc` while that writer runs. A tool that writes must not be in
+  is listed in the doc. `k[4267]` silences `putc` while that writer runs. A program's input is `ksys.key`: typed until Ctrl-D at the
+  console (`'^D'` in test.sh), or collected by the shell from an `ssh host command` until the client closes its side
+  (`k[4268]`..`k[4272]`, `takes_input` in kernel.cho); stage memory is cut in three: a draft, the input, the kept line. A tool that writes must not be in
   `reading` (kernel.cho): a key that may only read is refused it by the shell.
 - BOOT.TXT (docs/boot.md): `src/boot.cho` (pure) holds the list of lines the kernel may type to itself at its
   start. Adding a command to that list is a decision: nothing that changes the disk, loads a kernel or restarts.
