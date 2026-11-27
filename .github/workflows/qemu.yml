@@ -405,7 +405,7 @@ jobs:
         # hashes, matches, names, lengths and, with the zone UTC, times. Then over SSH, and many times in one boot.
         run: |
           export TZ=UTC
-          for t in hash peek seek list; do
+          for t in hash peek seek list tally jsonq; do
             (cd /tmp/cancho-tools && /tmp/cancho-out/cancho build contract/*.cho tools/$t/$t.cho generated/$t/built.cho --std -o /tmp/tool-$t)
           done
           rm -rf host && mkdir -p host/SUB && cp -p lst/* host/SUB/ && cp -p hello.txt host/hello.txt
@@ -418,6 +418,13 @@ jobs:
             diff tools-want.txt tools-$img.txt
             grep -q "^still here" tools-$img.raw
           done
+          # two tools the kernel has no line for (docs/tools.md, "What each tool is"): they are in build.sh's list, and
+          # what the compiler says they perform is all the kernel knows of them. A file counted, and a document read
+          # from what is typed, answer as on this machine; `help` lists them, with a mark on the ones that write.
+          (cd host && { /tmp/tool-tally hello.txt; printf '{"a": 5, "b": [1, 2]}\n' | /tmp/tool-jsonq; }) > more-want.txt
+          MACHINE=virt DISK=n-fat16.img ./test.sh 'tally hello.txt' jsonq '{"a": 5, "b": [1, 2]}' '^D' help | tr -d '\r' > more.raw; cat more.raw
+          grep '^{"ok"' more.raw | diff more-want.txt -
+          grep -q "^tools, of cancho-tools .*: hash peek seek list replace\* move\* write\* tally jsonq$" more.raw
           # a listing with lengths and times, on the Pi 3's SD card and over SSH: the lines the same tool gives here
           (cd host && /tmp/tool-list --long SUB) > list-want.txt
           SD=n-fat32.img ./test.sh 'list --long SUB' | tr -d '\r' | grep '^{' > list-sd.txt; cat list-sd.txt
