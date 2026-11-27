@@ -6,6 +6,7 @@ import kinematics;
 import safety;
 import inet;
 import base;
+import clock;
 import network;
 import sshd;
 import disk;
@@ -843,9 +844,9 @@ fn run[&f, &mc, &mu, &mt, &mx, &mz, &s, &r, &nv, &nd, &nn, &na, &nb, &nw, &nt, &
         return 0;
     }
     if same(line, n, "help") {
-        base.puts(con, k, "commands: help, about, echo <text>, uptime, ticks, mem, board, random, disk, ls [path], cat <path>, sum <path> (list, peek and hash, in text), copy <from> <to>, remove <name>, mkdir <path>, ls <path>, versions, purge <number>, record, put <name> <bytes> <sha256> (over SSH), restart, heap, tell <words>, fail trap|spin|memory, watch on|off (at the console), hash <path>.., peek <path>, seek <text> <path>.., list [path], replace --old <text> --new <text> <path>, move <from> <to>, write (--create | --if-sha256 <hex>) --stdin <path> (then the text, and Ctrl-D), net [up|down|eth|dhcp], net ssh [on|off], lookup <name>, ping <address or name>, http <address or name> <port>, servo via <address> <port>|off, servo scan, servo pos, arm zero, arm pose, arm check <5 angles>, crash [null|write], load <bytes>\r\n");
+        base.puts(con, k, "commands: help, about, echo <text>, uptime, ticks, mem, board, random, disk, ls [path], cat <path>, sum <path> (list, peek and hash, in text), copy <from> <to>, remove <name>, mkdir <path>, ls <path>, versions, purge <number>, record, put <name> <bytes> <sha256> (over SSH), restart, heap, tell <words>, fail trap|spin|memory, watch on|off (at the console), hash <path>.., peek <path>, seek <text> <path>.., list [path], replace --old <text> --new <text> <path>, move <from> <to>, write (--create | --if-sha256 <hex>) --stdin <path> (then the text, and Ctrl-D), net [up|down|eth|dhcp], net ssh [on|off], net time <address> [port], time, lookup <name>, ping <address or name>, http <address or name> <port>, servo via <address> <port>|off, servo scan, servo pos, arm zero, arm pose, arm check <5 angles>, crash [null|write], load <bytes>\r\n");
     } else if same(line, n, "about") {
-        base.puts(con, k, "cancho-os 0.0.45: a kernel written in cancho (");
+        base.puts(con, k, "cancho-os 0.0.46: a kernel written in cancho (");
         if k[1] >= 3 {
             base.puts(con, k, "Raspberry Pi ");
             base.put_dec(con, k, k[1]);
@@ -1069,13 +1070,27 @@ fn failing[&r](line: &r [byte], n: int) -> [] bool {
     return n > 5 && same(line, 5, "fail ");
 }
 
+// `time`: the date, if the board has been told it (docs/clock.md). k[4276] is the time this line was typed at.
+fn say_time[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), k: &!s [int]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048")] int {
+    if k[4276] <= 0 {
+        return base.puts(con, k, "the board has not been told the date: `net time <address>` asks a machine on the network\r\n");
+    }
+    region r {
+        let d = alloc_slice[r](19, byte_of(0));
+        clock.text(k[4276], d);
+        base.puts(con, k, d);
+        base.puts(con, k, " (UTC), as a machine on the network said\r\n");
+    }
+    return 0;
+}
+
 fn takes_input(which: int) -> [] bool {
     return which == 9;
 }
 
 // May a key that can only read run this line? The commands that change nothing and reach nowhere.
 fn reading[&r](line: &r [byte], n: int) -> [] bool {
-    if same(line, n, "help") || same(line, n, "about") || same(line, n, "uptime") || same(line, n, "ticks") || same(line, n, "mem") || same(line, n, "board") {
+    if same(line, n, "time") || same(line, n, "help") || same(line, n, "about") || same(line, n, "uptime") || same(line, n, "ticks") || same(line, n, "mem") || same(line, n, "board") {
         return true;
     }
     if same(line, n, "net") || same(line, n, "disk") || same(line, n, "ls") || n > 3 && same(line, 3, "ls ") || same(line, n, "versions") || same(line, n, "record") || same(line, n, "exit") || same(line, n, "arm zero") || n == 0 {
@@ -1502,7 +1517,7 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s, &mk, &hp
                 if count[1] > 0 {
                     base.puts(con, k, ", ");
                     base.put_dec(con, k, count[1]);
-                    base.puts(con, k, " not run (only `net up|eth|dhcp`, `net ssh on`, `servo via`, `watch on` and `echo` are)");
+                    base.puts(con, k, " not run (only `net up|eth|dhcp`, `net ssh on`, `servo via`, `net time`, `watch on` and `echo` are)");
                 }
                 base.puts(con, k, "; a key in the next second stops it\r\n");
                 let since = base.uptime_ms(cpu);
@@ -1620,6 +1635,7 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s, &mk, &hp
                     i = i + 1;
                 }
                 k[31] = alias(cmd, k[31]);
+                k[4276] = base.wall(cpu, k);
                 if k[4179] == 3 {
                     load_grants(vio, dma, k, sx);
                 }
@@ -1630,6 +1646,8 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s, &mk, &hp
                     base.puts(con, k, "this key is an agent's: it runs the tools (hash, peek, seek, list, write, replace, move), on what it is granted\r\n");
                 } else if k[4153] == 1 && k[4179] == 1 && !reading(cmd, k[31]) {
                     base.puts(con, k, "this key may only read: that needs an owner's key\r\n");
+                } else if same(cmd, k[31], "time") {
+                    say_time(con, k);
                 } else if program(cmd, k[31]) >= 0 && takes_input(program(cmd, k[31])) && k[4268] == 0 && k[4152] != 0 {
                     // `ssh host command` with a program that reads: what the client sends is collected first, and
                     // the line is run again when the client has closed its side (the event -5 above)
@@ -1685,6 +1703,7 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s, &mk, &hp
             } else if c == 13 || c == 10 {
                 base.puts(con, k, "\r\n");
                 n = alias(line, n);
+                k[4276] = base.wall(cpu, k);
                 if same(line, n, "net ssh on") {
                     // who may log in, and the host key if the disk has kept one, before the port opens
                     load_keys(vio, dma, k, sx);
@@ -1693,7 +1712,9 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s, &mk, &hp
                         k[4176] = 1;
                     }
                 }
-                if same(line, n, "watch on") || same(line, n, "watch off") {
+                if same(line, n, "time") {
+                    say_time(con, k);
+                } else if same(line, n, "watch on") || same(line, n, "watch off") {
                     // whether a program that does not end is ended by the board being reset (docs/tools.md)
                     k[4274] = 0;
                     if same(line, n, "watch on") {

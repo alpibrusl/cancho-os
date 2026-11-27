@@ -3,6 +3,7 @@ edition 14;
 module disk;
 
 import base;
+import clock;
 import fat;
 import network;
 import sdcard;
@@ -666,6 +667,21 @@ pub fn named_at[&b, &o, &e, &t](sec: &!b [byte], o: &o [int], alias: &e [byte], 
     return fat.put_raw(sec, o[6] + pieces, alias, cluster, size, directory);
 }
 
+// The entry `named_at` has just written into `sec`, and entry `i` of a sector, said to be written now: k[4276] is the
+// time the command being run was typed at (0: the board has not been told the date, and the entry keeps the first
+// day of 1980, as before).
+pub fn touch[&b, &s](sec: &!b [byte], i: int, k: &!s [int]) -> [] int {
+    if k[4276] <= 0 {
+        return 0;
+    }
+    return fat.stamp(sec, i, clock.fat_date(k[4276]), clock.fat_time(k[4276]));
+}
+
+pub fn touch_new[&b, &o, &s](sec: &!b [byte], o: &o [int], k: &!s [int]) -> [] int {
+    touch(sec, o[6] + o[9], k);
+    return 0;
+}
+
 // Everything before the first byte of something new in the directory `dir`: the name is one, nothing
 // there has it, and there is a place for it (a directory that is a chain and has none is given another
 // cluster). 0 with `o[5]`, `o[6]` the place; else the reason is printed and 1 answered.
@@ -822,7 +838,7 @@ pub fn name_it[&mv, &md, &s, &b, &t, &i, &o, &u, &r, &e](vio: &!mv Mmio("0xa0000
     if kept(vio, dma, k, tab, info, w) != 0 || read(vio, dma, k, o[5], sec) != 0 {
         return 1;
     }
-    if named_at(sec, o, alias, text, from, to, w[0], size, false) != 0 {
+    if named_at(sec, o, alias, text, from, to, w[0], size, false) != 0 || touch_new(sec, o, k) != 0 {
         return 1;
     }
     return write(vio, dma, k, o[5], sec);

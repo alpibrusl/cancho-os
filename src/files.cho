@@ -332,6 +332,9 @@ fn change[&mc, &mv, &md, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000
                 }
                 if !bad {
                     fat.put_dots(sec, c, pd[0]);
+                    // (the directory's own two entries carry its date too: other systems read it from them)
+                    disk.touch(sec, 0, k);
+                    disk.touch(sec, 1, k);
                     bad = disk.write(vio, dma, k, fat.cluster_sector(info, c), sec) != 0;
                 }
                 bad = bad || disk.kept(vio, dma, k, tab, info, w) != 0;
@@ -339,7 +342,7 @@ fn change[&mc, &mv, &md, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000
                     base.puts(con, k, "the record could not be added to: nothing was changed\r\n");
                     bad = true;
                 }
-                bad = bad || disk.read(vio, dma, k, slot, sec) != 0 || disk.named_at(sec, o, name, text, pd[1], mid, c, 0, true) != 0 || disk.write(vio, dma, k, slot, sec) != 0;
+                bad = bad || disk.read(vio, dma, k, slot, sec) != 0 || disk.named_at(sec, o, name, text, pd[1], mid, c, 0, true) != 0 || disk.touch_new(sec, o, k) != 0 || disk.write(vio, dma, k, slot, sec) != 0;
                 if bad {
                     base.puts(con, k, "the disk is full, or could not be written: no directory was made\r\n");
                 } else {
@@ -554,7 +557,7 @@ pub fn rename[&mc, &mv, &md, &s, &r, &t](con: &!mc Mmio("0x9000000..0x9000048,0x
                 } else if disk.place(con, vio, dma, k, sec, tab, rtab, info, name, out, o, w, pd[0], new, at, nt) == 0 {
                     let slot = o[5];
                     var bad = ledger.record_add(vio, dma, k, info, w, who, "move", new, nf, nt, old, of, ot, 0, size, hd, false) != 0;
-                    bad = bad || disk.read(vio, dma, k, slot, sec) != 0 || disk.named_at(sec, o, name, new, at, nt, cluster, size, folder_too) != 0 || disk.write(vio, dma, k, slot, sec) != 0;
+                    bad = bad || disk.read(vio, dma, k, slot, sec) != 0 || disk.named_at(sec, o, name, new, at, nt, cluster, size, folder_too) != 0 || disk.touch_new(sec, o, k) != 0 || disk.write(vio, dma, k, slot, sec) != 0;
                     bad = bad || disk.unname(vio, dma, k, sec, rtab, info, pd[0], es, ei, long, long_s, long_i) != 0;
                     if !bad {
                         disk.counted(vio, dma, k, sec, info, w);
@@ -721,10 +724,11 @@ pub fn store_as[&mc, &mv, &md, &mg, &s, &r, &h, &a](con: &!mc Mmio("0x9000000..0
                 bad = disk.read(vio, dma, k, es, sec) != 0;
                 if !bad {
                     fat.set_extent(sec, ei, first_new, size);
+                    disk.touch(sec, ei, k);
                     bad = disk.write(vio, dma, k, es, sec) != 0;
                 }
             } else if !bad {
-                bad = disk.read(vio, dma, k, slot, sec) != 0 || disk.named_at(sec, o, name, text, pd[1], to, first_new, size, false) != 0 || disk.write(vio, dma, k, slot, sec) != 0;
+                bad = disk.read(vio, dma, k, slot, sec) != 0 || disk.named_at(sec, o, name, text, pd[1], to, first_new, size, false) != 0 || disk.touch_new(sec, o, k) != 0 || disk.write(vio, dma, k, slot, sec) != 0;
             }
             if !bad {
                 disk.counted(vio, dma, k, sec, info, w);

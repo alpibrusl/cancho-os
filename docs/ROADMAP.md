@@ -93,6 +93,9 @@
   Still wanted: the trap ending the program and not the kernel.
 - `ls`, `cat` and `sum` are the tools (2026-11-27, 0.0.45): short names for `list`, `peek` and `hash` in their text
   form. One program lists a directory, and it is the one held to grants.
+- The date (2026-11-27, docs/clock.md): `net time <address>` asks a machine on the network; files the kernel writes
+  are dated and the record has a line for it. Believed, not proved. Next: a grant that ends on a day, with the rule
+  that the date never goes back.
 - Long names (2026-11-26, docs/storage.md): read, written, replaced and removed; the pieces made here are the
   pieces macOS makes. With directories, a source tree can live on the card.
 - Directories (2026-11-26, docs/storage.md): a name may be a path; `mkdir`, `ls <path>`.

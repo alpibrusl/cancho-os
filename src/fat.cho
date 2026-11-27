@@ -854,6 +854,17 @@ pub fn set_extent[&b](s: &!b [byte], i: int, cluster: int, size: int) -> [] int 
     return 0;
 }
 
+// Entry `i` of `s` said to have been written at the date and time given, as FAT keeps them (`clock.fat_date`,
+// `clock.fat_time`): `changed` then reads them back.
+pub fn stamp[&b](s: &!b [byte], i: int, date: int, time: int) -> [] int {
+    if len(s) < 512 || i < 0 || i > 15 || date < 0 || date > 65535 || time < 0 || time > 65535 {
+        return -1;
+    }
+    put16(s, i * 32 + 22, time);
+    put16(s, i * 32 + 24, date);
+    return 0;
+}
+
 // FAT32 keeps a count of free clusters in a sector of its own, as a hint. After a write it is wrong, and
 // the honest value is "not known", which is all ones. 0, or -1 if `s` is not that sector.
 pub fn summary_unknown[&b](s: &!b [byte]) -> [] int {

@@ -35,6 +35,7 @@ the typing is scripted ([`docs/demo/session.py`](docs/demo/session.py)); re-rend
 | A kernel sent over SSH; restart | [docs/update.md](docs/update.md), [docs/restart.md](docs/restart.md) |
 | SSH, the network, the Pi 4's Ethernet | [docs/ssh.md](docs/ssh.md), [docs/network.md](docs/network.md), [docs/genet.md](docs/genet.md) |
 | Programs written for a system, and cancho-tools, inside the kernel | [docs/tools.md](docs/tools.md) |
+| The date, asked of a machine on the network | [docs/clock.md](docs/clock.md) |
 | The arms, read through another machine | [docs/netbus.md](docs/netbus.md) |
 | What the kernel can touch | [docs/authority.txt](docs/authority.txt) |
 

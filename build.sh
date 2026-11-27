@@ -51,7 +51,7 @@ done
     echo "    return ${keys:-0};"
     echo "}"
 } > build/authorized.cho
-"$CANCHO" build src/kernel.cho src/feetech.cho src/calibration.cho src/kinematics.cho src/so101.cho src/safety.cho src/inet.cho src/base.cho src/network.cho src/sshd.cho src/fat.cho src/disk.cho src/ledger.cho src/files.cho src/sdcard.cho src/keys.cho src/ksys.cho src/programs.cho $TOOL_FILES src/boot.cho src/record.cho build/authorized.cho "$SSH"/src/*.cho --std --target aarch64-none-elf --emit obj --clang "$(command -v "$CLANG")" -o build/kernel.o
+"$CANCHO" build src/kernel.cho src/feetech.cho src/calibration.cho src/kinematics.cho src/so101.cho src/safety.cho src/inet.cho src/base.cho src/network.cho src/sshd.cho src/fat.cho src/disk.cho src/ledger.cho src/files.cho src/sdcard.cho src/keys.cho src/clock.cho src/ksys.cho src/programs.cho $TOOL_FILES src/boot.cho src/record.cho build/authorized.cho "$SSH"/src/*.cho --std --target aarch64-none-elf --emit obj --clang "$(command -v "$CLANG")" -o build/kernel.o
 "$CLANG" --target=aarch64-none-elf -c board/boot.S -o build/boot.o
 # whatever main does not reach is dropped
 ld.lld --defsym=RAM_BASE=0 -T board/link.ld --gc-sections -o build/kernel8.elf build/boot.o build/kernel.o

@@ -209,6 +209,7 @@ pub fn record_add[&mv, &md, &s, &i, &u, &a, &r, &f, &h](vio: &!mv Mmio("0xa00000
             bad = disk.extend(vio, dma, k, sec, tab, wt, info, w, o[3], size_before, ln, n) != 0 || disk.kept(vio, dma, k, tab, info, w) != 0 || disk.read(vio, dma, k, es, sec) != 0;
             if !bad {
                 fat.set_extent(sec, ei, w[0], size_before + n);
+                disk.touch(sec, ei, k);
                 bad = disk.write(vio, dma, k, es, sec) != 0;
             }
             if !bad {

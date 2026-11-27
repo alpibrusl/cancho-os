@@ -42,6 +42,7 @@ jobs:
           /tmp/cancho-out/cancho test tests/tcp_test.cho src/inet.cho --std
           # who may log in: lines of a keys file, with keys ssh-keygen made
           /tmp/cancho-out/cancho test tests/keys_test.cho src/keys.cho --std
+          /tmp/cancho-out/cancho test tests/clock_test.cho src/clock.cho --std
           # the file system: sectors of volumes macOS's tools made, read by a second implementation
           /tmp/cancho-out/cancho test tests/fat_test.cho src/fat.cho --std
           # the record: lines Python's hashlib chained, and every damage to them (nothing traps)
@@ -543,6 +544,39 @@ jobs:
           grep -q "^fail trap|spin|memory" watch.txt
           MACHINE=virt ./test.sh 'watch on' > watch-virt.txt; cat watch-virt.txt
           grep -q "^this machine has no watchdog here" watch-virt.txt
+      - name: the date
+        # docs/clock.md. A machine on the network is asked what time it is (SNTP; tests/sntp.py here, saying a fixed
+        # moment): the kernel then says the date, dates the files it writes, and its record has a line for it. mtools
+        # reads the dates back from the volume (FAT has no zone: everything here is UTC). An answer that is not to
+        # the kernel's question, or from a machine that does not have the time, is not taken.
+        run: |
+          export TZ=UTC
+          python3 tests/sntp.py 12300 1795790412 & echo $! > sntp.pid
+          sleep 1
+          cp fat16.img c.img
+          MACHINE=virt DISKRW=c.img ./test.sh time 'net up' 'net time 10.0.0.1 12300' time 'write --create --stdin T.TXT' hello '^D' 'mkdir D' 'copy hello.txt C.TXT' ls 'cat LOG.TXT' > clock.txt; cat clock.txt
+          kill "$(cat sntp.pid)"
+          grep -q "^the board has not been told the date" clock.txt
+          grep -q "^it is 2026-11-27 14:40:1[2-9] (UTC), by 10.0.0.1, which is believed" clock.txt
+          grep -q "^2026-11-27 14:40:[12][0-9] (UTC), as a machine on the network said" clock.txt
+          grep -Eq "^6[[:space:]]+17957904[0-9][0-9][[:space:]]+T.TXT$" clock.txt
+          grep -Eq "^0[[:space:]]+17957904[0-9][0-9][[:space:]]+D/$" clock.txt
+          grep -Eq "^1[[:space:]]1 [0-9]+ kernel kernel time 179579041[2-9] " clock.txt
+          fsck.fat -n c.img
+          rm -rf cout; mkdir cout
+          mcopy -m -i c.img ::T.TXT ::C.TXT ::LOG.TXT cout/
+          python3 -c 'import os,sys; [sys.exit("%s is dated %d" % (n, os.stat("cout/"+n).st_mtime)) for n in ("T.TXT","C.TXT","LOG.TXT") if not 1795790412 <= os.stat("cout/"+n).st_mtime <= 1795790500]'
+          mdir -i c.img :: | grep -Eq "^D +<DIR> +2026-11-27 +14:4"
+          for how in stale client unsynchronised; do
+            python3 tests/sntp.py 12300 1795790412 $how & echo $! > sntp.pid
+            sleep 1
+            MACHINE=virt ./test.sh 'net up' 'net time 10.0.0.1 12300' 'echo a' 'echo b' 'echo c' 'echo d' time > clock-$how.txt; cat clock-$how.txt
+            kill "$(cat sntp.pid)"
+            grep -q "^10.0.0.1 did not say what time it is" clock-$how.txt
+            grep -q "^the board has not been told the date" clock-$how.txt
+          done
+          MACHINE=virt ./test.sh 'net up' 'net time' 'net time 10.0.0.1 x' > clock-usage.txt; cat clock-usage.txt
+          test "$(grep -c "^net time <address> \[port\]" clock-usage.txt)" -ge 1
       - name: the heap
         # cancho docs/freestanding.md, section 8: a JSON object made on the heap and printed, growing buffers read
         # back, and a block made and given back so many times that it must have been used again.
