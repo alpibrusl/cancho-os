@@ -3,7 +3,9 @@ edition 14;
 module network;
 
 import base;
+import clock;
 import inet;
+import ledger;
 import sshd;
 
 // network.cho -- the kernel's side of the network: the two links (SLIP on the second serial
@@ -1197,6 +1199,65 @@ pub fn bus_exchange[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &r, 
     return got;
 }
 
+// `net time <address> [port]`: the date, asked of a machine on the network (SNTP: docs/clock.md). One datagram to its
+// port (123 unless another is given) and one back, twice at most, two seconds each. What it says is believed: nothing proves the answer is that
+// machine's. k[4275] becomes the time the board started at, so that the time now is that and how long it has been up.
+// The time, or -1 with the reason printed.
+pub fn net_time[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], server: int, sport: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+    let ours = k[4154];
+    let card = resolve(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, server);
+    if card < 0 {
+        return -1;
+    }
+    var stamp = cpu_read(cpu, "cntvct_el0");
+    if k[37] > 0 {
+        k[37] = k[37] - 1;
+        stamp = stamp ^ k[4136 + k[37]] * 65537;
+    }
+    let port = 49152 + (stamp / 65536 & 16383);
+    var at = 0;
+    if k[10] == 2 {
+        at = 14;
+    }
+    var found = -1;
+    var tries = 0;
+    while tries < 2 && found < 0 {
+        let q = clock.question(wire, stamp);
+        var m = inet.udp_packet(reply, at, ours, server, port, sport, wire, 0, q);
+        if m > 0 && k[10] == 2 {
+            m = inet.eth_frame(reply, m, card, k[19]);
+        }
+        if m > 0 {
+            link_send(bus, vio, dma, k, reply, m, wire);
+        }
+        let asked = base.now_us(cpu);
+        while found < 0 && base.now_us(cpu) - asked < 2000000 {
+            let n = link_recv(bus, vio, dma, k, ns, frame);
+            if n > 0 {
+                var d = -1;
+                if k[10] != 2 {
+                    d = inet.udp_data(frame, 0, n, ours, server, sport, port);
+                } else if n > 14 && inet.get16(frame, 12) == 2048 {
+                    d = inet.udp_data(frame, 14, n - 14, ours, server, sport, port);
+                }
+                if d >= 0 {
+                    found = clock.answer(frame, d, inet.udp_size(frame, d), stamp);
+                } else {
+                    net_take(bus, vio, dma, k, frame, n, reply, wire, tcp, bufs, inbox, base.uptime_ms(cpu), cpu_read(cpu, "cntvct_el0"));
+                }
+            }
+        }
+        tries = tries + 1;
+    }
+    if found < 0 {
+        put_address(con, k, server);
+        base.puts(con, k, " did not say what time it is\r\n");
+        return -1;
+    }
+    k[4275] = found - base.uptime_ms(cpu) / 1000;
+    return found;
+}
+
 pub fn net_lookup[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], ns: &!n [int], frame: &!a [byte], reply: &!b [byte], wire: &!w [byte], tcp: &!t [int], bufs: &!g [byte], inbox: &!h [byte], name: &r [byte], from: int, to: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
     if k[4157] == 0 {
         base.puts(con, k, "no name server is known: `net dhcp` asks for one\r\n");
@@ -1504,6 +1565,54 @@ pub fn net_command[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h, &l, &
     }
     if n == 8 && begins(text, n, "net dhcp") {
         net_dhcp(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox);
+        return 1;
+    }
+    if n == 8 && begins(text, n, "net time") {
+        base.puts(con, k, "net time <address> [port]: the machine to ask, as four numbers; its port if it is not 123\r\n");
+        return 1;
+    }
+    if n > 9 && begins(text, n, "net time ") {
+        if k[10] == 0 {
+            base.puts(con, k, "the link is down: `net up` first\r\n");
+            return 1;
+        }
+        // the address, and after a space the port if it is not 123
+        var end = 9;
+        while end < n && int_of(text[end]) != 32 {
+            end = end + 1;
+        }
+        var sport = 123;
+        if end < n {
+            sport = 0;
+            var p = end + 1;
+            while p < n && int_of(text[p]) >= 48 && int_of(text[p]) <= 57 && sport < 65536 {
+                sport = sport * 10 + int_of(text[p]) - 48;
+                p = p + 1;
+            }
+            if p < n || sport < 1 || sport > 65535 {
+                sport = 0;
+            }
+        }
+        let server = address(text, 9, end);
+        if server < 0 || sport == 0 {
+            base.puts(con, k, "net time <address> [port]: the machine to ask, as four numbers; its port if it is not 123\r\n");
+            return 1;
+        }
+        let now = net_time(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, server, sport);
+        if now >= 0 {
+            region t {
+                let d = alloc_slice[t](20, byte_of(0));
+                let n19 = clock.text(now, d);
+                base.puts(con, k, "it is ");
+                put_text(con, k, d, 0, n19);
+                base.puts(con, k, " (UTC), by ");
+                put_address(con, k, server);
+                base.puts(con, k, ", which is believed\r\n");
+                // the record has no dates of its own: a line that says what time it was dates the ones after it
+                let dn = clock.digits(now, d);
+                ledger.note(con, vio, dma, k, 3, "time", d[0..dn]);
+            }
+        }
         return 1;
     }
     if n > 7 && begins(text, n, "lookup ") {

@@ -67,6 +67,15 @@ pub fn uptime_ms[&f](cpu: &!f Cpu) -> [cpu("cntfrq_el0"), cpu("cntvct_el0")] int
     return c / f * 1000 + c % f * 1000 / f;
 }
 
+// The time now, in seconds since 1970, or 0 if the board has not been told the date (`net time`: k[4275] is the time
+// it started at).
+pub fn wall[&f, &s](cpu: &!f Cpu, k: &!s [int]) -> [cpu("cntfrq_el0"), cpu("cntvct_el0")] int {
+    if k[4275] <= 0 {
+        return 0;
+    }
+    return k[4275] + uptime_ms(cpu) / 1000;
+}
+
 pub fn now_us[&f](cpu: &!f Cpu) -> [cpu("cntfrq_el0"), cpu("cntvct_el0")] int {
     let f = cpu_read(cpu, "cntfrq_el0");
     let c = cpu_read(cpu, "cntvct_el0");

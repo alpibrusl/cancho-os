@@ -55,7 +55,7 @@ pub fn allowed[&t](text: &t [byte], from: int, to: int) -> [] bool {
     if is(text, from, to, "servo via off") || is(text, from, to, "watch on") {
         return true;
     }
-    return begins(text, from, to, "servo via ") || begins(text, from, to, "echo ");
+    return begins(text, from, to, "servo via ") || begins(text, from, to, "net time ") || begins(text, from, to, "echo ");
 }
 
 // The file `text[0..n]` made into what is typed: each line that is allowed, then a carriage return, into `out`.

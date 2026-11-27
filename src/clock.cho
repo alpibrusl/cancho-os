@@ -1,0 +1,180 @@
+edition 14;
+
+module clock;
+
+// clock.cho -- the date (docs/clock.md). The board has no clock that keeps running without power, so it asks a
+// machine on its network (SNTP, RFC 4330): one datagram out, one back. Pure, like `inet` and `fat`: this file makes
+// the question, reads the answer, and turns a count of seconds into a date; it holds no hardware and reads no clock,
+// and no bytes make it trap.
+//
+// A time is the seconds since the start of 1970, in UTC, as everything else counts them.
+
+// The question, 48 bytes into `out`: version 4, from a client, and `stamp`, a number of ours that the answer must
+// give back, so that an answer to another question is not taken for this one's. How many bytes; -1 if no room.
+pub fn question[&o](out: &!o [byte], stamp: int) -> [] int {
+    if len(out) < 48 {
+        return 0 - 1;
+    }
+    var i = 0;
+    while i < 48 {
+        out[i] = byte_of(0);
+        i = i + 1;
+    }
+    out[0] = byte_of(0x23);
+    i = 0;
+    while i < 8 {
+        out[40 + i] = byte_of(stamp >> (56 - i * 8) & 255);
+        i = i + 1;
+    }
+    return 48;
+}
+
+// The time an answer `msg[at..at + n]` gives, or -1 if it is not an answer to the question with `stamp`: it is from a
+// server, of a server that has the time itself (stratum 1 to 15), gives our number back, and names a moment after
+// 2023, which is before this was written. Seconds are counted from 1900 in 32 bits there: a count with its top bit
+// clear is taken to be after 2036, when that count starts again.
+pub fn answer[&p](msg: &p [byte], at: int, n: int, stamp: int) -> [] int {
+    if at < 0 || n < 48 || at + 48 > len(msg) {
+        return 0 - 1;
+    }
+    if int_of(msg[at]) & 7 != 4 {
+        return 0 - 1;
+    }
+    let stratum = int_of(msg[at + 1]);
+    if stratum < 1 || stratum > 15 {
+        return 0 - 1;
+    }
+    var i = 0;
+    while i < 8 {
+        if int_of(msg[at + 24 + i]) != (stamp >> (56 - i * 8) & 255) {
+            return 0 - 1;
+        }
+        i = i + 1;
+    }
+    var secs = int_of(msg[at + 40]) * 16777216 + int_of(msg[at + 41]) * 65536 + int_of(msg[at + 42]) * 256 + int_of(msg[at + 43]);
+    if secs < 0x80000000 {
+        secs = secs + 0x100000000;
+    }
+    let unix = secs - 2208988800;
+    if unix < 1700000000 {
+        return 0 - 1;
+    }
+    return unix;
+}
+
+// `unix` as a year, a month, a day, an hour, a minute and a second, into `out` (six places). A time before 1970 is
+// the start of 1970.
+pub fn fields[&o](unix: int, out: &!o [int]) -> [] int {
+    if len(out) < 6 {
+        return 0 - 1;
+    }
+    var t = unix;
+    if t < 0 {
+        t = 0;
+    }
+    let day = t / 86400;
+    let rest = t % 86400;
+    out[3] = rest / 3600;
+    out[4] = rest % 3600 / 60;
+    out[5] = rest % 60;
+    // days to a date: the calendar repeats every 146,097 days, counted from 1 March of year 0
+    let z = day + 719468;
+    let era = z / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    out[2] = doy - (153 * mp + 2) / 5 + 1;
+    var month = mp + 3;
+    if mp >= 10 {
+        month = mp - 9;
+    }
+    out[1] = month;
+    var year = yoe + era * 400;
+    if month <= 2 {
+        year = year + 1;
+    }
+    out[0] = year;
+    return 0;
+}
+
+// The date FAT keeps for `unix`, sixteen bits: the year from 1980, the month, the day. Before 1980, and after 2107,
+// which FAT cannot say, the first day of 1980.
+pub fn fat_date(unix: int) -> [] int {
+    var date = 33;
+    region r {
+        let f = alloc_slice[r](6, 0);
+        fields(unix, f);
+        if f[0] >= 1980 && f[0] <= 2107 {
+            date = (f[0] - 1980) * 512 + f[1] * 32 + f[2];
+        }
+    }
+    return date;
+}
+
+// The time of day FAT keeps for `unix`: the hour, the minute and half the second.
+pub fn fat_time(unix: int) -> [] int {
+    var time = 0;
+    region r {
+        let f = alloc_slice[r](6, 0);
+        fields(unix, f);
+        if f[0] >= 1980 && f[0] <= 2107 {
+            time = f[3] * 2048 + f[4] * 32 + f[5] / 2;
+        }
+    }
+    return time;
+}
+
+fn two[&o](out: &!o [byte], at: int, v: int) -> [] int {
+    out[at] = byte_of(48 + v / 10 % 10);
+    out[at + 1] = byte_of(48 + v % 10);
+    return at + 2;
+}
+
+// `unix` as `2026-11-27 14:40:12`, nineteen bytes into `out`. How many; 0 if there is no room.
+pub fn text[&o](unix: int, out: &!o [byte]) -> [] int {
+    if len(out) < 19 {
+        return 0;
+    }
+    region r {
+        let f = alloc_slice[r](6, 0);
+        fields(unix, f);
+        var at = two(out, 0, f[0] / 100);
+        at = two(out, at, f[0]);
+        out[at] = byte_of('-');
+        at = two(out, at + 1, f[1]);
+        out[at] = byte_of('-');
+        at = two(out, at + 1, f[2]);
+        out[at] = byte_of(' ');
+        at = two(out, at + 1, f[3]);
+        out[at] = byte_of(':');
+        at = two(out, at + 1, f[4]);
+        out[at] = byte_of(':');
+        two(out, at + 1, f[5]);
+    }
+    return 19;
+}
+
+// `unix` in digits, into `out`. How many; 0 if there is no room or it is below zero.
+pub fn digits[&o](unix: int, out: &!o [byte]) -> [] int {
+    if unix < 0 {
+        return 0;
+    }
+    var n = 1;
+    var v = unix;
+    while v >= 10 {
+        v = v / 10;
+        n = n + 1;
+    }
+    if n > len(out) {
+        return 0;
+    }
+    v = unix;
+    var i = n;
+    while i > 0 {
+        i = i - 1;
+        out[i] = byte_of(48 + v % 10);
+        v = v / 10;
+    }
+    return n;
+}
