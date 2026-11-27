@@ -514,6 +514,34 @@ jobs:
             cat mlog.txt
             grep -q "^4 lines, 0 that do not follow" mlog.txt
           done
+      - name: a program that goes wrong does not stop the board
+        # docs/tools.md. `fail trap` reads past the end of what it has and `fail memory` asks for memory until there is
+        # none: each is a trap, inside a program the kernel is running. On a Pi that has been up ten seconds the
+        # kernel says what happened and resets the board through its watchdog; the same card starts again and
+        # answers. A fault in the first ten seconds leaves the board stopped, as before, so that a kernel that
+        # cannot start does not start for ever. (A program that never ends is ended by the same watchdog once
+        # `watch on` is typed; QEMU's Pi resets when the watchdog is started, without counting, so that is tried on
+        # a board, not here.)
+        run: |
+          for how in trap memory; do
+            cp fat32.img f-$how.img
+            set -- ; for i in 1 2 3 4 5 6 7 8 9 10 11 12; do set -- "$@" "echo warm $i"; done
+            SD=f-$how.img ./test.sh "$@" "fail $how" 'echo a' 'echo b' 'echo c' about 'hash hello.txt' > fail-$how.txt; cat fail-$how.txt
+            grep -q "^\*\*\* cancho trap" fail-$how.txt
+            grep -q "^the board restarts" fail-$how.txt
+            test "$(grep -c "^cancho-os booted" fail-$how.txt)" = 2
+            grep -q "\"hex\":\"$(sha256sum hello.txt | cut -d' ' -f1)\"" fail-$how.txt
+            fsck.fat -n f-$how.img
+          done
+          ./test.sh 'fail trap' 'echo after' > fail-early.txt; cat fail-early.txt
+          grep -q "^halted" fail-early.txt
+          test "$(grep -c "^cancho-os booted" fail-early.txt)" = 1
+          ./test.sh 'watch on' 'watch off' 'fail x' > watch.txt; cat watch.txt
+          grep -q "^a program that asks the kernel for nothing for fifteen seconds is ended" watch.txt
+          grep -q "^a program that does not end is not ended" watch.txt
+          grep -q "^fail trap|spin|memory" watch.txt
+          MACHINE=virt ./test.sh 'watch on' > watch-virt.txt; cat watch-virt.txt
+          grep -q "^this machine has no watchdog here" watch-virt.txt
       - name: the heap
         # cancho docs/freestanding.md, section 8: a JSON object made on the heap and printed, growing buffers read
         # back, and a block made and given back so many times that it must have been used again.

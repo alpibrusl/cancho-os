@@ -87,9 +87,20 @@ are the shell's output), and already had `heap`, `args`, `io_write` and the thre
 
 ## What is not right yet
 
-- **A trap in a tool is a trap of the kernel.** The tools refuse a path with `..` in it themselves, before the language
-  would trap on it, and no input was found that makes one trap; but they were written for a system that would go on
-  without them, and no memory left is a trap too (the heap is the kernel's, 16 MB of it).
+- **A program that goes wrong takes the kernel with it, and the board then starts again.** A trap in a tool is a trap
+  of the kernel: reading past the end of something, or no memory left (the heap is the kernel's, 16 MB of it). The
+  kernel says what happened on its console and, on a Pi that had been up ten seconds, resets the board through its
+  watchdog; the firmware loads the kernel from the card again, and `BOOT.TXT`, if the card has one, brings the
+  network and SSH back. About half a minute in which nobody is answered, the session that ran the program is lost,
+  and the record has no line for it. On QEMU's `virt`, which has no such watchdog, the kernel stops as before.
+- **A program that never ends** is ended the same way once `watch on` has been typed at the console, or is a line
+  of `BOOT.TXT`: the watchdog counts fifteen seconds while a program runs, and the functions a working program
+  keeps calling (`read_at`, `write`, `next`, `step`, `key`) start the count again. It is off until asked for,
+  because QEMU's Pi resets the moment the watchdog is started, so a kernel that always started it could not be
+  tried there. Without it, a program that never ends stops the board until its power is cut.
+- **What is still wanted**: a trap that ends the program and not the kernel, so that the session goes on and the
+  one who ran it is told. That needs the program's memory to be its own, thrown away whole, and the compiler to
+  take a trap inside the block that lends the system to the block's end (cancho docs/bare-system.md).
 - **The status a tool ends with is dropped.** Over SSH the session ends with 0 whatever the tool answered; the JSON
   says `"ok":false`.
 - **`tally` and `jsonq`**, which read their input, are not built in yet, though a program now has one; nor is
@@ -155,3 +166,10 @@ On the Raspberry Pi 4, from its SD card, over SSH through another machine (2026-
 as the input of `write --create --stdin TRY.TXT` are a file whose SHA-256, by the board's `hash`, is what `shasum`
 gives them on the Mac; `replace` changes one line of it and `seek` finds the new text at line 1,778; `move` renames
 it; `write --create` on the new name is refused; the record follows, 33 lines; `heap` finds nothing wrong after.
+
+A program that goes wrong (2026-11-27, 0.0.44). In QEMU as a Pi 3 with an SD card: `fail trap` and `fail memory`,
+each after the board had been up twelve seconds, are reported ("cancho trap"), the board resets, and the same card
+then answers `about` and `hash`; `fail trap` in the first seconds leaves it halted. On the Raspberry Pi 4, from its
+card, over SSH: `fail trap` and `fail memory` each reset the board, and it answered again by itself, through
+`BOOT.TXT`, within about forty seconds; with `watch on` typed at its console, `fail spin` was ended by the watchdog
+and the board answered again as soon after. The record followed afterwards, 44 lines.

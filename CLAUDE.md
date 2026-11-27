@@ -118,6 +118,11 @@ Rules of the road
   `build/tools/` (text only: a `module` line, `run` made public, `main` left out); `program` in kernel.cho says which word runs
   which. A new one is believed when its answers are the same bytes as the same tool's on another machine (the CI steps do
   that). authority.sh needs build.sh to have run.
+- A program that goes wrong (docs/tools.md): after `report_fault` a Pi up for ten seconds resets itself by its watchdog
+  (`restart`), and BOOT.TXT brings it back; sooner than that it halts. `watch on` (console or BOOT.TXT, k[4274]) makes
+  `hosted` count the watchdog while a program runs, and five functions of ksys start the count again. It cannot be
+  on by default: QEMU's Pi resets as soon as the watchdog is started. `fail trap|spin|memory` (programs.cho) is how
+  each is tried; `fail spin` only on a real board.
 - Grants (docs/permissions.md, slice 5): an `agent` line of KEYS.TXT gives a key `read:`/`write:` on directories.
   `src/keys.cho` (pure) reads the line and says what a path is covered by; `may` in `src/ksys.cho` is the ONE place
   that asks, and every function there that takes a name calls it first: a new one must too. An agent's session runs

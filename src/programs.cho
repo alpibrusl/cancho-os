@@ -2,6 +2,8 @@ edition 14;
 
 module programs;
 
+import std.buffer;
+
 // programs.cho -- the programs built into the image that were written for a system, not for this kernel: each
 // takes an `Io`, an `Args` or an `Fs` and has no word of the kernel in it (no `Mmio`, no `k`, no import of the
 // kernel's modules). `hosted` in kernel.cho runs them inside the one block that lends them `ksys`
@@ -24,4 +26,42 @@ pub fn tell[&i, &g](io: &!i Io, args: &g Args) -> [io_write, args] int {
     write_bytes(io, "that was a program written for a system, answered by the kernel\n");
     flush_out(io);
     return n - 1;
+}
+
+// `fail trap|spin|memory`: a program that goes wrong in one of the three ways a program can, so that what the kernel
+// does then can be seen (docs/tools.md): it reads past the end of what it has, which is a trap; or never ends; or
+// asks for memory until there is none, which is a trap too. An owner's command, and the console's.
+fn greedy[&h](heap: &!h Heap, depth: int) -> [heap] int {
+    // a megabyte kept while more is asked for: the heap is the kernel's sixteen
+    var b = buffer.empty(heap, 1048576);
+    b = buffer.push(heap, b, byte_of(depth & 255));
+    let deeper = greedy(heap, depth + 1);
+    buffer.drop(heap, b);
+    return deeper + 1;
+}
+
+pub fn fail[&h, &i, &g](heap: &!h Heap, args: &g Args, io: &!i Io) -> [heap, io_write, args] int {
+    var how = 0;
+    if arg_count(args) > 1 {
+        how = int_of(arg(args, 1)[0]);
+    }
+    if how == 't' {
+        write_bytes(io, "reading past the end of four bytes\n");
+        let four = "four";
+        var at = arg_count(args) + 2;
+        return int_of(four[at]);
+    }
+    if how == 's' {
+        write_bytes(io, "never ending\n");
+        var n = 0;
+        while true {
+            n = n + 1;
+        }
+    }
+    if how == 'm' {
+        write_bytes(io, "asking for memory until there is none\n");
+        return greedy(heap, 0);
+    }
+    write_bytes(io, "fail trap|spin|memory\n");
+    return 1;
 }

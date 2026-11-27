@@ -88,3 +88,33 @@ pub fn bus_get[&mu, &s](bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe2
     }
     return mmio_read32(bus, u + 0x40) & 255;
 }
+
+// The watchdog of a Pi's power block (docs/restart.md), for a program that may never end (docs/tools.md): `ticks`
+// sixty-five-thousandths of a second from now the board is reset, as at power-on, unless this is called again
+// first; with 0 it is stopped. Only once `watch on` has been typed (k[4274]): QEMU's Pi resets when the watchdog is
+// started, without counting, so a kernel that always started it could not be tried there. Twenty bits of count: sixteen seconds at most. Other machines have none here.
+pub fn watchdog[&mk, &s](pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), k: &!s [int], ticks: int) -> [mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028")] int {
+    var b = 0;
+    if k[1] == 3 {
+        b = 0x3f100000;
+    } else if k[1] == 4 {
+        b = 0xfe100000;
+    } else {
+        return 1;
+    }
+    if k[4274] == 0 {
+        // not asked for (`watch on`): it is left as it is
+        return 1;
+    }
+    if ticks <= 0 {
+        // (what Linux's driver writes to stop it: no reset pending, the count ignored)
+        return mmio_write32(pm, b + 0x1c, 0x5a000000 | 0x102);
+    }
+    mmio_write32(pm, b + 0x24, 0x5a000000 | ticks & 0xfffff);
+    return mmio_write32(pm, b + 0x1c, 0x5a000000 | mmio_read32(pm, b + 0x1c) & 0xffffcf | 0x20);
+}
+
+// How long a program may go without asking the kernel for anything: fifteen seconds.
+pub fn patience() -> [] int {
+    return 15 * 65536;
+}
