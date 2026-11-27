@@ -77,16 +77,18 @@ grep -q "new, and kept on the disk as HOSTKEY.BIN" build/keys1.out || ok=1
 grep -q "read from the disk: the same as before the restart" build/keys2.out || ok=1
 grep -q "and from KEYS.TXT on the disk: 1" build/keys1.out || ok=1
 grep -q '^    {"ok":true,"command":"write","schema":"write.v1","data":{"path":"O.TXT","changed":true,"created":true,"bytes":20' build/keys-ssh.out || ok=1
-grep -q "^    O.TXT " build/keys-ssh.out || ok=1
+grep -q "^    20[[:space:]].*[[:space:]]O.TXT$" build/keys-ssh.out || ok=1
 # (the shell's `write`, the tool `replace`, which writes through a lent system, and `ping`)
 [ "$(grep -c "this key may only read: that needs an owner's key" build/keys-ssh.out)" = 3 ] || ok=1
-[ "$(grep -c "the host key is kept by the kernel" build/keys-ssh.out)" = 2 ] || ok=1
-[ "$(grep -c "^    written by an owner" build/keys-ssh.out)" = 2 ] || ok=1
+# (`cat` is the tool `peek`, refused the file by the kernel; `copy` is the shell's, which says why)
+[ "$(grep -c "the host key is kept by the kernel" build/keys-ssh.out)" = 1 ] || ok=1
+grep -q "^    peek: io.permission-denied" build/keys-ssh.out || ok=1
+[ "$(grep -c "^    1[[:space:]]written by an owner" build/keys-ssh.out)" = 2 ] || ok=1
 grep -q "Permission denied" build/keys-ssh.out || ok=1
 # and neither refused write left a file behind
 cat build/keys-ls.out
-grep -q "^    O.TXT " build/keys-ls.out || ok=1
-grep -q "^    R.TXT \|^    STOLEN.BIN " build/keys-ls.out && ok=1
+grep -q "[[:space:]]O.TXT$" build/keys-ls.out || ok=1
+grep -q "[[:space:]]R.TXT$\|[[:space:]]STOLEN.BIN$" build/keys-ls.out && ok=1
 # a key is taken away by removing the file that gave it (what the file held is kept as a version)
 cat build/keys-gone.out
 grep -q "^    removed; what it held is OLD/00000001.V" build/keys-gone.out || ok=1

@@ -98,7 +98,7 @@ jobs:
         run: |
           head -c 300000 /dev/urandom > big.bin
           printf 'hello from a file, to cancho-os\n' > hello.txt
-          want=$(python3 -c 'import zlib,sys; print("%08x" % zlib.adler32(open("big.bin","rb").read()))')
+          want=$(sha256sum big.bin | cut -d' ' -f1)
           mkfs.fat -F 32 -s 1 -C fat32.img 65536 > /dev/null
           mkfs.fat -F 16 -C fat16.img 16384 > /dev/null
           truncate -s 66M part.img
@@ -109,20 +109,21 @@ jobs:
           mcopy -i part.img@@1M big.bin hello.txt ::
           for img in fat32 fat16 part; do
             MACHINE=virt DISK=$img.img ./test.sh disk ls 'cat hello.txt' 'sum BIG.BIN' 'cat nothere.txt' > disk-$img.txt; cat disk-$img.txt
-            grep -q "^300000 bytes, adler32 $want" disk-$img.txt
-            grep -q "^hello from a file, to cancho-os" disk-$img.txt
-            grep -Eq "^BIG.BIN +300000" disk-$img.txt
-            grep -q "^no such file" disk-$img.txt
+            grep -q "^$want  BIG.BIN" disk-$img.txt
+            grep -q "^1[[:space:]]hello from a file, to cancho-os" disk-$img.txt
+            grep -Eq "^300000[[:space:]]+[0-9]+[[:space:]]+BIG.BIN$" disk-$img.txt
+            grep -q "^peek: io.not-found" disk-$img.txt
           done
           grep -q "a FAT32 volume at sector 0," disk-fat32.txt
           grep -q "a FAT16 volume at sector 0," disk-fat16.txt
           grep -q "a FAT32 volume at sector 2048," disk-part.txt
           # the same file over SSH, from the disk to another machine's screen
           MACHINE=virt DISK=fat32.img SSHKEY=/tmp/sshkey SSHCMD='sum BIG.BIN' ./test.sh 'net up' 'net ssh on' net > sshdisk.txt; cat sshdisk.txt
-          grep -q "^ssh: 300000 bytes, adler32 $want" sshdisk.txt
+          grep -q "^ssh: $want  BIG.BIN" sshdisk.txt
           # and with no disk, the commands say so
           MACHINE=virt ./test.sh disk > nodisk.txt; ./test.sh ls >> nodisk.txt; cat nodisk.txt
-          test "$(grep -c "^no disk" nodisk.txt)" = 2
+          test "$(grep -c "^no disk" nodisk.txt)" = 1
+          grep -q "^list: io.read-failed" nodisk.txt
       - name: files written to a disk
         # docs/permissions.md, slice 1. The kernel adds files to copies of the three volumes and adds to one
         # of them; then Linux's own tools judge the result: fsck.fat must find nothing wrong, and mcopy must
@@ -172,7 +173,7 @@ jobs:
             grep -q '"rule":"precondition.hash-mismatch"' v-$img.txt
             grep -q "^removed; what it held is OLD/00000003.V" v-$img.txt
             grep -q "^copied: 300000 bytes" v-$img.txt
-            grep -q "^one" v-$img.txt
+            grep -q "^1[[:space:]]one" v-$img.txt
             grep -q "^purged: OLD/00000001.V, 1 clusters given back" v-$img.txt
             grep -q "^2 versions kept" v-$img.txt
             test "$(grep -c "^that name is the kernel's" v-$img.txt)" = 1
@@ -204,18 +205,18 @@ jobs:
           grep -q "line 1 does not follow from the one before it" v-broken.txt
           grep -q '^ssh: {"ok":false,"command":"write"' v-broken.txt
           grep -q '"path":"T.TXT","changed":true,"created":true,"bytes":15' v-broken.txt
-          grep -Eq "^T.TXT +15" v-broken.txt
-          if grep -Eq "^S.TXT " v-broken.txt; then exit 1; fi
+          grep -Eq "^15[[:space:]]+[0-9]+[[:space:]]+T.TXT$" v-broken.txt
+          if grep -Eq "^[0-9]+[[:space:]]+[0-9]+[[:space:]]+S.TXT$" v-broken.txt; then exit 1; fi
       - name: an SD card
         # docs/sdcard.md. The same volumes as a Pi 3's card (this runner's QEMU has no Pi 4): read, then
         # written, and the written image judged by fsck.fat, mcopy and the record's checker.
         run: |
-          want=$(python3 -c 'import zlib,sys; print("%08x" % zlib.adler32(open("big.bin","rb").read()))')
+          want=$(sha256sum big.bin | cut -d' ' -f1)
           for img in fat32 fat16; do
             cp $img.img sd-$img.img
             SD=sd-$img.img ./test.sh disk 'sum BIG.BIN' 'write --create --stdin A.TXT' one '^D' "write --if-sha256 $(printf 'one\n' | sha256sum | cut -d' ' -f1) --stdin A.TXT" two '^D' 'copy BIG.BIN C.BIN' 'remove BIG.BIN' 'sum OLD/00000002.V' record > sd-$img.txt; cat sd-$img.txt
             grep -q "^an SD card of " sd-$img.txt
-            test "$(grep -c "^300000 bytes, adler32 $want" sd-$img.txt)" = 2
+            test "$(grep -c "^$want  " sd-$img.txt)" = 2
             grep -q '"path":"A.TXT","changed":true,"created":false,"bytes":4' sd-$img.txt
             grep -q "^the record: 4 lines, each following from the one before" sd-$img.txt
             fsck.fat -n sd-$img.img
@@ -286,14 +287,14 @@ jobs:
             cp $img.img d-$img.img
             MACHINE=virt DISKRW=d-$img.img ./test.sh 'mkdir SRC' 'write --create --stdin SRC/A.TXT' one '^D' "write --if-sha256 $(printf 'one\n' | sha256sum | cut -d' ' -f1) --stdin SRC/A.TXT" two '^D' 'copy BIG.BIN SRC/B.BIN' 'mkdir SRC/DEEP' 'copy SRC/B.BIN SRC/DEEP/C.BIN' ls 'ls SRC' 'cat OLD/00000001.V' 'write --create --stdin OLD/X' y '^D' 'copy SRC/A.TXT OLD/Y' 'write --create --stdin SRC/../HOSTKEY.BIN' x '^D' 'cat SRC/../HOSTKEY.BIN' 'cat NOPE/A.TXT' 'remove SRC' record > d-$img.txt; tail -24 d-$img.txt
             test "$(grep -c "^made: a directory" d-$img.txt)" = 2
-            grep -q "^SRC/" d-$img.txt
-            grep -q "^DEEP/" d-$img.txt
-            grep -q "^one" d-$img.txt
+            grep -Eq "^[0-9]+[[:space:]]+[0-9]+[[:space:]]+SRC/$" d-$img.txt
+            grep -Eq "^[0-9]+[[:space:]]+[0-9]+[[:space:]]+SRC/DEEP/$" d-$img.txt
+            grep -q "^1[[:space:]]one" d-$img.txt
             grep -q "^that name is the kernel's" d-$img.txt
             grep -q '"rule":"io.permission-denied".*"path":"OLD/X"' d-$img.txt
             grep -q '"rule":"path.dotdot"' d-$img.txt
-            grep -q "^not a path" d-$img.txt
-            grep -q "^no such directory" d-$img.txt
+            grep -q "^peek: path.dotdot" d-$img.txt
+            grep -q "^peek: io.not-found" d-$img.txt
             grep -q "^that is a directory" d-$img.txt
             grep -q "^the record: 6 lines, each following from the one before" d-$img.txt
             fsck.fat -n d-$img.img
@@ -312,12 +313,12 @@ jobs:
             set -- 'mkdir sources'
             for i in 1 2 3 4 5 6 7 8 9 10 11 12; do set -- "$@" "write --create --stdin sources/a-rather-long-source-file-name-$i.cho" "fn f$i" '^D'; done
             MACHINE=virt DISKRW=l-$img.img ./test.sh "$@" 'cat made-by-another-system.text' "write --if-sha256 $(sha256sum hello.txt | cut -d' ' -f1) --stdin made-by-another-system.text" replaced '^D' 'copy BIG.BIN sources/a-big-binary-file.bin' 'remove sources/a-rather-long-source-file-name-3.cho' 'ls sources' 'copy BIG.BIN bad:name' record > l-$img.txt; tail -22 l-$img.txt
-            grep -q "^hello from a file, to cancho-os" l-$img.txt
+            grep -q "^1[[:space:]]hello from a file, to cancho-os" l-$img.txt
             grep -q '"path":"made-by-another-system.text","changed":true,"created":false,"bytes":9' l-$img.txt
-            grep -q "^a-rather-long-source-file-name-12.cho " l-$img.txt
-            grep -q "^a-big-binary-file.bin 300000" l-$img.txt
-            if grep -q "^a-rather-long-source-file-name-3.cho " l-$img.txt; then exit 1; fi
-            grep -q "^12 files" l-$img.txt
+            grep -Eq "^[0-9]+[[:space:]]+[0-9]+[[:space:]]+sources/a-rather-long-source-file-name-12.cho$" l-$img.txt
+            grep -Eq "^300000[[:space:]]+[0-9]+[[:space:]]+sources/a-big-binary-file.bin$" l-$img.txt
+            if grep -Eq "^[0-9]+[[:space:]]+[0-9]+[[:space:]]+sources/a-rather-long-source-file-name-3.cho$" l-$img.txt; then exit 1; fi
+            test "$(grep -Ec "^[0-9]+[[:space:]]+[0-9]+[[:space:]]+sources/" l-$img.txt)" = 12
             grep -q "^not a name" l-$img.txt
             fsck.fat -n l-$img.img
             mcopy -i l-$img.img "::sources/a-rather-long-source-file-name-12.cho" l12.out && test "$(cat l12.out)" = "fn f12"
@@ -340,7 +341,7 @@ jobs:
           grep -q "^ssh on port 22" boot2.txt
           test "$(grep -c "^cancho-os booted" boot2.txt)" = 1
           grep -q '^ssh: {"ok":false,"command":"write".*"rule":"io.permission-denied"' boot2.txt
-          grep -q "^echo the board is up" boot2.txt
+          grep -q "^5[[:space:]]echo the board is up" boot2.txt
           fsck.fat -n b.img
       - name: a system lent to a program written for one
         # cancho docs/bare-system.md. `tell` takes an Io and an Args and nothing of the kernel; what it writes and
@@ -482,7 +483,7 @@ jobs:
           grep -q "\"hex\":\"$(sha256sum wsrc/TEXT.TXT | cut -d' ' -f1)\"" replace-sd.txt
           MACHINE=virt DISKRW=tw-fat16.img SSHKEY=/tmp/sshkey SSHCMD='replace --old thimble --new needle TEXT.TXT' ./test.sh 'net up' 'net ssh on' 'cat LOG.TXT' > replace-ssh.txt; cat replace-ssh.txt
           grep -q '^ssh: {"ok":true,"command":"replace"' replace-ssh.txt
-          grep -q "^6 [0-9]* key:[0-9a-f]* owner write TEXT.TXT " replace-ssh.txt
+          grep -q "^6[[:space:]]6 [0-9]* key:[0-9a-f]* owner write TEXT.TXT " replace-ssh.txt
           fsck.fat -n tw-fat16.img
           mcopy -i tw-fat16.img ::TEXT.TXT back.out && cmp back.out wsrc/TEXT.TXT
       - name: a tool renames a file

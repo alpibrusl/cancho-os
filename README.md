@@ -325,7 +325,7 @@ card is taken out.
 
 The kernel reads a FAT16 or FAT32 disk ([docs/storage.md](docs/storage.md)): QEMU's `virt` disk, or a
 Pi's SD card ([docs/sdcard.md](docs/sdcard.md)):
-`disk`, `ls`, `cat <name>`, `sum <name>`, and it can change one: `copy <from> <to>`, `remove <name>`, and
+`disk`, and `ls`, `cat <path>`, `sum <path>` (cancho-tools' `list`, `peek` and `hash`, answering in text), and it can change one: `copy <from> <to>`, `remove <name>`, and
 cancho-tools' own `write`, `replace` and `move`, built in ([docs/tools.md](docs/tools.md)): `write --create --stdin <name>`,
 then the text, then Ctrl-D. A file that is there is written over only by one who gives its hash (`--if-sha256`).
 Nothing is lost by any of them

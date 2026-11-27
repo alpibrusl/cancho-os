@@ -748,12 +748,14 @@ pub fn store_as[&mc, &mv, &md, &mg, &s, &r, &h, &a](con: &!mc Mmio("0x9000000..0
 // 1 if `text[0..n]` was one of them and has been run, 0 if it is another command.
 pub fn command[&mc, &mv, &md, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], text: &r [byte], n: int, console: bool) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
     let is_disk = n == 4 && begins(text, n, "disk");
-    let is_ls = n == 2 && begins(text, n, "ls");
-    let is_lsdir = n > 3 && begins(text, n, "ls ");
+    // (`ls`, `cat` and `sum` were the shell's own until 0.0.45: they are cancho-tools' `list`, `peek` and `hash` now,
+    // by `alias` in kernel.cho, and nothing here is asked for them)
+    let is_ls = false;
+    let is_lsdir = false;
     let is_versions = n == 8 && begins(text, n, "versions");
     let is_record = n == 6 && begins(text, n, "record");
-    let is_cat = n > 4 && begins(text, n, "cat ");
-    let is_sum = n > 4 && begins(text, n, "sum ");
+    let is_cat = false;
+    let is_sum = false;
     // what the shell will not touch: the host key as a source, and the kernel's own names as a place
     var first = 0;
     var what = 0;

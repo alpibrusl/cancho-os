@@ -128,6 +128,9 @@ Rules of the road
   that asks, and every function there that takes a name calls it first: a new one must too. An agent's session runs
   only programs (kernel.cho), because the shell's own commands do not ask. Grants are read from the file before each
   line (`load_grants`, into k[4280..]). `./agents.sh` is the test; a change here is believed when it passes.
+- `ls`, `cat`, `sum` are `list`, `peek`, `hash` in text (`alias` in kernel.cho, docs/tools.md): the shell has no
+  listing or reading of its own. A test that reads their output reads the tool's: anchor a check at the line's
+  start (`^[0-9]+...`), since test.sh's output also holds the commands that were typed.
 - A program's writes (docs/tools.md, the end of `src/ksys.cho`): `write`, `replace` and `move` are the tools that write, and `write` is the only way a file's contents are written:
   the shell has no `write` or `append` (do not bring them back: they wrote over a file blind). A program never
   writes the disk: it makes a draft in memory and the rename of the draft is one call of `files.store_as`, `put`'s

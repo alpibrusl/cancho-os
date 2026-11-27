@@ -27,6 +27,22 @@ That is text moved by `awk` and `sed`, into `build/tools/`; the build stops if a
 expects. What the tools share (`contract/`) is built in as it is. `TOOLS_REF` in the workflow is the commit they are
 taken at.
 
+## The shell's short names
+
+`ls [path]`, `cat <path>` and `sum <path>` are three of the tools under the names a person types (since 0.0.45; they
+were commands of the shell's own, a second way of listing a directory and reading a file that asked nobody about
+grants). `alias` in `src/kernel.cho` writes the line out in full where it stands, and the tool runs:
+
+| typed | run | what a person sees |
+|---|---|---|
+| `ls [path]` | `list --long --format text <path or .>` | a line a name: its length, when it was written, its path |
+| `cat <path>` | `peek --format text --lines 1: --max-bytes 16777216 <path>` | the file's lines, numbered |
+| `sum <path>` | `hash --format text <path>` | the SHA-256 and the name, as `sha256sum` writes them |
+
+So an agent may type `ls` too, and is held to its grants; a file's whole bytes, unnumbered, are not what `cat`
+gives any more (`copy` and `put` move bytes); and `sum` is a SHA-256 where it was an Adler-32. `disk.whole` and the
+shell's listing in `files.cho` have no caller now.
+
 ## What they may do
 
 The four that read: read. `HOSTKEY.BIN` is refused them as it is the shell (`files.secret`), and a name that begins
