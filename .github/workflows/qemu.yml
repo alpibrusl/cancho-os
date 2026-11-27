@@ -41,7 +41,7 @@ jobs:
           # TCP: whole conversations against segments the second implementation built, with the time made up
           /tmp/cancho-out/cancho test tests/tcp_test.cho src/inet.cho --std
           # who may log in: lines of a keys file, with keys ssh-keygen made
-          /tmp/cancho-out/cancho test tests/keys_test.cho src/keys.cho --std
+          /tmp/cancho-out/cancho test tests/keys_test.cho src/keys.cho src/clock.cho --std
           /tmp/cancho-out/cancho test tests/clock_test.cho src/clock.cho --std
           # the file system: sectors of volumes macOS's tools made, read by a second implementation
           /tmp/cancho-out/cancho test tests/fat_test.cho src/fat.cho --std

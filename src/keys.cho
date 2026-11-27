@@ -2,6 +2,8 @@ edition 5;
 
 module keys;
 
+import clock;
+
 // `keys` -- the file that says who may log in (docs/permissions.md): KEYS.TXT, a line a key,
 //
 //     owner ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... a name for people to read
@@ -241,9 +243,49 @@ fn grant_word[&t, &g](text: &t [byte], at: int, end: int, gr: &!g [int], e: int)
     return true;
 }
 
-// What the file `text[0..n]` grants the key `key` (32 bytes), into `gr`: how many grants. Every `agent` line with
-// that key adds its own, up to the four `gr` holds; a key with no such line is granted nothing. Never traps.
-pub fn grants_for[&t, &k, &g](text: &t [byte], n: int, key: &k [byte], gr: &!g [int]) -> [] int {
+// A word `until:YYYY-MM-DD` at `text[at..end]`: the last second of that day, in UTC; -1 if the word begins `until:`
+// and is not a day; -2 if it is another word.
+fn until_word[&t](text: &t [byte], at: int, end: int) -> [] int {
+    if !is(text, at, end, "until:") {
+        return 0 - 2;
+    }
+    if end - at != 16 || int_of(text[at + 10]) != 45 || int_of(text[at + 13]) != 45 {
+        return 0 - 1;
+    }
+    var v = 0;
+    var year = 0;
+    var month = 0;
+    var i = at + 6;
+    while i < end {
+        let c = int_of(text[i]);
+        if i == at + 10 {
+            year = v;
+            v = 0;
+        } else if i == at + 13 {
+            month = v;
+            v = 0;
+        } else if c < 48 || c > 57 {
+            return 0 - 1;
+        } else {
+            v = v * 10 + c - 48;
+        }
+        i = i + 1;
+    }
+    let start = clock.day_start(year, month, v);
+    if start < 0 {
+        return 0 - 1;
+    }
+    return start + 86399;
+}
+
+// What the file `text[0..n]` grants the key `key` (32 bytes) at the time `now`, into `gr`: how many grants. Every
+// `agent` line with that key adds its own, up to the four `gr` holds; a key with no such line is granted nothing.
+//
+// A line may end its grants with `until:YYYY-MM-DD`: they hold through that day (UTC) and not after. Such a line
+// grants nothing if the day is over, if the board has not been told the date (`now` 0: what ends on a day is taken
+// to have ended), or if the word is not a day: a line that was meant to end does not last for ever by a slip of
+// the hand. Never traps.
+pub fn grants_for[&t, &k, &g](text: &t [byte], n: int, key: &k [byte], gr: &!g [int], now: int) -> [] int {
     if len(gr) < 1 {
         return 0;
     }
@@ -278,6 +320,8 @@ pub fn grants_for[&t, &k, &g](text: &t [byte], n: int, key: &k [byte], gr: &!g [
                 }
                 at = at + 6 + 12 + 68;
                 var going = same;
+                let before = gr[0];
+                var ends = 0 - 2;
                 while going && at < end {
                     while at < end && (int_of(text[at]) == 32 || int_of(text[at]) == 9) {
                         at = at + 1;
@@ -286,11 +330,20 @@ pub fn grants_for[&t, &k, &g](text: &t [byte], n: int, key: &k [byte], gr: &!g [
                     while stop < end && int_of(text[stop]) != 32 && int_of(text[stop]) != 9 {
                         stop = stop + 1;
                     }
-                    going = stop > at && gr[0] < most && grant_word(text, at, stop, gr, gr[0]);
-                    if going {
-                        gr[0] = gr[0] + 1;
+                    if stop > at && is(text, at, stop, "until:") {
+                        ends = until_word(text, at, stop);
+                        going = false;
+                    } else {
+                        going = stop > at && gr[0] < most && grant_word(text, at, stop, gr, gr[0]);
+                        if going {
+                            gr[0] = gr[0] + 1;
+                        }
                     }
                     at = stop;
+                }
+                if same && ends != 0 - 2 && (ends < 0 || now <= 0 || now > ends) {
+                    // the line's grants have ended, or cannot be said to hold: they are taken back
+                    gr[0] = before;
                 }
             }
             from = to + 1;

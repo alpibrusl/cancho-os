@@ -844,9 +844,9 @@ fn run[&f, &mc, &mu, &mt, &mx, &mz, &s, &r, &nv, &nd, &nn, &na, &nb, &nw, &nt, &
         return 0;
     }
     if same(line, n, "help") {
-        base.puts(con, k, "commands: help, about, echo <text>, uptime, ticks, mem, board, random, disk, ls [path], cat <path>, sum <path> (list, peek and hash, in text), copy <from> <to>, remove <name>, mkdir <path>, ls <path>, versions, purge <number>, record, put <name> <bytes> <sha256> (over SSH), restart, heap, tell <words>, fail trap|spin|memory, watch on|off (at the console), hash <path>.., peek <path>, seek <text> <path>.., list [path], replace --old <text> --new <text> <path>, move <from> <to>, write (--create | --if-sha256 <hex>) --stdin <path> (then the text, and Ctrl-D), net [up|down|eth|dhcp], net ssh [on|off], net time <address> [port], time, lookup <name>, ping <address or name>, http <address or name> <port>, servo via <address> <port>|off, servo scan, servo pos, arm zero, arm pose, arm check <5 angles>, crash [null|write], load <bytes>\r\n");
+        base.puts(con, k, "commands: help, about, echo <text>, uptime, ticks, mem, board, random, disk, ls [path], cat <path>, sum <path> (list, peek and hash, in text), copy <from> <to>, remove <name>, mkdir <path>, ls <path>, versions, purge <number>, record, put <name> <bytes> <sha256> (over SSH), restart, heap, tell <words>, fail trap|spin|memory, watch on|off (at the console), hash <path>.., peek <path>, seek <text> <path>.., list [path], replace --old <text> --new <text> <path>, move <from> <to>, write (--create | --if-sha256 <hex>) --stdin <path> (then the text, and Ctrl-D), net [up|down|eth|dhcp], net ssh [on|off], net time <address> [port] [back], time, lookup <name>, ping <address or name>, http <address or name> <port>, servo via <address> <port>|off, servo scan, servo pos, arm zero, arm pose, arm check <5 angles>, crash [null|write], load <bytes>\r\n");
     } else if same(line, n, "about") {
-        base.puts(con, k, "cancho-os 0.0.46: a kernel written in cancho (");
+        base.puts(con, k, "cancho-os 0.0.47: a kernel written in cancho (");
         if k[1] >= 3 {
             base.puts(con, k, "Raspberry Pi ");
             base.put_dec(con, k, k[1]);
@@ -1020,7 +1020,7 @@ fn load_grants[&mv, &md, &s, &x](vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000
         let gr = alloc_slice[r](keys.grant_room(), 0);
         let n = files.get(vio, dma, k, "KEYS.TXT", file);
         if n > 0 && len(sx) >= 640 {
-            count = keys.grants_for(file, n, sx[608..640], gr);
+            count = keys.grants_for(file, n, sx[608..640], gr, k[4276]);
         }
         var i = 0;
         while i < keys.grant_room() && 4280 + i < len(k) {

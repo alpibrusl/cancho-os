@@ -127,3 +127,20 @@ fn test_no_bytes_make_reading_an_answer_trap() -> [] int {
     }
     return 0;
 }
+
+fn test_a_day_is_the_seconds_another_implementation_counts() -> [] int {
+    // Python's calendar.timegm of the first second of each day
+    test.assert_eq(clock.day_start(1970, 1, 1), 0);
+    test.assert_eq(clock.day_start(2000, 2, 29), 951782400);
+    test.assert_eq(clock.day_start(2026, 11, 30), 1795996800);
+    test.assert_eq(clock.day_start(2100, 3, 1), 4107542400);
+    test.assert_eq(clock.day_start(9999, 12, 31), 253402214400);
+    // days no month has, and years outside what is counted
+    test.assert_eq(clock.day_start(2026, 2, 29), 0 - 1);
+    test.assert_eq(clock.day_start(2026, 6, 31), 0 - 1);
+    test.assert_eq(clock.day_start(2100, 2, 29), 0 - 1);
+    test.assert_eq(clock.day_start(2026, 13, 1), 0 - 1);
+    test.assert_eq(clock.day_start(2026, 0, 1), 0 - 1);
+    test.assert_eq(clock.day_start(1969, 12, 31), 0 - 1);
+    return 0;
+}

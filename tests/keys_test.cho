@@ -175,7 +175,7 @@ fn test_an_agents_line_grants_what_its_words_say_and_no_more() -> [] int {
         let f = agent_file();
         test.assert_eq(key_of(1, key), keys.agent());
         // two words of the first line and one of the second; `write:/` after the words for people is not a grant
-        test.assert_eq(keys.grants_for(f, len(f), key, gr), 3);
+        test.assert_eq(keys.grants_for(f, len(f), key, gr, 0), 3);
         test.assert(keys.covers(gr, 1, "DOCS"));
         test.assert(keys.covers(gr, 1, "docs/a/b.txt"));
         test.assert(keys.covers(gr, 1, "/DOCS/"));
@@ -212,28 +212,28 @@ fn test_a_key_with_no_agents_line_is_granted_nothing() -> [] int {
         let f = agent_file();
         // the owner's key: it is not an agent's, and no line grants it anything
         test.assert_eq(key_of(0, key), keys.owner());
-        test.assert_eq(keys.grants_for(f, len(f), key, gr), 0);
+        test.assert_eq(keys.grants_for(f, len(f), key, gr, 0), 0);
         test.assert(!keys.covers(gr, 1, "DOCS"));
         test.assert(!keys.covers(gr, 1, ""));
         test.assert(!keys.reaches(gr, ""));
         // the whole disk is granted by `/`, and then everything is covered
         let all = "agent ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGMWNj3sFySrryCSjZvn0dvpRf0Si+unjANlZd87qhEp read:/";
-        test.assert_eq(keys.grants_for(all, len(all), key, gr), 1);
+        test.assert_eq(keys.grants_for(all, len(all), key, gr, 0), 1);
         test.assert(keys.covers(gr, 1, ""));
         test.assert(keys.covers(gr, 1, "ANY/THING"));
         test.assert(!keys.covers(gr, 2, "ANY/THING"));
         // words that are not grants grant nothing: a path with `..`, a hidden part, an empty part, nothing at all
         let bad = "agent ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGMWNj3sFySrryCSjZvn0dvpRf0Si+unjANlZd87qhEp write:A/../B";
-        test.assert_eq(keys.grants_for(bad, len(bad), key, gr), 0);
+        test.assert_eq(keys.grants_for(bad, len(bad), key, gr, 0), 0);
         let dot = "agent ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGMWNj3sFySrryCSjZvn0dvpRf0Si+unjANlZd87qhEp read:.x";
-        test.assert_eq(keys.grants_for(dot, len(dot), key, gr), 0);
+        test.assert_eq(keys.grants_for(dot, len(dot), key, gr, 0), 0);
         let gap = "agent ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGMWNj3sFySrryCSjZvn0dvpRf0Si+unjANlZd87qhEp read:A//B";
-        test.assert_eq(keys.grants_for(gap, len(gap), key, gr), 0);
+        test.assert_eq(keys.grants_for(gap, len(gap), key, gr, 0), 0);
         let none = "agent ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGMWNj3sFySrryCSjZvn0dvpRf0Si+unjANlZd87qhEp read:";
-        test.assert_eq(keys.grants_for(none, len(none), key, gr), 0);
+        test.assert_eq(keys.grants_for(none, len(none), key, gr, 0), 0);
         // five words: the four there is room for
         let many = "agent ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGMWNj3sFySrryCSjZvn0dvpRf0Si+unjANlZd87qhEp read:A read:B read:C read:D write:E";
-        test.assert_eq(keys.grants_for(many, len(many), key, gr), 4);
+        test.assert_eq(keys.grants_for(many, len(many), key, gr, 0), 4);
         test.assert(!keys.covers(gr, 1, "E"));
     }
     return 0;
@@ -258,7 +258,7 @@ fn test_no_bytes_make_reading_grants_trap() -> [] int {
             var v = 0;
             while v < 256 {
                 l[at] = byte_of(v);
-                let c = keys.grants_for(l, len(good), key, gr);
+                let c = keys.grants_for(l, len(good), key, gr, 0);
                 test.assert(c >= 0 && c <= 4);
                 keys.covers(gr, 2, l[at..len(good)]);
                 keys.reaches(gr, l[0..at]);
@@ -275,6 +275,36 @@ fn test_no_bytes_make_reading_grants_trap() -> [] int {
         gr[66] = 4000;
         test.assert(!keys.covers(gr, 1, "A"));
         keys.reaches(gr, "A");
+    }
+    return 0;
+}
+
+fn test_a_grant_that_ends_on_a_day_holds_through_it_and_not_after() -> [] int {
+    region a {
+        let key = alloc_slice[a](32, byte_of(0));
+        let gr = alloc_slice[a](keys.grant_room(), 0);
+        key_of(0, key);
+        let l = "agent ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGMWNj3sFySrryCSjZvn0dvpRf0Si+unjANlZd87qhEp read:DOCS write:WORK until:2026-11-30 the builder";
+        // 2026-11-30 23:59:59 UTC is 1796083199 (Python's calendar.timegm)
+        test.assert_eq(keys.grants_for(l, len(l), key, gr, 1795790412), 2);
+        test.assert(keys.covers(gr, 2, "WORK/a"));
+        test.assert_eq(keys.grants_for(l, len(l), key, gr, 1796083199), 2);
+        test.assert_eq(keys.grants_for(l, len(l), key, gr, 1796083200), 0);
+        test.assert(!keys.covers(gr, 1, "DOCS/a"));
+        // a board that has not been told the date takes what ends on a day to have ended
+        test.assert_eq(keys.grants_for(l, len(l), key, gr, 0), 0);
+        // a word that begins `until:` and is not a day ends the line's grants: it does not make them last
+        let slip = "agent ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGMWNj3sFySrryCSjZvn0dvpRf0Si+unjANlZd87qhEp read:DOCS until:2026-13-01";
+        test.assert_eq(keys.grants_for(slip, len(slip), key, gr, 1795790412), 0);
+        let slip2 = "agent ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGMWNj3sFySrryCSjZvn0dvpRf0Si+unjANlZd87qhEp read:DOCS until:tomorrow";
+        test.assert_eq(keys.grants_for(slip2, len(slip2), key, gr, 1795790412), 0);
+        let slip3 = "agent ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGMWNj3sFySrryCSjZvn0dvpRf0Si+unjANlZd87qhEp read:DOCS until:2026-06-31";
+        test.assert_eq(keys.grants_for(slip3, len(slip3), key, gr, 1795790412), 0);
+        // a line that ends takes back only its own grants: another line of the same key still holds
+        let two = "agent ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGMWNj3sFySrryCSjZvn0dvpRf0Si+unjANlZd87qhEp read:KEPT\nagent ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGMWNj3sFySrryCSjZvn0dvpRf0Si+unjANlZd87qhEp write:GONE until:2020-01-01\n";
+        test.assert_eq(keys.grants_for(two, len(two), key, gr, 1795790412), 1);
+        test.assert(keys.covers(gr, 1, "KEPT/x"));
+        test.assert(!keys.covers(gr, 1, "GONE/x"));
     }
     return 0;
 }
