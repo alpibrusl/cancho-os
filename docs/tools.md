@@ -49,9 +49,14 @@ writes and still have that row.
 So `tally` and `jsonq` were added by adding two words to the list. `git diff` of that change has no line of
 `src/kernel.cho`.
 
-What it is not: the compiler's word on what a tool performs is about the tool's source as built here. The kernel's own
-row still names every effect the tools have between them (`cancho authority` of the kernel lists `dir_write` and
-the rest): the block that lends the system does not discharge them yet. That is the compiler's half of this task.
+**The kernel's own authority does not gain what the tools perform** (0.0.51). The block that lends the system
+discharges the effects its module answers (cancho `docs/bare-system.md`, section 12): `hosted`, `shell` and `kernel`
+no longer declare `io_write`, `fs_read("")`, `dir_write` and the rest, and `cancho authority` of the kernel, asked for
+the bare target, lists addresses and registers and says it never touches the console, the filesystem or the command
+line, as it did before any tool was built in. A tool's own row, asked of the tool, still lists them: that is its
+manifest. What the tools perform between them is the row of `tool_rows.run`, inside the block.
+
+What it is not: the compiler's word on what a tool performs is about the tool's source as built here.
 
 ## The shell's short names
 
@@ -124,8 +129,8 @@ A key that may only read is refused `write`, `replace` and `move` by the shell, 
 - A program started from a shell session over SSH (not `ssh host command`) has no input: its first read is the end.
 
 
-`cancho authority` of the kernel gains `dir_write` and `file_write` with `replace`, and `err_write` with the first four (a tool writes its usage errors there; here both streams
-are the shell's output), and already had `heap`, `args`, `io_write` and the three that read files from step 3.
+`cancho authority` of the kernel gained the tools' effects until 0.0.51, and since then does not (above, "What each
+tool is").
 
 ## What is not right yet
 
@@ -225,3 +230,9 @@ read runs `tally` and is refused `write` (`./keys.sh`); an agent's key is held t
 What a tool ends with (2026-11-27, 0.0.50), over SSH with OpenSSH's client in QEMU: `hash` of a file ends with 0, of
 one that is not there with 3, of a path with `..` with 2, and a dry run of `replace` with 9: the four the same tools
 give on the Mac. A command there is none of ends with 127.
+
+The kernel's authority with the tools built in (2026-11-27, 0.0.51, built with the compiler of cancho#869):
+`docs/authority.txt` lost nine lines (`args`, `dir_read`, `dir_write`, `err_write`, `file_read`, `file_write`,
+`fs_read("")`, `io_read`, `io_write`) and gained three under "never touches" (the console, the filesystem, the command
+line). With the rows as they were, that compiler refuses the kernel at `hosted`. `./keys.sh`, `./agents.sh` and the
+tools answer as before.

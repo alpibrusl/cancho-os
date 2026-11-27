@@ -113,6 +113,10 @@ Rules of the road
   A trap in a hosted program is a trap of the kernel: one that takes a path from a person refuses `..` itself (the tools do),
   because the language traps on it. The kernel's rows carry `io_write`, `args`, `fs_read("")`, `dir_read`, `file_read` up to
   `main` until the compiler discharges them, and `docs/authority.txt` shows that.
+- The block that lends the system discharges what its module answers (cancho docs/bare-system.md, section 12): do
+  NOT put a hosted label (`io_write`, `args`, `fs_read("")`, `dir_write`, ...) in the row of `hosted`, `shell` or
+  `kernel`; the compiler refuses it. `authority.sh` asks for `--target aarch64-none-elf`, and `docs/authority.txt`
+  says the kernel never touches the console, the filesystem or the command line: a tool does, through `ksys`.
 - What a tool is comes from the compiler, not from the kernel (docs/tools.md): `build.sh` has the list of names and
   writes `build/tools/rows.cho` from `cancho authority` of each (name, whether it writes, whether it reads input, and
   the one `run` whose row is theirs together). `program`, `changes`, `takes_input` and `help` in kernel.cho read that
