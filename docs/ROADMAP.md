@@ -91,6 +91,8 @@
 - A program that goes wrong no longer stops the board (2026-11-27, docs/tools.md): after a trap the kernel reports and
   the board resets by its watchdog; with `watch on` a program that never ends is ended the same way. On the Pi 4.
   Still wanted: the trap ending the program and not the kernel.
+- `ls`, `cat` and `sum` are the tools (2026-11-27, 0.0.45): short names for `list`, `peek` and `hash` in their text
+  form. One program lists a directory, and it is the one held to grants.
 - Long names (2026-11-26, docs/storage.md): read, written, replaced and removed; the pieces made here are the
   pieces macOS makes. With directories, a source tree can live on the card.
 - Directories (2026-11-26, docs/storage.md): a name may be a path; `mkdir`, `ls <path>`.

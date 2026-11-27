@@ -6,7 +6,8 @@
 # to read DOCS and to write WORK/OUT. Then, with OpenSSH's client and the agent's key:
 #   what it is granted works (list, peek, write, replace, move, under those two directories);
 #   everything else is refused: a file at the top, a directory beside the granted one, the top's listing, a write
-#   where it may only read, KEYS.TXT itself, and every command of the shell's that is not a tool.
+#   where it may only read, KEYS.TXT itself, and every command of the shell's that is not a tool (`ls` and `cat`
+#   are tools, and are refused what is not granted).
 # The record must say an agent's key made the changes. Then the owner writes the file again without the grant to
 # write, and the same write is refused. Exit 0 if all of that held.
 set -u
@@ -99,7 +100,9 @@ grep -q '"text":"what the agent may read"' build/agents-yes.out || ok=1
 [ "$(grep -c '"ok":false' build/agents-no.out)" = 12 ] || ok=1
 [ "$(grep -c '"ok":true\|"type":"hash"\|"type":"match"\|"type":"entry"' build/agents-no.out)" = 0 ] || ok=1
 grep -q 'not for the agent\|beside what is granted' build/agents-no.out && ok=1
-[ "$(grep -c "this key is an agent's" build/agents-shell.out)" = 7 ] || ok=1
+# (`ls` and `cat` are the tools `list` and `peek`: an agent may type them, and they are held to its grants)
+[ "$(grep -c "this key is an agent's" build/agents-shell.out)" = 5 ] || ok=1
+[ "$(grep -c "io.permission-denied" build/agents-shell.out)" = 2 ] || ok=1
 grep -q 'not for the agent' build/agents-shell.out && ok=1
 # the record: three changes by an agent's key, and none of the refused ones
 [ "$(grep -c ' key:[0-9a-f]* agent ' build/agents-log.out)" = 3 ] || ok=1

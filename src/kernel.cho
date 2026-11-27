@@ -843,9 +843,9 @@ fn run[&f, &mc, &mu, &mt, &mx, &mz, &s, &r, &nv, &nd, &nn, &na, &nb, &nw, &nt, &
         return 0;
     }
     if same(line, n, "help") {
-        base.puts(con, k, "commands: help, about, echo <text>, uptime, ticks, mem, board, random, disk, ls, cat <name>, sum <name>, copy <from> <to>, remove <name>, mkdir <path>, ls <path>, versions, purge <number>, record, put <name> <bytes> <sha256> (over SSH), restart, heap, tell <words>, fail trap|spin|memory, watch on|off (at the console), hash <path>.., peek <path>, seek <text> <path>.., list [path], replace --old <text> --new <text> <path>, move <from> <to>, write (--create | --if-sha256 <hex>) --stdin <path> (then the text, and Ctrl-D), net [up|down|eth|dhcp], net ssh [on|off], lookup <name>, ping <address or name>, http <address or name> <port>, servo via <address> <port>|off, servo scan, servo pos, arm zero, arm pose, arm check <5 angles>, crash [null|write], load <bytes>\r\n");
+        base.puts(con, k, "commands: help, about, echo <text>, uptime, ticks, mem, board, random, disk, ls [path], cat <path>, sum <path> (list, peek and hash, in text), copy <from> <to>, remove <name>, mkdir <path>, ls <path>, versions, purge <number>, record, put <name> <bytes> <sha256> (over SSH), restart, heap, tell <words>, fail trap|spin|memory, watch on|off (at the console), hash <path>.., peek <path>, seek <text> <path>.., list [path], replace --old <text> --new <text> <path>, move <from> <to>, write (--create | --if-sha256 <hex>) --stdin <path> (then the text, and Ctrl-D), net [up|down|eth|dhcp], net ssh [on|off], lookup <name>, ping <address or name>, http <address or name> <port>, servo via <address> <port>|off, servo scan, servo pos, arm zero, arm pose, arm check <5 angles>, crash [null|write], load <bytes>\r\n");
     } else if same(line, n, "about") {
-        base.puts(con, k, "cancho-os 0.0.44: a kernel written in cancho (");
+        base.puts(con, k, "cancho-os 0.0.45: a kernel written in cancho (");
         if k[1] >= 3 {
             base.puts(con, k, "Raspberry Pi ");
             base.put_dec(con, k, k[1]);
@@ -950,6 +950,64 @@ fn load_keys[&mv, &md, &s, &x](vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..
         k[4273] = agents;
     }
     return k[4164];
+}
+
+// The shell's three short names for tools (docs/tools.md): `ls [path]`, `cat <path>` and `sum <path>` are cancho-tools'
+// `list`, `peek` and `hash`, asked to answer in text for a person. The line is written out in full where it stands,
+// and what runs is the tool: there is one program that lists a directory, and it is the one that asks about grants.
+// The line's new length; the line as it was if there is no room for it written out.
+fn short(which: int) -> [] &static [byte] {
+    if which == 1 {
+        return "list --long --format text ";
+    }
+    if which == 2 {
+        return "peek --format text --lines 1: --max-bytes 16777216 ";
+    }
+    return "hash --format text ";
+}
+
+fn alias[&r](line: &!r [byte], n: int) -> [] int {
+    var which = 0;
+    var cut = 0;
+    if same(line, n, "ls") {
+        which = 1;
+        cut = 2;
+    } else if n > 3 && same(line, 3, "ls ") {
+        which = 1;
+        cut = 3;
+    } else if n > 4 && same(line, 4, "cat ") {
+        which = 2;
+        cut = 4;
+    } else if n > 4 && same(line, 4, "sum ") {
+        which = 3;
+        cut = 4;
+    } else {
+        return n;
+    }
+    let full = short(which);
+    var rest = n - cut;
+    // (`ls` alone is the top directory)
+    let top = rest == 0;
+    if top {
+        rest = 1;
+    }
+    if len(full) + rest > len(line) {
+        return n;
+    }
+    var i = rest;
+    while i > 0 && !top {
+        i = i - 1;
+        line[len(full) + i] = line[cut + i];
+    }
+    if top {
+        line[len(full)] = byte_of('.');
+    }
+    i = 0;
+    while i < len(full) {
+        line[i] = full[i];
+        i = i + 1;
+    }
+    return len(full) + rest;
 }
 
 // What the key that logged in is granted, read from KEYS.TXT as it is now into k[4280..] (`keys.grants_for`): asked
@@ -1406,7 +1464,8 @@ fn load[&f, &mc, &mg, &mz, &s, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x90
 fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s, &mk, &hp, &oi, &oa, &hd, &of](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), irq: &!mi Mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014,0x107fff9000..0x107fffa014"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), rng: &!mr Mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), fw: &!mw Mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), tab: &!mt Mmio("0x200000..0x208000,0x40200000..0x40208000"), code: &mx Mmio("0x80001..0x200000,0x40080001..0x40200000"), probe: &!mz Mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001"), k: &!s [int], heap: &!hp Heap, io: &!oi Io, args: &oa Args, hd: &!hd [int], fs: &of Fs("")) -> [err_write, io_write, io_read, dir_write, file_write, args, fs_read(""), dir_read, file_read, heap, cpu("cntfrq_el0"), cpu("cntv_cval_el0"), cpu("cntvct_el0"), cpu("wfi"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014,0x107fff9000..0x107fffa014"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x200000..0x208000,0x40200000..0x40208000"), mmio("0x80001..0x200000,0x40080001..0x40200000"), mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), mmio("0x220000..0x420000,0x40220000..0x40420000"), mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4"), mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028")] int {
     base.puts(con, k, "\r\ncancho-os booted. type `help`.\r\n");
     region r {
-        let line = alloc_slice[r](128, byte_of(0));
+        // (128 bytes are typed; the rest is room for a short name written out: `alias`)
+        let line = alloc_slice[r](256, byte_of(0));
         // the network link's: the SLIP decoder's state, a received packet, the reply, the reply framed
         let ns = alloc_slice[r](inet.slip_state(), 0);
         let frame = alloc_slice[r](1600, byte_of(0));
@@ -1560,6 +1619,7 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s, &mk, &hp
                     cmd[i] = rline[i];
                     i = i + 1;
                 }
+                k[31] = alias(cmd, k[31]);
                 if k[4179] == 3 {
                     load_grants(vio, dma, k, sx);
                 }
@@ -1624,6 +1684,7 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s, &mk, &hp
                 k[31] = 0;
             } else if c == 13 || c == 10 {
                 base.puts(con, k, "\r\n");
+                n = alias(line, n);
                 if same(line, n, "net ssh on") {
                     // who may log in, and the host key if the disk has kept one, before the port opens
                     load_keys(vio, dma, k, sx);
