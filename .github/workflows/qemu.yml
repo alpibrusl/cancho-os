@@ -493,7 +493,7 @@ jobs:
           grep -q "\"hex\":\"$(sha256sum wsrc/TEXT.TXT | cut -d' ' -f1)\"" replace-sd.txt
           MACHINE=virt DISKRW=tw-fat16.img SSHKEY=/tmp/sshkey SSHCMD='replace --old thimble --new needle TEXT.TXT' ./test.sh 'net up' 'net ssh on' 'cat LOG.TXT' > replace-ssh.txt; cat replace-ssh.txt
           grep -q '^ssh: {"ok":true,"command":"replace"' replace-ssh.txt
-          grep -q "^5 [0-9]* key:[0-9a-f]* owner write TEXT.TXT " replace-ssh.txt
+          grep -q "^6 [0-9]* key:[0-9a-f]* owner write TEXT.TXT " replace-ssh.txt
           fsck.fat -n tw-fat16.img
           mcopy -i tw-fat16.img ::TEXT.TXT back.out && cmp back.out wsrc/TEXT.TXT
       - name: a tool renames a file
