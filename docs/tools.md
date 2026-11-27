@@ -106,7 +106,8 @@ are the shell's output), and already had `heap`, `args`, `io_write` and the thre
 - **Time.** FAT keeps local time and no zone; `list --long` gives it as if it were UTC.
 - **A listing walks the directory again for each name** (`ksys.next`), and `dir_stat` three times for each: a
   directory of a thousand names would be slow. None here is that long.
-- `write`, `replace` and `move` are not tried on a real board. The four that read are: they ran on the Raspberry Pi 4 from its card on
+- On the real board `write`, `replace` and `move` were tried once each over SSH (below), not at its console, and
+  not on the names the kernel keeps to itself: those refusals were seen in QEMU only. The four that read are: they ran on the Raspberry Pi 4 from its card on
   2026-11-27, and `hash KERNEL8.IMG` there gave what `shasum` gives the same file on a Mac.
 
 ## Measured
@@ -149,3 +150,8 @@ on a name that is taken is refused; `BOOT.TXT` is written at the console and ref
 `CONFIG.TXT` refused both ways. Over SSH with OpenSSH's client, 220,890 bytes sent as the command's input become a
 file whose SHA-256 is what `shasum` gives the bytes that were sent, and the record's line says which key. `./keys.sh`
 passes with `KEYS.TXT` written by `write`. The image is 766,000 bytes with the seven tools.
+
+On the Raspberry Pi 4, from its SD card, over SSH through another machine (2026-11-27, 0.0.41): 106,890 bytes sent
+as the input of `write --create --stdin TRY.TXT` are a file whose SHA-256, by the board's `hash`, is what `shasum`
+gives them on the Mac; `replace` changes one line of it and `seek` finds the new text at line 1,778; `move` renames
+it; `write --create` on the new name is refused; the record follows, 33 lines; `heap` finds nothing wrong after.

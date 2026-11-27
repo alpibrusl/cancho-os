@@ -20,7 +20,7 @@ the typing is scripted ([`docs/demo/session.py`](docs/demo/session.py)); re-rend
 - **Tools an agent calls:** six of [cancho-tools](https://github.com/alpibrusl/cancho-tools) are built into the
   kernel as they are written, and answer the same bytes as on a Mac ([docs/tools.md](docs/tools.md)). `hash`, `peek`,
   `seek` and `list` read, and run on the board. `replace` changes a file, through the same writer as `put` (the old
-  contents kept, a line in the record), and `move` a name; those two have run in QEMU only. The build needs a checkout of them:
+  contents kept, a line in the record), and `move` a name, and `write` makes one from what it is sent; all run on the board. The build needs a checkout of them:
   `git clone https://github.com/alpibrusl/cancho-tools ../cancho-tools`.
 - **Not yet:** separate programs, moving a servo, keys and grants for agents, USB, the Pi 5 (its code is written
   from the board's device tree and has never run).
