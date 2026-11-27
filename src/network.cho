@@ -1411,6 +1411,8 @@ pub fn net_dhcp[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h](cpu: &!f
                     k[4156] = facts[2];
                     k[4157] = facts[3];
                     k[4158] = facts[5];
+                    // when it was lent, for asking again before it is over (kernel.cho: `getc`)
+                    k[4277] = base.uptime_ms(cpu);
                     // whoever was remembered was a neighbour on the old network
                     k[21] = 0;
                 }
@@ -1445,7 +1447,7 @@ pub fn net_dhcp[&f, &mc, &mu, &mv, &md, &s, &n, &a, &b, &w, &t, &g, &h](cpu: &!f
     put_address(con, k, k[4157]);
     base.puts(con, k, "\r\nit is lent for ");
     base.put_dec(con, k, k[4158]);
-    return base.puts(con, k, " s, and the kernel does not ask again when that is over\r\n");
+    return base.puts(con, k, " s, and asked for again when half of that is over\r\n");
 }
 
 fn begins[&r, &w](text: &r [byte], n: int, word: &w [byte]) -> [] bool {
