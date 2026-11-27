@@ -18,7 +18,7 @@ TOOLS=$(cd "${TOOLS:-../cancho-tools}" 2>/dev/null && pwd)
 [ -f "$TOOLS/tools/hash/hash.cho" ] || { echo "build.sh: no cancho-tools at $TOOLS (git clone https://github.com/alpibrusl/cancho-tools, or TOOLS=path)" >&2; exit 1; }
 mkdir -p build/tools
 TOOL_FILES=$(ls "$TOOLS"/contract/*.cho | tr '\n' ' ')
-for t in hash peek seek list; do
+for t in hash peek seek list replace; do
     awk -v t="$t" 'NR == 1 { print; print ""; print "module tool_" t ";"; next } /^fn main\(world: World\)/ { exit } { print }' "$TOOLS/tools/$t/$t.cho" \
         | sed -e 's/^fn run\[/pub fn run[/' -e "s/^import toolbox\.built;/import toolbox.built_$t;/" -e "s/\([^a-zA-Z_.]\)built\./\1built_$t./g" > "build/tools/tool_$t.cho"
     sed "s/^module toolbox\.built;/module toolbox.built_$t;/" "$TOOLS/generated/$t/built.cho" > "build/tools/built_$t.cho"

@@ -113,11 +113,17 @@ Rules of the road
   A trap in a hosted program is a trap of the kernel: one that takes a path from a person refuses `..` itself (`count` does),
   because the language traps on it. The kernel's rows carry `io_write`, `args`, `fs_read("")`, `dir_read`, `file_read` up to
   `main` until the compiler discharges them, and `docs/authority.txt` shows that.
-- The tools (docs/tools.md): cancho-tools' `hash`, `peek`, `seek` and `list` are built in as they are, from `../cancho-tools`
+- The tools (docs/tools.md): cancho-tools' `hash`, `peek`, `seek`, `list` and `replace` are built in as they are, from `../cancho-tools`
   (or `TOOLS=`), pinned by `TOOLS_REF` in the workflow: change a tool there, never here. build.sh turns each into a module in
   `build/tools/` (text only: a `module` line, `run` made public, `main` left out); `program` in kernel.cho says which word runs
-  which. Only tools that read are built in, and a new one is believed when its answers are the same bytes as the same tool's
-  on another machine (the CI step does that). authority.sh needs build.sh to have run.
+  which. A new one is believed when its answers are the same bytes as the same tool's on another machine (the CI steps do
+  that). authority.sh needs build.sh to have run.
+- A program's writes (docs/tools.md, the end of `src/ksys.cho`): `replace` is the one tool that writes. A program never
+  writes the disk: it makes a draft in memory and the rename of the draft is one call of `files.store_as`, `put`'s
+  writer (read back, old contents to OLD, a line in the record, the name last). Do not give `ksys` a second way to
+  change the disk; what it refuses (renaming or removing a file of the disk, adding to one, the kernel's own names)
+  is listed in the doc. `k[4267]` silences `putc` while that writer runs. A tool that writes must not be in
+  `reading` (kernel.cho): a key that may only read is refused it by the shell.
 - BOOT.TXT (docs/boot.md): `src/boot.cho` (pure) holds the list of lines the kernel may type to itself at its
   start. Adding a command to that list is a decision: nothing that changes the disk, loads a kernel or restarts.
   The file is written at the console only (`files.boot_name`, `files.put_name`). A key in the first second stops it.

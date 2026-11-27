@@ -432,6 +432,60 @@ jobs:
           test "$(grep -c '"command":"hash","schema":"hash.v1","complete":true' tools-many.txt)" = 20
           test "$(grep -c '"command":"list","schema":"list.v1","complete":true' tools-many.txt)" = 20
           grep -q "^still here" tools-many.txt
+      - name: a tool writes a file
+        # docs/tools.md. cancho-tools' replace is built into the image as it is. It changes four files (one longer than
+        # a cluster, one under a directory, one with a long name) and is refused four ways; the same commands are run
+        # by the same tool built for this machine on the same files, and every line of the answers must be the same.
+        # Then Linux's tools judge the volume: fsck.fat finds nothing wrong, each file is the bytes this machine's
+        # run left, what a file held before is in OLD, the record follows and says what each file now is, and
+        # nothing the tool made on its way (a temporary, a lock) is on the volume.
+        run: |
+          (cd /tmp/cancho-tools && /tmp/cancho-out/cancho build contract/*.cho tools/replace/replace.cho generated/replace/built.cho --std -o /tmp/tool-replace)
+          rm -rf wsrc whost && mkdir -p wsrc/SUB
+          python3 -c "
+          import sys
+          with open('wsrc/TEXT.TXT', 'w') as f:
+              for i in range(3000):
+                  f.write('the needle is here\\n' if i == 1777 else 'line %d of a file that is longer than one cluster\\n' % i)
+          open('wsrc/NOTE.TXT', 'w').write('hello\\n')
+          open('wsrc/SUB/INNER.TXT', 'w').write('hello hello hello\\n')
+          open('wsrc/longer_name_file.text', 'w').write('a long name, hello\\n')
+          "
+          cp -r wsrc whost
+          (cd whost && { /tmp/tool-replace --old needle --new thimble TEXT.TXT; /tmp/tool-replace --old hello --new goodbye --expect 3 SUB/INNER.TXT; /tmp/tool-replace --old hello --new goodbye longer_name_file.text; /tmp/tool-replace --old hello --new goodbye NOTE.TXT; /tmp/tool-replace --old hello --new goodbye NOTE.TXT; /tmp/tool-replace --old goodbye --new x --if-sha256 00 NOTE.TXT; /tmp/tool-replace --old x --new y NONE.TXT; /tmp/tool-replace --old x --new y ../NOTE.TXT; /tmp/tool-replace --old goodbye --new hello --dry-run NOTE.TXT; } > ../replace-want.txt 2>&1 || true)
+          cat replace-want.txt
+          test "$(wc -l < replace-want.txt)" = 9
+          test "$(grep -c '"changed":true' replace-want.txt)" = 4
+          mkfs.fat -F 32 -s 1 -C w-fat32.img 65536 > /dev/null
+          mkfs.fat -F 16 -C w-fat16.img 16384 > /dev/null
+          for img in fat32 fat16; do
+            mcopy -s -i w-$img.img wsrc/TEXT.TXT wsrc/NOTE.TXT wsrc/SUB wsrc/longer_name_file.text ::
+            MACHINE=virt DISKRW=w-$img.img ./test.sh 'replace --old needle --new thimble TEXT.TXT' 'replace --old hello --new goodbye --expect 3 SUB/INNER.TXT' 'replace --old hello --new goodbye longer_name_file.text' 'replace --old hello --new goodbye NOTE.TXT' 'replace --old hello --new goodbye NOTE.TXT' 'replace --old goodbye --new x --if-sha256 00 NOTE.TXT' 'replace --old x --new y NONE.TXT' 'replace --old x --new y ../NOTE.TXT' 'replace --old goodbye --new hello --dry-run NOTE.TXT' 'replace --old a --new b HOSTKEY.BIN' record versions 'echo still here' > replace-$img.raw
+            tr -d '\r' < replace-$img.raw | grep '^{' > replace-$img.txt; cat replace-$img.txt
+            head -9 replace-$img.txt | diff replace-want.txt -
+            sed -n 10p replace-$img.txt | grep -q '"rule":"io.permission-denied"'
+            grep -q "^the record: 4 lines, each following from the one before" replace-$img.raw
+            grep -q "^4 versions kept" replace-$img.raw
+            grep -q "^still here" replace-$img.raw
+            fsck.fat -n w-$img.img
+            rm -rf wout; mkdir -p wout/SUB
+            for n in TEXT.TXT NOTE.TXT SUB/INNER.TXT longer_name_file.text LOG.TXT; do mcopy -i w-$img.img "::$n" wout/$n; done
+            for n in TEXT.TXT NOTE.TXT SUB/INNER.TXT longer_name_file.text; do cmp wout/$n whost/$n; done
+            mcopy -i w-$img.img ::OLD/00000001.V old1.out && cmp old1.out wsrc/TEXT.TXT
+            python3 tests/checklog.py wout/LOG.TXT wout > wlog.txt || { cat wlog.txt; exit 1; }
+            cat wlog.txt
+            grep -q "^4 lines, 0 that do not follow" wlog.txt
+            test "$(mdir -/ -b -i w-$img.img | grep -c lexsys)" = 0
+          done
+          # the Pi 3's SD card, and over SSH with the owner's key: the record says which key
+          cp w-fat32.img w-sd.img
+          SD=w-sd.img ./test.sh 'replace --old thimble --new needle TEXT.TXT' 'hash TEXT.TXT' > replace-sd.txt; cat replace-sd.txt
+          grep -q "\"hex\":\"$(sha256sum wsrc/TEXT.TXT | cut -d' ' -f1)\"" replace-sd.txt
+          MACHINE=virt DISKRW=w-fat16.img SSHKEY=/tmp/sshkey SSHCMD='replace --old thimble --new needle TEXT.TXT' ./test.sh 'net up' 'net ssh on' 'cat LOG.TXT' > replace-ssh.txt; cat replace-ssh.txt
+          grep -q '^ssh: {"ok":true,"command":"replace"' replace-ssh.txt
+          grep -q "^5 [0-9]* key:[0-9a-f]* owner write TEXT.TXT " replace-ssh.txt
+          fsck.fat -n w-fat16.img
+          mcopy -i w-fat16.img ::TEXT.TXT back.out && cmp back.out wsrc/TEXT.TXT
       - name: the heap
         # cancho docs/freestanding.md, section 8: a JSON object made on the heap and printed, growing buffers read
         # back, and a block made and given back so many times that it must have been used again.

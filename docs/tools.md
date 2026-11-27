@@ -1,9 +1,9 @@
 # The tools, inside the kernel
 
 cancho-tools (https://github.com/alpibrusl/cancho-tools) are the programs an agent reads and changes files with on
-Linux and macOS: each answers in JSON, says what it may touch, and is small. Four of them, the four that only read,
-are built into this kernel as they are written: `hash`, `peek`, `seek` and `list`. Not a line of them was changed
-for it and none of them knows it is not on a system.
+Linux and macOS: each answers in JSON, says what it may touch, and is small. Five of them are built into this kernel
+as they are written: `hash`, `peek`, `seek` and `list`, which only read, and `replace`, which changes a file. Not a
+line of them was changed for it and none of them knows it is not on a system.
 
 ## How
 
@@ -14,12 +14,12 @@ docs/bare-system.md), and inside it a tool's `write_bytes` is the shell's output
 was typed, and its `open_dir`, `dir_open_read`, `file_read`, `dir_list`, `dir_stat` the FAT volume, through
 `src/ksys.cho`.
 
-`build.sh` takes the tools from a checkout beside this one (`../cancho-tools`, or `TOOLS=`), and for each of the four:
+`build.sh` takes the tools from a checkout beside this one (`../cancho-tools`, or `TOOLS=`), and for each of the five:
 
 - puts `module tool_<name>;` after the first line and makes `run` public;
 - leaves out `main`, the last function of the file: the kernel has its own;
 - gives the generated module that says how the tool was built (`toolbox.built`, one for each tool, all of one name)
-  the tool's name, so that four can be in one image.
+  the tool's name, so that five can be in one image.
 
 That is text moved by `awk` and `sed`, into `build/tools/`; the build stops if a tool is not written the way this
 expects. What the tools share (`contract/`) is built in as it is. `TOOLS_REF` in the workflow is the commit they are
@@ -27,11 +27,37 @@ taken at.
 
 ## What they may do
 
-Read. `ksys` refuses every way of opening a file that writes, and has no function that changes a directory; the four
-tools ask for none. `HOSTKEY.BIN` is refused them as it is the shell (`files.secret`), and a name that begins with a
-dot is not found and not listed. A key that may only read may run them (`reading` in kernel.cho).
+The four that read: read. `HOSTKEY.BIN` is refused them as it is the shell (`files.secret`), and a name that begins
+with a dot is not found and not listed. A key that may only read may run them (`reading` in kernel.cho).
 
-`cancho authority` of the kernel gains `err_write` with them (a tool writes its usage errors there; here both streams
+## A tool that writes
+
+`replace --old TEXT --new TEXT PATH` changes a file the way the tools change one on a system: it holds a lock, makes
+a temporary file beside the one it changes, writes the new contents to it, has it kept, and renames it over the name.
+Here those five steps are one write of the disk, and it is not the tool that makes it:
+
+- **The lock** (`<name>.lexsys-lock`, opened to add to) is a handle and nothing else. Nothing runs while a program
+  does, so it is held by being asked for; no file is made.
+- **The temporary** (`dir_open_new`) is the draft: its bytes wait in memory, where a file sent with `put` waits
+  (2 MB less a little; more is refused, 27). One draft at a time. The disk does not know of it.
+- **`file_sync` and `dir_sync`** have nothing to do.
+- **The rename** of the draft to a name is the write, done by `files.store_as`, which is `put`'s own writer: the bytes
+  go to clusters that were free, are read back from the disk and compared, what the name held is kept in `OLD` under a
+  number, `LOG.TXT` gains a line that says who (the console, or which key) and the SHA-256 of what the file now is,
+  and the name is changed last. What that writer would print is not printed (`k[4267]`): the tool's answer is the
+  tool's.
+- **Removing the draft** forgets it. A draft that was never renamed was never on the disk.
+
+What a program may not do through `ksys`, each refused with the number a system would give:
+
+- write a name `put` may not write (13): `HOSTKEY.BIN`, `LOG.TXT`, `BOOT.TXT`, anything under `OLD`;
+- rename or remove a file of the disk (30): only the draft is renamed, so `move` is not built in, and no tool deletes;
+- add to a file, or open one to write in place (30): a file changes whole or not at all;
+- make a second draft while one is waiting (24), or any while a `put` is being received (16).
+
+A key that may only read is refused `replace` by the shell, before the tool runs, as it is refused `write`.
+
+`cancho authority` of the kernel gains `dir_write` and `file_write` with `replace`, and `err_write` with the first four (a tool writes its usage errors there; here both streams
 are the shell's output), and already had `heap`, `args`, `io_write` and the three that read files from step 3.
 
 ## What is not right yet
@@ -41,12 +67,19 @@ are the shell's output), and already had `heap`, `args`, `io_write` and the thre
   without them, and no memory left is a trap too (the heap is the kernel's, 16 MB of it).
 - **The status a tool ends with is dropped.** Over SSH the session ends with 0 whatever the tool answered; the JSON
   says `"ok":false`.
-- **The tools that read their input** (`tally`, `jsonq`) and **the ones that write** (`write`, `replace`, `move`,
-  `archive`) are not built in. Writing must go through `files` and the record first (docs/permissions.md).
+- **The tools that read their input** (`tally`, `jsonq`) are not built in, and of the ones that write only `replace`
+  is. `write` takes its contents from its input or from a file, and its name is the shell's own `write`; `move`
+  renames a file of the disk, which `ksys` does not do; `archive` makes directories.
+- **Why a write failed is mostly lost.** `files.store_as` says why in words, which are not printed for a tool, and
+  answers yes or no: a full disk and a disk that could not be read are both 5 to the tool.
+- **A tool's write is recorded as `write`**, the shell's word: the record does not say a tool made it.
+- **Grants.** A tool may write what its caller may. There are two kinds of caller, owner and reader; a key for an
+  agent that may write under one directory only is docs/permissions.md, not built.
 - **Time.** FAT keeps local time and no zone; `list --long` gives it as if it were UTC.
 - **A listing walks the directory again for each name** (`ksys.next`), and `dir_stat` three times for each: a
   directory of a thousand names would be slow. None here is that long.
-- Not tried on a real board.
+- `replace` is not tried on a real board. The four that read are: they ran on the Raspberry Pi 4 from its card on
+  2026-11-27, and `hash KERNEL8.IMG` there gave what `shasum` gives the same file on a Mac.
 
 ## Measured
 
@@ -62,3 +95,16 @@ with the same four tools built for the Mac by the same compiler and run on the s
 - the image is 629,872 bytes with the four tools, 432,672 without.
 
 CI does the comparison again on volumes Linux's tools made, with the zone set to UTC, where every line must be the same.
+
+`replace`, the same way (2026-11-27), on FAT16 and FAT32 volumes macOS made, with a file of 154,857 bytes, one under a
+directory and one with a long name:
+
+- nine commands (four that change a file, one that finds it already changed, and four that are refused: a hash that
+  is not one, a name that is not there, a path with `..`, a dry run) answer the same bytes as the same tool on the
+  Mac, twelve lines with the four hashes asked afterwards; the four files are then the same bytes as the Mac's.
+- macOS's `fsck_msdos` finds nothing wrong with either volume; `OLD/00000001.V` is the file as it was; no name
+  with `lexsys` in it is on the volume; `tests/checklog.py` follows the four lines of the record and finds each
+  file to be what its line says.
+- on the Pi 3's SD card in QEMU the same; over SSH with the owner's key the record's line says `key:` and its
+  first sixteen digits, and `owner`; with a key that may only read the shell refuses (`./keys.sh`).
+- the image is 677,008 bytes with the five tools.

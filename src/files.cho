@@ -622,6 +622,13 @@ fn change[&mc, &mv, &md, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000
 // written, before the name is pointed at them. Then as `write`: the old contents to OLD, the line, the name.
 // 0 if the file is now that; 1 if not, with the reason printed and the disk as it was.
 pub fn store[&mc, &mv, &md, &mg, &s, &r, &h](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), k: &!s [int], text: &r [byte], from: int, to: int, at: int, size: int, want: &h [byte], who: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x220000..0x420000,0x40220000..0x40420000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+    return store_as(con, vio, dma, stage, k, text, from, to, at, size, want, who, "put", true);
+}
+
+// The same for any writer of a whole file: `action` is the word the record has for it, and with `check` false the
+// bytes in memory are taken as they are (`want` is not read): they are still read back from the disk and compared
+// before the name means them.
+pub fn store_as[&mc, &mv, &md, &mg, &s, &r, &h, &a](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), k: &!s [int], text: &r [byte], from: int, to: int, at: int, size: int, want: &h [byte], who: int, action: &a [byte], check: bool) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x220000..0x420000,0x40220000..0x40420000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
     var done = 1;
     region r {
         let sec = alloc_slice[r](512, byte_of(0));
@@ -646,9 +653,9 @@ pub fn store[&mc, &mv, &md, &mg, &s, &r, &h](con: &!mc Mmio("0x9000000..0x900004
             i = i + 1;
         }
         sha.final(hs, hd);
-        var same = len(want) >= 64;
+        var same = !check || len(want) >= 64;
         i = 0;
-        while i < 32 && same {
+        while i < 32 && same && check {
             let hi = int_of(hd[i]) >> 4 & 15;
             let lo = int_of(hd[i]) & 15;
             hx[i * 2] = byte_of(hi + '0');
@@ -754,7 +761,7 @@ pub fn store[&mc, &mv, &md, &mg, &s, &r, &h](con: &!mc Mmio("0x9000000..0x900004
                 v = disk.version(con, vio, dma, k, sec, tab, rtab, info, name, out, o, w, vname, oc, os);
                 bad = v < 0;
             }
-            if !bad && ledger.record_add(vio, dma, k, info, w, who, "put", text, from, to, text, 0, 0, v, size, hd, true) != 0 {
+            if !bad && ledger.record_add(vio, dma, k, info, w, who, action, text, from, to, text, 0, 0, v, size, hd, true) != 0 {
                 base.puts(con, k, "the record could not be added to: nothing was changed\r\n");
                 bad = true;
             }

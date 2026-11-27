@@ -3,7 +3,7 @@
 #   ./keys.sh <disk image> <owner key> <reader key> <a key that is in neither place>
 # The image is written to. The kernel must have been built with AUTHORIZED=<owner key>.pub.
 # The first start: KEYS.TXT is made at the console with the reader's key in it, SSH is turned on, and
-#   the owner writes a file (and the record must say which key did); the reader lists files, and is refused when it writes or asks for the host key;
+#   the owner writes a file (and the record must say which key did); the reader lists files, and is refused when it writes (by the shell or by a tool) or asks for the host key;
 #   the stranger is not let in.
 # The second start, of the same disk: the host key must be the one the first start made. Then the owner
 #   removes KEYS.TXT, and the reader is no longer let in.
@@ -43,6 +43,7 @@ say 'net ssh on' 4
     as "$OWNER" 'write O.TXT written by an owner'
     as "$READER" ls
     as "$READER" 'write R.TXT written by a reader'
+    as "$READER" 'replace --old owner --new reader O.TXT'
     as "$READER" 'ping 10.0.0.1'
     as "$READER" 'cat HOSTKEY.BIN'
     as "$OWNER" 'copy HOSTKEY.BIN STOLEN.BIN'
@@ -73,7 +74,8 @@ grep -q "read from the disk: the same as before the restart" build/keys2.out || 
 grep -q "and from KEYS.TXT on the disk: 1" build/keys1.out || ok=1
 grep -q "^    written: 20 bytes" build/keys-ssh.out || ok=1
 grep -q "^    O.TXT " build/keys-ssh.out || ok=1
-[ "$(grep -c "this key may only read: that needs an owner's key" build/keys-ssh.out)" = 2 ] || ok=1
+# (the shell's `write`, the tool `replace`, which writes through a lent system, and `ping`)
+[ "$(grep -c "this key may only read: that needs an owner's key" build/keys-ssh.out)" = 3 ] || ok=1
 [ "$(grep -c "the host key is kept by the kernel" build/keys-ssh.out)" = 2 ] || ok=1
 [ "$(grep -c "^    written by an owner" build/keys-ssh.out)" = 2 ] || ok=1
 grep -q "Permission denied" build/keys-ssh.out || ok=1

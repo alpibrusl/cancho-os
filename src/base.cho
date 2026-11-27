@@ -8,9 +8,13 @@ module base;
 //
 // `k` is the kernel's state (kernel.cho lists it). Here: k[0] is the console's registers,
 // k[9] the second serial port's; k[26], k[27], k[33] and k[40..] are where `putc` writes
-// while a line from the network is being run (docs/network.md, section 8).
+// while a line from the network is being run (docs/network.md, section 8); while k[4267] is not 0 it writes nowhere.
 
 pub fn putc[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), k: &!s [int], c: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048")] int {
+    if k[4267] != 0 {
+        // a hosted program is having the disk written for it: what the writer says is not the program's to print (ksys.cho)
+        return 0;
+    }
     if k[26] != 0 {
         // a line from the network is being run: what it prints waits here for the connection
         if k[27] < 4096 {
