@@ -1,0 +1,55 @@
+edition 9;
+
+// bare.cho -- cancho's TLS client with no system under it (docs/tls.md). A program for `--target aarch64-none-elf`
+// that makes every call one connection makes: a store of roots, a handshake started with 96 bytes that stand for the
+// kernel's random pool and a date that stands for the kernel's, bytes fed, a request sent, an answer received, the
+// end. Nobody is at the other end. It is built, never run: what is asked is whether it builds, and how large it is.
+import tls_client;
+import x509_verify;
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec, tty } = split(world);
+    release(io);
+    release(ffi);
+    release(fs);
+    release(args);
+    release(net);
+    release(clock);
+    release(signals);
+    release(exec);
+    release(tty);
+    var status = 0;
+    borrow mut heap as &!h in {
+        var ints = box_slice(h, tls_client.ints_len(), 0);
+        var bytes = box_slice(h, tls_client.bytes_len(), byte_of(0));
+        var store = box_slice(h, 16384, byte_of(0));
+        region r {
+            let random = alloc_slice[r](96, byte_of(7));
+            let wire = alloc_slice[r](16384, byte_of(0));
+            let app = alloc_slice[r](4096, byte_of(0));
+            let info = alloc_slice[r](2, 0);
+            borrow mut ints as &!iw in {
+                borrow mut bytes as &!bw in {
+                    borrow mut store as &!sw in {
+                        let i = contents(iw);
+                        let b = contents(bw);
+                        status = x509_verify.store_load("-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n", contents(sw), info);
+                        status = status + tls_client.start(i, b, "board.test", random, 1800000000);
+                        let n = tls_client.take(i, b, wire);
+                        status = status + tls_client.feed(i, b, wire[0..n], contents(sw)[0..info[0]]);
+                        status = status + tls_client.send(i, b, "GET / HTTP/1.0\r\n\r\n");
+                        status = status + tls_client.recv(i, b, app);
+                        status = status + tls_client.finish(i, b);
+                        status = status + tls_client.event(i) + tls_client.failure(i);
+                        tls_client.drop(i, b);
+                    }
+                }
+            }
+        }
+        unbox_slice(h, ints);
+        unbox_slice(h, bytes);
+        unbox_slice(h, store);
+    }
+    release(heap);
+    return status;
+}

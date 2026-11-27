@@ -1,0 +1,26 @@
+edition 9;
+
+// none.cho -- bare.cho with the TLS taken out: a box and a region, for the comparison of sizes (docs/tls.md).
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec, tty } = split(world);
+    release(io);
+    release(ffi);
+    release(fs);
+    release(args);
+    release(net);
+    release(clock);
+    release(signals);
+    release(exec);
+    release(tty);
+    var status = 0;
+    borrow mut heap as &!h in {
+        let b = box_slice(h, 32, byte_of(0));
+        region r {
+            let wire = alloc_slice[r](16384, byte_of(0));
+            status = len(wire);
+        }
+        unbox_slice(h, b);
+    }
+    release(heap);
+    return status;
+}

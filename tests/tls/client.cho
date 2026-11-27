@@ -1,0 +1,290 @@
+edition 9;
+
+// client.cho -- cancho's TLS client against another system's server, on the machine this is built for (docs/tls.md).
+//
+//     client <address> <port> <name> <roots.pem> <seconds> <times> <path> [quiet]
+//
+// Connects to <address>:<port> <times> times. Each time: a handshake as <name>, the chain checked against the roots of
+// the file and against the date <seconds> (since 1970; 0 is this machine's own clock), then `GET <path> HTTP/1.0`, and what
+// comes back written to the standard output (not with `quiet`). The last lines, on the standard error:
+//
+//     handshakes <done> of <times>
+//     handshake_ms <all of them together>
+//     answer_bytes <what the servers answered, all of them together>
+//     refused <tag>                  when one failed: the engine's own word for why
+//
+// What it is given is what a program on the board would be lent: a connection (the bytes), 96 random bytes for each
+// handshake, the date, the file of roots and memory. The engine (`tls_client`, `x509_verify`) asks for nothing itself.
+import std.io;
+import tls_client;
+import tls_record;
+import x509_verify;
+
+fn number[&s](s: &s [byte]) -> [] int {
+    var n = 0;
+    var i = 0;
+    while i < len(s) {
+        n = n * 10 + int_of(s[i]) - 48;
+        i = i + 1;
+    }
+    return n;
+}
+
+// Everything the engine has for the connection, written to it. false when the connection would not take it.
+fn flush[&c, &i, &b, &w](conn: &!c Conn, ints: &!i [int], bytes: &!b [byte], wire: &!w [byte]) -> [conn_write] bool {
+    var n = tls_client.take(ints, bytes, wire);
+    while n > 0 {
+        var sent = 0;
+        while sent < n {
+            match conn_write(conn, wire[sent..n]) {
+                Sent::Wrote(k) => {
+                    sent = sent + k;
+                }
+                Sent::Again => {
+                }
+                Sent::Failed(e) => {
+                    return false;
+                }
+            }
+        }
+        n = tls_client.take(ints, bytes, wire);
+    }
+    return true;
+}
+
+// What the engine has received and opened, written to the standard output and counted in `why[1]`.
+fn drain[&io, &i, &b, &a, &y](io: &!io Io, ints: &!i [int], bytes: &!b [byte], app: &!a [byte], quiet: bool, why: &!y [int]) -> [io_write] int {
+    var all = 0;
+    var n = tls_client.recv(ints, bytes, app);
+    while n > 0 {
+        all = all + n;
+        why[1] = why[1] + n;
+        if !quiet {
+            io.write_all(io, app[0..n]);
+        }
+        n = tls_client.recv(ints, bytes, app);
+    }
+    return all;
+}
+
+// Bytes from the connection, fed to the engine. `feed` takes fewer than it is given when what it has opened, or what
+// it has to say, must be taken first: so each is taken before it is offered the rest. How many came; 0 at the end of
+// the connection or when the engine refused them.
+fn pull[&c, &io, &i, &b, &w, &a, &s, &y](conn: &!c Conn, io: &!io Io, ints: &!i [int], bytes: &!b [byte], wire: &!w [byte], app: &!a [byte], store: &s [byte], quiet: bool, why: &!y [int]) -> [conn_read, conn_write, io_write] int {
+    var got = 0;
+    match conn_read(conn, wire[0..8192]) {
+        Received::Data(n) => {
+            got = n;
+        }
+        Received::End => {
+            tls_client.peer_eof(ints, bytes);
+        }
+        Received::Again => {
+        }
+        Received::Failed(e) => {
+            tls_client.peer_eof(ints, bytes);
+        }
+    }
+    var used = 0;
+    while used < got {
+        let k = tls_client.feed(ints, bytes, wire[used..got], store);
+        if k < 0 {
+            return 0;
+        }
+        used = used + k;
+        let moved = drain(io, ints, bytes, app, quiet, why);
+        if !flush(conn, ints, bytes, wire[8192..len(wire)]) || k == 0 && moved == 0 {
+            return 0;
+        }
+    }
+    return got;
+}
+
+// One connection: the handshake, a request, the answer. The milliseconds the handshake took, or -1 and the reason in
+// `why[0]`.
+fn once[&c, &io, &k, &i, &b, &w, &a, &s, &h, &p, &r, &y](conn: &!c Conn, io: &!io Io, clock: &k Clock, ints: &!i [int], bytes: &!b [byte], wire: &!w [byte], app: &!a [byte], store: &s [byte], host: &h [byte], path: &p [byte], random: &r [byte], now: int, quiet: bool, why: &!y [int]) -> [conn_read, conn_write, clock, io_write] int {
+    let t0 = clock_ms(clock);
+    var code = tls_client.start(ints, bytes, host, random, now);
+    var going = code == 0;
+    while going && tls_client.event(ints) != tls_client.event_established() {
+        if !flush(conn, ints, bytes, wire) || tls_client.event(ints) == tls_client.event_failed() {
+            going = false;
+        } else if tls_client.event(ints) != tls_client.event_established() {
+            if pull(conn, io, ints, bytes, wire, app, store, quiet, why) == 0 {
+                going = false;
+            }
+        }
+    }
+    let ms = clock_ms(clock) - t0;
+    if !going || tls_client.event(ints) != tls_client.event_established() {
+        flush(conn, ints, bytes, wire);
+        why[0] = tls_client.failure(ints);
+        if code != 0 {
+            why[0] = code;
+        }
+        return 0 - 1;
+    }
+    flush(conn, ints, bytes, wire);
+    tls_client.send(ints, bytes, "GET ");
+    tls_client.send(ints, bytes, path);
+    tls_client.send(ints, bytes, " HTTP/1.0\r\n\r\n");
+    flush(conn, ints, bytes, wire);
+    // until the server says it has finished (its close_notify) or the connection ends
+    while tls_client.event_after_take(ints) == tls_client.event_established() && pull(conn, io, ints, bytes, wire, app, store, quiet, why) > 0 {
+    }
+    drain(io, ints, bytes, app, quiet, why);
+    tls_client.finish(ints, bytes);
+    flush(conn, ints, bytes, wire);
+    return ms;
+}
+
+fn run[&hp, &io, &g, &n, &k, &f](heap: &!hp Heap, io: &!io Io, args: &g Args, net: &n Net(""), clock: &k Clock, fs: &f Fs("")) -> [heap, args, net_out(""), conn_read, conn_write, clock, fs_read(""), io_write, err_write] int {
+    if arg_count(args) < 8 {
+        io.error_all(io, "usage: client <address> <port> <name> <roots.pem> <seconds> <times> <path> [quiet]\n");
+        return 2;
+    }
+    let port = number(arg(args, 2));
+    let host = arg(args, 3);
+    var now = number(arg(args, 5));
+    let times = number(arg(args, 6));
+    let quiet = arg_count(args) > 8;
+    if now == 0 {
+        now = clock_unix_ms(clock) / 1000;
+    }
+    var slot_ints = box_slice(heap, tls_client.ints_len(), 0);
+    var slot_bytes = box_slice(heap, tls_client.bytes_len(), byte_of(0));
+    var store = box_slice(heap, 262144, byte_of(0));
+    var pem = box_slice(heap, 262144, byte_of(0));
+    var wire = box_slice(heap, 8192 + 16640, byte_of(0));
+    var app = box_slice(heap, 16384, byte_of(0));
+    var done = 0;
+    var total = 0;
+    var refused = 0;
+    var answered = 0;
+    region r {
+        let random = alloc_slice[r](96, byte_of(0));
+        let info = alloc_slice[r](2, 0);
+        let why = alloc_slice[r](2, 0);
+        var store_len = 0;
+        borrow mut pem as &!pw in {
+            borrow mut store as &!sw in {
+                let pn = fs_read(fs, arg(args, 4), contents(pw));
+                if pn > 0 {
+                    if x509_verify.store_load(contents(pw)[0..pn], contents(sw), info) > 0 {
+                        store_len = info[0];
+                    }
+                }
+            }
+        }
+        borrow mut slot_ints as &!iw in {
+            borrow mut slot_bytes as &!bw in {
+                borrow mut wire as &!ww in {
+                    borrow mut app as &!aw in {
+                        borrow store as &sr in {
+                            var t = 0;
+                            while t < times {
+                                fs_read(fs, "/dev/urandom", random);
+                                match tcp_connect(net, arg(args, 1), port) {
+                                    Dialed::Ok(c) => {
+                                        var conn = c;
+                                        var ms = 0;
+                                        borrow mut conn as &!ch in {
+                                            ms = once(ch, io, clock, contents(iw), contents(bw), contents(ww), contents(aw), contents(sr)[0..store_len], host, arg(args, 7), random, now, quiet, why);
+                                        }
+                                        conn_close(conn);
+                                        answered = why[1];
+                                        if ms >= 0 {
+                                            done = done + 1;
+                                            total = total + ms;
+                                        } else {
+                                            refused = why[0];
+                                        }
+                                        tls_client.drop(contents(iw), contents(bw));
+                                    }
+                                    Dialed::Failed(e) => {
+                                        refused = 0 - 1;
+                                    }
+                                }
+                                t = t + 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    unbox_slice(heap, slot_ints);
+    unbox_slice(heap, slot_bytes);
+    unbox_slice(heap, store);
+    unbox_slice(heap, pem);
+    unbox_slice(heap, wire);
+    unbox_slice(heap, app);
+    flush_out(io);
+    region m {
+        let line = alloc_slice[m](24, byte_of(0));
+        io.error_all(io, "handshakes ");
+        io.error_all(io, digits(line, done));
+        io.error_all(io, " of ");
+        io.error_all(io, digits(line, times));
+        io.error_all(io, "\nhandshake_ms ");
+        io.error_all(io, digits(line, total));
+        io.error_all(io, "\nanswer_bytes ");
+        io.error_all(io, digits(line, answered));
+        io.error_all(io, "\n");
+        if refused == 0 - 1 {
+            io.error_all(io, "refused no-connection\n");
+        } else if refused != 0 {
+            io.error_all(io, "refused ");
+            io.error_all(io, tls_record.refusal_tag(refused));
+            io.error_all(io, "\n");
+        }
+    }
+    if done == times {
+        return 0;
+    }
+    return 1;
+}
+
+// `n` (not negative) in decimal, in `line`.
+fn digits[&l](line: &!l [byte], n: int) -> [] &l [byte] {
+    var at = len(line);
+    var v = n;
+    at = at - 1;
+    line[at] = byte_of(48 + v % 10);
+    v = v / 10;
+    while v > 0 {
+        at = at - 1;
+        line[at] = byte_of(48 + v % 10);
+        v = v / 10;
+    }
+    return line[at..len(line)];
+}
+
+fn main(world: World) -> [] int {
+    let Split { io, ffi, fs, heap, args, net, clock, signals, exec, tty } = split(world);
+    release(ffi);
+    release(signals);
+    release(exec);
+    release(tty);
+    var status = 2;
+    borrow mut heap as &!h in {
+        borrow mut io as &!i in {
+            borrow args as &g in {
+                borrow net as &n in {
+                    borrow clock as &k in {
+                        borrow fs as &f in {
+                            status = run(h, i, g, n, k, f);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    release(heap);
+    release(io);
+    release(args);
+    release(net);
+    release(clock);
+    release(fs);
+    return status;
+}
