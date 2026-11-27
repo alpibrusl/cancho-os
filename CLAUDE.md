@@ -101,12 +101,12 @@ Rules of the road
   `name` buffer and the number of pieces in o[9]; `disk.named_at` writes the pieces and the entry into ONE sector.
   A sector passed over while looking for a row must get `fat.close_end`, or the directory ends before the new
   name (macOS's checker found that). A name is taken away with `disk.unname`, pieces first.
-- A lent system (cancho docs/bare-system.md): `hosted` in kernel.cho is the ONE `system ksys(con, vio, dma, k, line, h) in { }`
-  block of the image (the compiler takes one, and no `return` inside it); `which` picks the program, and the programs are in
-  `src/programs.cho`, which imports nothing of the kernel: a new one goes there. `src/ksys.cho` answers a
+- A lent system (cancho docs/bare-system.md): `hosted` in kernel.cho is the ONE `system ksys(con, vio, dma, stage, k, line, h) in { }`
+  block of the image (the compiler takes one, and no `return` inside it); `which` picks the program, and the programs are cancho-tools' and `tell`
+  (`src/programs.cho`, which imports nothing of the kernel; the kernel's own check of a lent system). `src/ksys.cho` answers a
   hosted program's streams, arguments and files; its functions' first parameters are what is lent, in that order. Its files are
-  the disk's, READ ONLY: `step` and `open` refuse every way of opening that writes (-30), and nothing in ksys may write the disk
-  until it goes through `files` and the record as the shell's commands do. `HOSTKEY.BIN` is refused there too (`files.secret`).
+  the disk's: read through `disk`, and changed only as the paragraph on a program's writes below says (a draft, then
+  `files.store_as`; `files.rename`). `HOSTKEY.BIN` is refused there too (`files.secret`).
   A listing (`list`, `next`) keeps only how many names it has given and walks the directory again each time; names that begin
   with a dot are not given, as `named` opens none. `stat` answers one thing a call (kind, length, time): `fat.changed` reads
   FAT's date and time as UTC, and its vectors are Python's `calendar.timegm`.
