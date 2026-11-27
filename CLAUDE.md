@@ -121,8 +121,9 @@ Rules of the road
 - The date (docs/clock.md): `src/clock.cho` is pure (SNTP's question and answer, seconds to a date) with
   `tests/clock_test.cho` against Python's dates. `net time <address> [port]` sets k[4275], the time the board started
   at; the shell puts the time a line was typed at in k[4276], and `disk.touch`/`touch_new` date what is written with
-  it. The date is BELIEVED, not proved, and may go backwards: nothing may be allowed or refused by it until the two
-  rules of the doc are built. `tests/sntp.py` is the machine that is asked, in the tests.
+  it. The date is BELIEVED, not proved. It may not go back before the record's entry's own date
+  (`ledger.last_change`; `back` at the console overrides), and `keys.grants_for` takes a line with `until:` to
+  grant nothing when the day is over, the date unknown, or the word not a day: keep both when touching either. `tests/sntp.py` is the machine that is asked, in the tests.
 - A program that goes wrong (docs/tools.md): after `report_fault` a Pi up for ten seconds resets itself by its watchdog
   (`restart`), and BOOT.TXT brings it back; sooner than that it halts. `watch on` (console or BOOT.TXT, k[4274]) makes
   `hosted` count the watchdog while a program runs, and five functions of ksys start the count again. It cannot be
