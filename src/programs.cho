@@ -140,3 +140,97 @@ pub fn count[&i, &g, &f](io: &!i Io, args: &g Args, fs: &f Fs("")) -> [io_write,
     flush_out(io);
     return status;
 }
+
+// `names [path]`: what a directory holds, a line for each name: its length in bytes, when it was last written (seconds
+// since 1970), and the name, with a `/` after a directory's. The names come from `dir_list` and `dir_next`, and the
+// two numbers from `dir_stat`: each is answered by `ksys` from the disk.
+pub fn names[&i, &g, &f](io: &!i Io, args: &g Args, fs: &f Fs("")) -> [io_write, args, fs_read(""), dir_read] int {
+    if arg_count(args) > 2 {
+        write_bytes(io, "names [path]\n");
+        flush_out(io);
+        return 1;
+    }
+    var path = "/";
+    if arg_count(args) == 2 {
+        path = arg(args, 1);
+    }
+    var dots = false;
+    var j = 1;
+    while j < len(path) {
+        dots = dots || int_of(path[j]) == '.' && int_of(path[j - 1]) == '.';
+        j = j + 1;
+    }
+    if dots {
+        // as `count` does: the language traps on `..`, and a trap here stops the kernel
+        write_bytes(io, "not a path: no `..` in it\n");
+        flush_out(io);
+        return 1;
+    }
+    var status = 1;
+    match open_dir(fs, path) {
+        DirOpened::Ok(d) => {
+            var dir = d;
+            borrow dir as &r in {
+                match dir_list(r) {
+                    Listing::Ok(opened) => {
+                        var stream = opened;
+                        status = 0;
+                        var held = 0;
+                        region q {
+                            let name = alloc_slice[q](255, byte_of(0));
+                            var going = true;
+                            while going {
+                                borrow mut stream as &!s in {
+                                    match dir_next(s, name) {
+                                        Listed::Name(n, kind) => {
+                                            match dir_stat(r, name[0..n]) {
+                                                DirStat::Ok(found, size, seconds) => {
+                                                    number_out(io, size);
+                                                    putchar(io, ' ');
+                                                    number_out(io, seconds);
+                                                }
+                                                DirStat::Failed(e) => {
+                                                    write_bytes(io, "? ?");
+                                                    status = 1;
+                                                }
+                                            }
+                                            putchar(io, ' ');
+                                            write_bytes(io, name[0..n]);
+                                            if kind == 2 {
+                                                putchar(io, '/');
+                                            }
+                                            putchar(io, '\n');
+                                            held = held + 1;
+                                        }
+                                        Listed::End => {
+                                            going = false;
+                                        }
+                                        Listed::Failed(e) => {
+                                            write_bytes(io, "the directory could not be read\n");
+                                            status = 1;
+                                            going = false;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        dir_list_close(stream);
+                        if status == 0 {
+                            number_out(io, held);
+                            write_bytes(io, " names\n");
+                        }
+                    }
+                    Listing::Failed(e) => {
+                        write_bytes(io, "the directory could not be read\n");
+                    }
+                }
+            }
+            dir_close(dir);
+        }
+        DirOpened::Failed(e) => {
+            write_bytes(io, "no such directory\n");
+        }
+    }
+    flush_out(io);
+    return status;
+}

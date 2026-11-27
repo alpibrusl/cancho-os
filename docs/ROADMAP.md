@@ -71,7 +71,10 @@
   of cancho-tools: streams and arguments. In QEMU.
 - A lent system's files (2026-11-27): `count <path>`, a function written against `Fs`, reads a file of the card;
   `ksys` answers its opens and reads from the FAT volume, read only. Its count of a 300,000-byte file is what
-  Python counts. Next: listing a directory, then the tools themselves built into the image. In QEMU.
+  Python counts. In QEMU.
+- A lent system's directories (2026-11-27): `names [path]`, written against `dir_list`, `dir_next` and `dir_stat`,
+  lists a directory with each name's length and time; on volumes macOS made, both are what was put there. The
+  hosted programs moved to `src/programs.cho`. Next: the tools themselves built into the image. In QEMU.
 - Long names (2026-11-26, docs/storage.md): read, written, replaced and removed; the pieces made here are the
   pieces macOS makes. With directories, a source tree can live on the card.
 - Directories (2026-11-26, docs/storage.md): a name may be a path; `mkdir`, `ls <path>`.

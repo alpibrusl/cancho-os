@@ -84,7 +84,7 @@ pub fn argument[&mc, &mv, &md, &s, &l, &hd, &t](con: &!mc Mmio("0x9000000..0x900
 
 // ---- files, to read ------------------------------------------------------------------------------
 // A hosted program's files are the disk's (docs/storage.md). What is open is in `h`, six whole numbers each:
-//   0 what it is (0 nothing, 1 a directory, 2 a file)   1 its first cluster (0: the top directory)
+//   0 what it is (0 nothing, 1 a directory, 2 a file, 3 a listing of a directory)   1 its first cluster (0: the top directory)
 //   2 its length   3 where the next `read` begins   4 5 a cluster of it and which one that is, so that reading
 //   on does not walk the chain from its start.
 // A handle is its place plus 3. Every answer that is not a handle or a count is minus the reason, as the
@@ -324,4 +324,129 @@ pub fn close[&mc, &mv, &md, &s, &l, &hd](con: &!mc Mmio("0x9000000..0x9000048,0x
     }
     h[(handle - 3) * 6] = 0;
     return 0;
+}
+
+// ---- what a directory holds ----------------------------------------------------------------------
+// A listing is a handle of its own (3): the directory's first cluster, and in place 3 how many names have been
+// given. Each `next` walks the directory from its start to the name that is due: nothing of a walk is kept
+// between two calls, so a listing costs no more than its handle, and a directory is short. A name that begins
+// with a dot is not given: `.` and `..` are entries of every directory but the top one, and `named` opens none.
+
+pub fn list[&mc, &mv, &md, &s, &l, &hd](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], line: &!l [byte], h: &!hd [int], dir: int) -> [] int {
+    let at = held(h, dir, 1);
+    if at < 0 {
+        return 0 - 9;
+    }
+    return fresh(h, 3, h[at + 1], 0);
+}
+
+// The next name of a listing into `into`: its length and 65536 times its kind (1 a file, 2 a directory); 0 at the
+// end; minus why not (36: the name is longer than `into`).
+pub fn next[&mc, &mv, &md, &s, &l, &hd, &t](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], line: &!l [byte], h: &!hd [int], listing: int, into: &!t [byte]) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000")] int {
+    let at = held(h, listing, 3);
+    if at < 0 {
+        return 0 - 9;
+    }
+    var answer = 0 - 5;
+    region r {
+        let sec = alloc_slice[r](512, byte_of(0));
+        let wt = alloc_slice[r](512, byte_of(0));
+        let info = alloc_slice[r](fat.facts(), 0);
+        let name = alloc_slice[r](12, byte_of(0));
+        let out = alloc_slice[r](3, 0);
+        let st = alloc_slice[r](6, 0);
+        let ls = alloc_slice[r](fat.long_state(), 0);
+        let lname = alloc_slice[r](fat.long_room(), byte_of(0));
+        if disk.volume(vio, dma, k, sec, info) == 0 {
+            disk.walk_start(info, h[at + 1], st);
+            var seen = 0;
+            var going = true;
+            answer = 0;
+            while going {
+                let spot = disk.walk_next(vio, dma, k, wt, info, st);
+                if spot <= 0 || disk.read(vio, dma, k, spot, sec) != 0 {
+                    going = false;
+                    if spot != 0 {
+                        answer = 0 - 5;
+                    }
+                }
+                var i = 0;
+                while i < 16 && going {
+                    let kind = fat.entry(sec, i, name, out);
+                    let long = fat.long(sec, i, kind, ls, lname);
+                    if kind == fat.entry_end() {
+                        going = false;
+                    } else if (kind == fat.entry_file() || kind == fat.entry_directory()) && int_of(name[0]) != '.' && !(long > 0 && int_of(lname[0]) == '.') {
+                        if seen == h[at + 3] {
+                            going = false;
+                            var n = out[0];
+                            if long > 0 {
+                                n = long;
+                            }
+                            if n > len(into) {
+                                answer = 0 - 36;
+                            } else {
+                                var j = 0;
+                                while j < n {
+                                    if long > 0 {
+                                        into[j] = lname[j];
+                                    } else {
+                                        into[j] = name[j];
+                                    }
+                                    j = j + 1;
+                                }
+                                h[at + 3] = h[at + 3] + 1;
+                                answer = n + 65536;
+                                if kind == fat.entry_directory() {
+                                    answer = n + 2 * 65536;
+                                }
+                            }
+                        }
+                        seen = seen + 1;
+                    }
+                    i = i + 1;
+                }
+            }
+        }
+    }
+    return answer;
+}
+
+// A name under an open directory, and one thing about it: `which` 0 its kind (1 a file, 2 a directory), 1 its
+// length in bytes (0 for a directory), 2 when it was last written (`fat.changed`).
+pub fn stat[&mc, &mv, &md, &s, &l, &hd, &q](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], line: &!l [byte], h: &!hd [int], dir: int, name: &q [byte], which: int) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000")] int {
+    let at = held(h, dir, 1);
+    if at < 0 {
+        return 0 - 9;
+    }
+    if len(name) == 0 || int_of(name[0]) == '.' {
+        return 0 - 2;
+    }
+    var answer = 0 - 5;
+    region r {
+        let sec = alloc_slice[r](512, byte_of(0));
+        let tab = alloc_slice[r](512, byte_of(0));
+        let info = alloc_slice[r](fat.facts(), 0);
+        let short = alloc_slice[r](12, byte_of(0));
+        let out = alloc_slice[r](3, 0);
+        let o = alloc_slice[r](12, 0);
+        if disk.volume(vio, dma, k, sec, info) == 0 && disk.look(vio, dma, k, sec, tab, info, short, out, o, h[at + 1], name, 0, len(name)) == 0 {
+            if o[0] == 0 {
+                answer = 0 - 2;
+            } else if which == 0 {
+                answer = 1;
+                if o[8] == fat.entry_directory() {
+                    answer = 2;
+                }
+            } else if which == 1 {
+                answer = 0;
+                if o[8] == fat.entry_file() {
+                    answer = o[4];
+                }
+            } else if disk.read(vio, dma, k, o[1], sec) == 0 {
+                answer = fat.changed(sec, o[2]);
+            }
+        }
+    }
+    return answer;
 }

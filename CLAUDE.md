@@ -107,6 +107,9 @@ Rules of the road
   hosted program's streams, arguments and files; its functions' first parameters are what is lent, in that order. Its files are
   the disk's, READ ONLY: `step` and `open` refuse every way of opening that writes (-30), and nothing in ksys may write the disk
   until it goes through `files` and the record as the shell's commands do. `HOSTKEY.BIN` is refused there too (`files.secret`).
+  A listing (`list`, `next`) keeps only how many names it has given and walks the directory again each time; names that begin
+  with a dot are not given, as `named` opens none. `stat` answers one thing a call (kind, length, time): `fat.changed` reads
+  FAT's date and time as UTC, and its vectors are Python's `calendar.timegm`.
   A trap in a hosted program is a trap of the kernel: one that takes a path from a person refuses `..` itself (`count` does),
   because the language traps on it. The kernel's rows carry `io_write`, `args`, `fs_read("")`, `dir_read`, `file_read` up to
   `main` until the compiler discharges them, and `docs/authority.txt` shows that.
