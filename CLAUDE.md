@@ -101,10 +101,14 @@ Rules of the road
   `name` buffer and the number of pieces in o[9]; `disk.named_at` writes the pieces and the entry into ONE sector.
   A sector passed over while looking for a row must get `fat.close_end`, or the directory ends before the new
   name (macOS's checker found that). A name is taken away with `disk.unname`, pieces first.
-- A lent system (cancho docs/bare-system.md): `hosted` in kernel.cho is the ONE `system ksys(con, k, line) in { }` block of
-  the image (the compiler takes one, and no `return` inside it). `src/ksys.cho` answers a hosted program's streams and
-  arguments; its functions' first parameters are what is lent, in that order. The kernel's rows carry `io_write` and
-  `args` up to `main` until the compiler discharges them, and `docs/authority.txt` shows that.
+- A lent system (cancho docs/bare-system.md): `hosted` in kernel.cho is the ONE `system ksys(con, vio, dma, k, line, h) in { }`
+  block of the image (the compiler takes one, and no `return` inside it); `which` picks the program. `src/ksys.cho` answers a
+  hosted program's streams, arguments and files; its functions' first parameters are what is lent, in that order. Its files are
+  the disk's, READ ONLY: `step` and `open` refuse every way of opening that writes (-30), and nothing in ksys may write the disk
+  until it goes through `files` and the record as the shell's commands do. `HOSTKEY.BIN` is refused there too (`files.secret`).
+  A trap in a hosted program is a trap of the kernel: one that takes a path from a person refuses `..` itself (`count` does),
+  because the language traps on it. The kernel's rows carry `io_write`, `args`, `fs_read("")`, `dir_read`, `file_read` up to
+  `main` until the compiler discharges them, and `docs/authority.txt` shows that.
 - BOOT.TXT (docs/boot.md): `src/boot.cho` (pure) holds the list of lines the kernel may type to itself at its
   start. Adding a command to that list is a decision: nothing that changes the disk, loads a kernel or restarts.
   The file is written at the console only (`files.boot_name`, `files.put_name`). A key in the first second stops it.

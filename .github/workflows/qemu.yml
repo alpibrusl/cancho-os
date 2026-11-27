@@ -337,6 +337,35 @@ jobs:
           grep -q "^still here" tell.txt
           MACHINE=virt SSHKEY=/tmp/sshkey SSHCMD='tell over ssh' ./test.sh 'net up' 'net ssh on' > tell-ssh.txt; cat tell-ssh.txt
           grep -q "^ssh: argument 2: ssh" tell-ssh.txt
+      - name: a hosted program reads the disk
+        # cancho docs/bare-system.md, step 3. `count` takes an `Fs` and nothing of the kernel: it opens a file and adds
+        # its bytes up, and every open and read is answered by src/ksys.cho from the FAT volume. What it counts is
+        # held against what Python counts in the same file, on three volumes Linux's tools made, in a directory
+        # under a long name, on the Pi 3's SD card and over SSH.
+        run: |
+          want=$(python3 -c 'd=open("big.bin","rb").read(); print("%d bytes, which add up to %d" % (len(d), sum(d)))')
+          small=$(python3 -c 'd=open("hello.txt","rb").read(); print("%d bytes, which add up to %d" % (len(d), sum(d)))')
+          for img in fat32 fat16 part; do
+            MACHINE=virt DISK=$img.img ./test.sh 'count BIG.BIN' 'count /hello.txt' 'count nothere' 'count ../BIG.BIN' count 'echo still here' > count-$img.txt; cat count-$img.txt
+            test "$(grep -c "^$want" count-$img.txt)" = 1
+            test "$(grep -c "^$small" count-$img.txt)" = 1
+            grep -q "^no such file" count-$img.txt
+            grep -q "^not a path" count-$img.txt
+            grep -q "^count <path>" count-$img.txt
+            grep -q "^still here" count-$img.txt
+          done
+          cp fat32.img c.img
+          mmd -i c.img ::deep ::deep/er
+          mcopy -i c.img big.bin ::deep/er/a-long-name-for-a-big-file.bin
+          printf 'not to be read' > HOSTKEY.BIN; mcopy -i c.img HOSTKEY.BIN ::
+          MACHINE=virt DISK=c.img ./test.sh 'count deep/er/a-long-name-for-a-big-file.bin' 'count deep' 'count deep/er/' 'count HOSTKEY.BIN' 'count /HOSTKEY.BIN' > count-deep.txt; cat count-deep.txt
+          test "$(grep -c "^$want" count-deep.txt)" = 1
+          test "$(grep -c "^no such file" count-deep.txt)" = 4
+          test "$(grep -c "bytes, which add up to" count-deep.txt)" = 1
+          SD=c.img ./test.sh 'count BIG.BIN' > count-sd.txt; cat count-sd.txt
+          grep -q "^$want" count-sd.txt
+          MACHINE=virt DISK=fat32.img SSHKEY=/tmp/sshkey SSHCMD='count BIG.BIN' ./test.sh 'net up' 'net ssh on' > count-ssh.txt; cat count-ssh.txt
+          grep -q "^ssh: $want" count-ssh.txt
       - name: the heap
         # cancho docs/freestanding.md, section 8: a JSON object made on the heap and printed, growing buffers read
         # back, and a block made and given back so many times that it must have been used again.

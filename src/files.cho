@@ -102,7 +102,7 @@ pub fn keep[&mc, &mv, &md, &s, &m, &d](con: &!mc Mmio("0x9000000..0x9000048,0x3f
 }
 
 // Is `text[from..to]` the name of the SSH host key's file? The shell neither shows nor copies nor adds to it.
-fn secret[&r](text: &r [byte], from: int, to: int) -> [] bool {
+pub fn secret[&r](text: &r [byte], from: int, to: int) -> [] bool {
     return fat.named("HOSTKEY.BIN", 11, text, from, to);
 }
 

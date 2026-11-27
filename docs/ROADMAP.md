@@ -68,7 +68,10 @@
   hardware on the real boards without moving the SD card for every build; `board/send.py` is the sender.
 - A lent system (2026-11-27, cancho docs/bare-system.md): `tell`, a function written against `Io` and `Args` with
   nothing of the kernel in it, runs inside the kernel, answered by `src/ksys.cho`. The first step towards the tools
-  of cancho-tools: streams and arguments. Files and directories are next. In QEMU.
+  of cancho-tools: streams and arguments. In QEMU.
+- A lent system's files (2026-11-27): `count <path>`, a function written against `Fs`, reads a file of the card;
+  `ksys` answers its opens and reads from the FAT volume, read only. Its count of a 300,000-byte file is what
+  Python counts. Next: listing a directory, then the tools themselves built into the image. In QEMU.
 - Long names (2026-11-26, docs/storage.md): read, written, replaced and removed; the pieces made here are the
   pieces macOS makes. With directories, a source tree can live on the card.
 - Directories (2026-11-26, docs/storage.md): a name may be a path; `mkdir`, `ls <path>`.

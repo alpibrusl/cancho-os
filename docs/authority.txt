@@ -15,6 +15,9 @@ performs
     cpu("tlbi_vmalle1")
     cpu("ttbr0_el1")
     cpu("wfi")
+    dir_read
+    file_read
+    fs_read("")
     heap
     io_write
     mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001")
@@ -32,7 +35,6 @@ performs
     mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048")
     mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")
 never touches
-    the filesystem
     the network
     signals
     other programs
