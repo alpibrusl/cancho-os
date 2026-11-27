@@ -75,6 +75,7 @@ say 'net ssh on' 4
     as "$AGENT" 'copy SECRET.TXT WORK/OUT/S.TXT'
     as "$AGENT" 'net ssh off'
     as "$AGENT" restart
+    as "$AGENT" 'fail trap'
 } > build/agents-shell.out
 as "$OWNER" 'cat LOG.TXT' > build/agents-log.out
 # the grant to write is taken away: the owner writes the file again with `read:` where `write:` was
@@ -98,7 +99,7 @@ grep -q '"text":"what the agent may read"' build/agents-yes.out || ok=1
 [ "$(grep -c '"ok":false' build/agents-no.out)" = 12 ] || ok=1
 [ "$(grep -c '"ok":true\|"type":"hash"\|"type":"match"\|"type":"entry"' build/agents-no.out)" = 0 ] || ok=1
 grep -q 'not for the agent\|beside what is granted' build/agents-no.out && ok=1
-[ "$(grep -c "this key is an agent's" build/agents-shell.out)" = 6 ] || ok=1
+[ "$(grep -c "this key is an agent's" build/agents-shell.out)" = 7 ] || ok=1
 grep -q 'not for the agent' build/agents-shell.out && ok=1
 # the record: three changes by an agent's key, and none of the refused ones
 [ "$(grep -c ' key:[0-9a-f]* agent ' build/agents-log.out)" = 3 ] || ok=1

@@ -52,7 +52,7 @@ pub fn allowed[&t](text: &t [byte], from: int, to: int) -> [] bool {
     if is(text, from, to, "net up") || is(text, from, to, "net eth") || is(text, from, to, "net dhcp") || is(text, from, to, "net ssh on") {
         return true;
     }
-    if is(text, from, to, "servo via off") {
+    if is(text, from, to, "servo via off") || is(text, from, to, "watch on") {
         return true;
     }
     return begins(text, from, to, "servo via ") || begins(text, from, to, "echo ");

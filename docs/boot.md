@@ -34,7 +34,8 @@ servo via 10.42.0.1 6000
   mistake: the kernel says how many lines it is about to run, waits a second, and runs none if a key
   came.
 - **It is written at the console only.** Its lines run with the console's authority, and two of them
-  (`net ssh on`, `servo via`) are things the network may not ask for. So over SSH `write`, `replace`, `move`,
+  (`net ssh on`, `servo via`) are things the network may not ask for. `watch on` may be a line too: it only makes a program that never ends reset the board (docs/tools.md).
+  So over SSH `write`, `replace`, `move`,
   `copy` onto, `remove` and `put` all refuse the name, for an owner's key too. Reading it is allowed.
 - `src/boot.cho` decides which lines are run and is pure, like `inet`, `fat`, `keys` and `record`.
 - With no disk, or no such file, nothing happens and nothing is said.

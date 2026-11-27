@@ -15,6 +15,11 @@ fn test_what_brings_the_board_back_is_allowed() -> [] int {
     test.assert(ok("servo via 10.42.0.1 6000"));
     test.assert(ok("servo via off"));
     test.assert(ok("echo the board is up"));
+    // and what brings it back when a program does not end
+    let w = "watch on";
+    test.assert(boot.allowed(w, 0, len(w)));
+    let wo = "watch off";
+    test.assert(!boot.allowed(wo, 0, len(wo)));
     return 0;
 }
 
