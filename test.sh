@@ -13,6 +13,7 @@
 #                                        the same, and the kernel may write to it: the file is changed
 #                                        with that file as the machine's disk, read-only (docs/storage.md)
 #   MACHINE=virt SSHKEY=key SSHCMD=about ./test.sh 'net up' 'net ssh on' net
+#   MACHINE=virt DISKRW=image SSHKEY=key SSHCMD='write --create --stdin N.TXT' SSHSTDIN=file ./test.sh 'net up' 'net ssh on'
 #                                        OpenSSH's client logs in with that key and runs the command
 #                                        (SSHIN='about\nexit\n' types into a shell session instead)
 #   MACHINE=virt DISKRW=image SSHKEY=key SSHPUT=file:NAME SSHAFTER='sum NAME' ./test.sh 'net up' 'net ssh on'
@@ -59,7 +60,8 @@ sleep 2
 first=1
 typed=0
 for line in "$@"; do
-    printf '%s\r' "$line" >&3
+    # (`^D` is the key that ends what is typed to a program that reads its input)
+    if [ "$line" = "^D" ]; then printf '\004' >&3; else printf '%s\r' "$line" >&3; fi
     sleep 1
     typed=$((typed + 1))
     if [ "$typed" = 2 ] && [ -n "${SSHKEY:-}" ]; then
@@ -67,7 +69,8 @@ for line in "$@"; do
         # SSHCMD is run as `ssh host command`; SSHIN is typed into a shell session.
         opts="-p 5522 -i $SSHKEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=20"
         if [ -n "${SSHCMD:-}" ]; then
-            ssh $opts cancho@127.0.0.1 "$SSHCMD" < /dev/null > build/ssh.out 2>&1
+            # (SSHSTDIN, a file, is the command's input: what a program that reads is given)
+            ssh $opts cancho@127.0.0.1 "$SSHCMD" < "${SSHSTDIN:-/dev/null}" > build/ssh.out 2>&1
             code=$?
             tr -d '\r' < build/ssh.out | sed 's/^/ssh: /' >> build/peer.txt
             echo "ssh: exit status $code" >> build/peer.txt

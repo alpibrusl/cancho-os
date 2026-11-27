@@ -272,8 +272,9 @@ fn put_version[&mc, &s, &v](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3
     return 0;
 }
 
-// `write <name> <text>`, `append <name> <text>`, `copy <from> <to>`, `remove <name>` and `purge <number>`.
-// What a file held is never lost by the first four: `write` over a file and `remove` leave it in `OLD`
+// `copy <from> <to>`, `remove <name>`, `mkdir <path>` and `purge <number>`. (A file's contents are written by a
+// program, cancho-tools' `write`, through `store_as` below: the shell has no command that writes one blind.)
+// What a file held is never lost by the first three: `remove` leaves it in `OLD`
 // under a number, and the name is changed last. `purge` is the one that gives clusters back.
 fn change[&mc, &mv, &md, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], text: &r [byte], n: int, what: int, who: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
     region r {
@@ -307,7 +308,7 @@ fn change[&mc, &mv, &md, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000
         if why != 0 {
             disk.put_why(con, k, why);
         } else if what < 4 && (mid >= n - 1 || mid == first) {
-            base.puts(con, k, "usage: write <name> <text>, append <name> <text>, copy <from> <to>\r\n");
+            base.puts(con, k, "usage: copy <from> <to>\r\n");
         } else if ledger.ready(con, vio, dma, k, sec, tab, rtab, info, name, out, o, w, who) != 0 {
             // `ready` said why
         } else if what != 5 && paths(con, vio, dma, k, sec, rtab, info, name, out, o, text, first, mid, n, what, pd) != 0 {
@@ -344,81 +345,6 @@ fn change[&mc, &mv, &md, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000
                 } else {
                     disk.counted(vio, dma, k, sec, info, w);
                     base.puts(con, k, "made: a directory\r\n");
-                }
-            }
-        } else if what == 1 {
-            // a file whose contents are the text and a line feed: a new one, or a new version of one
-            if disk.look(vio, dma, k, sec, rtab, info, name, out, o, pd[0], text, pd[1], mid) != 0 {
-                base.puts(con, k, "the disk could not be read\r\n");
-            } else if o[0] != 0 && o[8] != fat.entry_file() {
-                base.puts(con, k, "that is a directory\r\n");
-            } else {
-                let there = o[0] != 0;
-                let es = o[1];
-                let ei = o[2];
-                let oc = o[3];
-                let os = o[4];
-                var ok = true;
-                if !there {
-                    ok = disk.place(con, vio, dma, k, sec, tab, rtab, info, name, out, o, w, pd[0], text, pd[1], mid) == 0;
-                }
-                var size = n - mid - 1;
-                if size > 500 {
-                    size = 500;
-                }
-                var i = 0;
-                while i < 512 {
-                    sec[i] = byte_of(0);
-                    i = i + 1;
-                }
-                i = 0;
-                while i < size {
-                    sec[i] = text[mid + 1 + i];
-                    i = i + 1;
-                }
-                sec[size] = byte_of(10);
-                size = size + 1;
-                sha.digest(sec[0..size], hd);
-                if !ok {
-                    // `place` said why
-                } else if disk.put(vio, dma, k, tab, info, w, sec) != 0 || disk.kept(vio, dma, k, tab, info, w) != 0 {
-                    base.puts(con, k, "the disk is full, or could not be written: nothing was changed\r\n");
-                } else if !there {
-                    if ledger.record_add(vio, dma, k, info, w, who, "write", text, first, mid, text, 0, 0, 0, size, hd, true) != 0 {
-                        base.puts(con, k, "the record could not be added to: nothing was changed\r\n");
-                    } else if disk.name_it(vio, dma, k, sec, tab, info, o, w, name, text, pd[1], mid, size) != 0 {
-                        base.puts(con, k, "the disk could not be written: no file was made\r\n");
-                    } else {
-                        disk.counted(vio, dma, k, sec, info, w);
-                        base.puts(con, k, "written: ");
-                        base.put_dec(con, k, size);
-                        base.puts(con, k, " bytes\r\n");
-                    }
-                } else {
-                    // what the file held gets its name in OLD first; then the file's own entry is pointed
-                    // at the new contents, in one sector written once
-                    let first_new = w[0];
-                    let v = disk.version(con, vio, dma, k, sec, tab, rtab, info, name, out, o, w, vname, oc, os);
-                    var bad = v < 0;
-                    if !bad && ledger.record_add(vio, dma, k, info, w, who, "write", text, first, mid, text, 0, 0, v, size, hd, true) != 0 {
-                        base.puts(con, k, "the record could not be added to: nothing was changed\r\n");
-                        bad = true;
-                    }
-                    bad = bad || disk.read(vio, dma, k, es, sec) != 0;
-                    if !bad {
-                        fat.set_extent(sec, ei, first_new, size);
-                        bad = disk.write(vio, dma, k, es, sec) != 0;
-                    }
-                    if bad {
-                        base.puts(con, k, "the file is as it was\r\n");
-                    } else {
-                        disk.counted(vio, dma, k, sec, info, w);
-                        base.puts(con, k, "written: ");
-                        base.put_dec(con, k, size);
-                        base.puts(con, k, " bytes; what was there is ");
-                        put_version(con, k, vname);
-                        base.puts(con, k, "\r\n");
-                    }
                 }
             }
         } else if what == 4 {
@@ -569,59 +495,91 @@ fn change[&mc, &mv, &md, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000
                     }
                 }
             }
-        } else {
-            // more at the end of a file that is there: its text and a line feed
-            if disk.look(vio, dma, k, sec, rtab, info, name, out, o, pd[0], text, pd[1], mid) != 0 || o[0] == 0 || o[8] != fat.entry_file() {
-                base.puts(con, k, "no such file to add to (`write` makes one)\r\n");
-            } else {
-                let size = o[4];
-                let es = o[1];
-                let ei = o[2];
-                var more = n - mid - 1;
-                if more > 500 {
-                    more = 500;
-                }
-                var i = 0;
-                while i < more {
-                    rsec[i] = text[mid + 1 + i];
-                    i = i + 1;
-                }
-                rsec[more] = byte_of(10);
-                more = more + 1;
-                sha.digest(rsec[0..more], hd);
-                var bad = disk.extend(vio, dma, k, sec, tab, rtab, info, w, o[3], size, rsec, more) != 0 || disk.kept(vio, dma, k, tab, info, w) != 0;
-                if !bad && ledger.record_add(vio, dma, k, info, w, who, "append", text, first, mid, text, 0, 0, 0, more, hd, true) != 0 {
-                    base.puts(con, k, "the record could not be added to: nothing was changed\r\n");
-                    bad = true;
-                }
-                // last, the directory's word for where the file starts and how long it is
-                bad = bad || disk.read(vio, dma, k, es, sec) != 0;
-                if !bad {
-                    fat.set_extent(sec, ei, w[0], size + more);
-                    bad = disk.write(vio, dma, k, es, sec) != 0;
-                }
-                if bad {
-                    base.puts(con, k, "the disk is full, or could not be read or written: the file is as it was\r\n");
-                } else {
-                    disk.counted(vio, dma, k, sec, info, w);
-                    base.puts(con, k, "added: ");
-                    base.put_dec(con, k, more);
-                    base.puts(con, k, " bytes, ");
-                    base.put_dec(con, k, size + more);
-                    base.puts(con, k, " in all\r\n");
-                }
-            }
         }
     }
     return 1;
 }
 
+// Is `text[from..to]` a file of the top directory that the board starts from (`boot_name`)? A program is not given
+// those to change: a wrong one stops the board, and `put` is the way that checks every byte.
+pub fn tool_kept[&r](text: &r [byte], from: int, to: int) -> [] bool {
+    return leaf(text, from, to) == from && boot_name(text, from, to);
+}
+
+// A file's name, or a directory's, changed to another in the same directory, for a program that asked for it (`ksys.rename`): `old[of..ot]`
+// becomes `new[nf..nt]`, two paths with the same directories before the last name. Nothing of the file moves and
+// no version is made: what it holds does not change. A name that is taken is not replaced. The record first, then the
+// new name, then the old one taken away: between the last two the file has both, and has lost nothing.
+// A directory keeps what is in it: its entries are in its own clusters, and the directory above it is the same one.
+// 0; or the number a system gives the reason: 2 no such name, 5 the disk, 13 a name that is the kernel's, 17 taken.
+// Nothing is printed.
+pub fn rename[&mc, &mv, &md, &s, &r, &t](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], old: &r [byte], of: int, ot: int, new: &t [byte], nf: int, nt: int, who: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+    if !put_name(old, of, ot) || !put_name(new, nf, nt) || tool_kept(old, of, ot) || tool_kept(new, nf, nt) {
+        return 13;
+    }
+    var answer = 5;
+    region r {
+        let sec = alloc_slice[r](512, byte_of(0));
+        let tab = alloc_slice[r](512, byte_of(0));
+        let rtab = alloc_slice[r](512, byte_of(0));
+        let info = alloc_slice[r](fat.facts(), 0);
+        let name = alloc_slice[r](12, byte_of(0));
+        let hd = alloc_slice[r](32, byte_of(0));
+        let out = alloc_slice[r](3, 0);
+        let o = alloc_slice[r](12, 0);
+        let pd = alloc_slice[r](4, 0);
+        let w = alloc_slice[r](8, 0);
+        w[5] = -1;
+        if disk.volume(vio, dma, k, sec, info) == 0 && ledger.ready(con, vio, dma, k, sec, tab, rtab, info, name, out, o, w, who) == 0 && paths(con, vio, dma, k, sec, rtab, info, name, out, o, old, of, ot, ot, 0, pd) == 0 {
+            let at = leaf(new, nf, nt);
+            if disk.look(vio, dma, k, sec, rtab, info, name, out, o, pd[0], old, pd[1], ot) != 0 {
+                answer = 5;
+            } else if o[0] == 0 {
+                answer = 2;
+            } else if o[8] != fat.entry_file() && o[8] != fat.entry_directory() {
+                answer = 2;
+            } else {
+                let folder_too = o[8] == fat.entry_directory();
+                let es = o[1];
+                let ei = o[2];
+                let cluster = o[3];
+                let size = o[4];
+                let long = o[9];
+                let long_s = o[10];
+                let long_i = o[11];
+                if disk.look(vio, dma, k, sec, rtab, info, name, out, o, pd[0], new, at, nt) != 0 {
+                    answer = 5;
+                } else if o[0] != 0 {
+                    answer = 17;
+                } else if disk.place(con, vio, dma, k, sec, tab, rtab, info, name, out, o, w, pd[0], new, at, nt) == 0 {
+                    let slot = o[5];
+                    var bad = ledger.record_add(vio, dma, k, info, w, who, "move", new, nf, nt, old, of, ot, 0, size, hd, false) != 0;
+                    bad = bad || disk.read(vio, dma, k, slot, sec) != 0 || disk.named_at(sec, o, name, new, at, nt, cluster, size, folder_too) != 0 || disk.write(vio, dma, k, slot, sec) != 0;
+                    bad = bad || disk.unname(vio, dma, k, sec, rtab, info, pd[0], es, ei, long, long_s, long_i) != 0;
+                    if !bad {
+                        disk.counted(vio, dma, k, sec, info, w);
+                        answer = 0;
+                    }
+                }
+            }
+        }
+    }
+    return answer;
+}
+
 // `put`: a whole file that came over SSH and is waiting in memory (`size` bytes from `at`) becomes the file
 // `text[from..to]`, new or in place of the one of that name. `want` is the SHA-256 the sender gave, as 64 hex
 // digits: the bytes that came must have it, and so must the bytes the disk gives back once they are
-// written, before the name is pointed at them. Then as `write`: the old contents to OLD, the line, the name.
+// written, before the name is pointed at them. Then the old contents to OLD, the line, the name.
 // 0 if the file is now that; 1 if not, with the reason printed and the disk as it was.
 pub fn store[&mc, &mv, &md, &mg, &s, &r, &h](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), k: &!s [int], text: &r [byte], from: int, to: int, at: int, size: int, want: &h [byte], who: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x220000..0x420000,0x40220000..0x40420000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+    return store_as(con, vio, dma, stage, k, text, from, to, at, size, want, who, "put", true);
+}
+
+// The same for any writer of a whole file: `action` is the word the record has for it, and with `check` false the
+// bytes in memory are taken as they are (`want` is not read): they are still read back from the disk and compared
+// before the name means them.
+pub fn store_as[&mc, &mv, &md, &mg, &s, &r, &h, &a](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), k: &!s [int], text: &r [byte], from: int, to: int, at: int, size: int, want: &h [byte], who: int, action: &a [byte], check: bool) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x220000..0x420000,0x40220000..0x40420000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
     var done = 1;
     region r {
         let sec = alloc_slice[r](512, byte_of(0));
@@ -646,9 +604,9 @@ pub fn store[&mc, &mv, &md, &mg, &s, &r, &h](con: &!mc Mmio("0x9000000..0x900004
             i = i + 1;
         }
         sha.final(hs, hd);
-        var same = len(want) >= 64;
+        var same = !check || len(want) >= 64;
         i = 0;
-        while i < 32 && same {
+        while i < 32 && same && check {
             let hi = int_of(hd[i]) >> 4 & 15;
             let lo = int_of(hd[i]) & 15;
             hx[i * 2] = byte_of(hi + '0');
@@ -754,7 +712,7 @@ pub fn store[&mc, &mv, &md, &mg, &s, &r, &h](con: &!mc Mmio("0x9000000..0x900004
                 v = disk.version(con, vio, dma, k, sec, tab, rtab, info, name, out, o, w, vname, oc, os);
                 bad = v < 0;
             }
-            if !bad && ledger.record_add(vio, dma, k, info, w, who, "put", text, from, to, text, 0, 0, v, size, hd, true) != 0 {
+            if !bad && ledger.record_add(vio, dma, k, info, w, who, action, text, from, to, text, 0, 0, v, size, hd, true) != 0 {
                 base.puts(con, k, "the record could not be added to: nothing was changed\r\n");
                 bad = true;
             }
@@ -801,12 +759,6 @@ pub fn command[&mc, &mv, &md, &s, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f2
     var what = 0;
     if is_cat || is_sum {
         first = 4;
-    } else if n > 6 && begins(text, n, "write ") {
-        first = 6;
-        what = 1;
-    } else if n > 7 && begins(text, n, "append ") {
-        first = 7;
-        what = 2;
     } else if n > 5 && begins(text, n, "copy ") {
         first = 5;
         what = 3;

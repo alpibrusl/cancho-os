@@ -1,5 +1,11 @@
 # What the board does at its start: BOOT.TXT
 
+> **Since 2026-11-27** the shell has no `write` and no `append`. A file's contents are written by cancho-tools' `write`,
+> built into the kernel: `write --create --stdin NAME`, or `--if-sha256 HEX` for a file that is there, then the text and
+> Ctrl-D at the console, or the text as the command's input over SSH ([tools.md](tools.md)). It goes through the same
+> writer: the old contents to `OLD`, a line in the record. Where a table below says `write NAME text` or `append`, that
+> is what was typed when it was measured.
+
 > **Status: built**, in QEMU, and used on the real Pi 4 (one board, one time). 0.0.32.
 
 After a restart the kernel knows nothing: no link, no address, no SSH, no word of where the servo bus
@@ -28,7 +34,7 @@ servo via 10.42.0.1 6000
   mistake: the kernel says how many lines it is about to run, waits a second, and runs none if a key
   came.
 - **It is written at the console only.** Its lines run with the console's authority, and two of them
-  (`net ssh on`, `servo via`) are things the network may not ask for. So over SSH `write`, `append`,
+  (`net ssh on`, `servo via`) are things the network may not ask for. So over SSH `write`, `replace`, `move`,
   `copy` onto, `remove` and `put` all refuse the name, for an owner's key too. Reading it is allowed.
 - `src/boot.cho` decides which lines are run and is pure, like `inet`, `fat`, `keys` and `record`.
 - With no disk, or no such file, nothing happens and nothing is said.

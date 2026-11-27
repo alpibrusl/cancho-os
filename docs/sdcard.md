@@ -1,5 +1,11 @@
 # The SD card
 
+> **Since 2026-11-27** the shell has no `write` and no `append`. A file's contents are written by cancho-tools' `write`,
+> built into the kernel: `write --create --stdin NAME`, or `--if-sha256 HEX` for a file that is there, then the text and
+> Ctrl-D at the console, or the text as the command's input over SSH ([tools.md](tools.md)). It goes through the same
+> writer: the old contents to `OLD`, a line in the record. Where a table below says `write NAME text` or `append`, that
+> is what was typed when it was measured.
+
 > **Status: built, and run on a real Pi 4** (one board, one card, one session, 2026-11-26) and in QEMU as
 > a Pi 3 and a Pi 4. `src/sdcard.cho`, 270 lines. It reads and writes one sector at a time, which is all
 > [`storage.md`](storage.md) asks of a disk; everything above it (FAT, versions, the record) is the code

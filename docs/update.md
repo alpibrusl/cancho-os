@@ -1,5 +1,11 @@
 # A file sent over SSH, and a new kernel without a cable
 
+> **Since 2026-11-27** the shell has no `write` and no `append`. A file's contents are written by cancho-tools' `write`,
+> built into the kernel: `write --create --stdin NAME`, or `--if-sha256 HEX` for a file that is there, then the text and
+> Ctrl-D at the console, or the text as the command's input over SSH ([tools.md](tools.md)). It goes through the same
+> writer: the old contents to `OLD`, a line in the record. Where a table below says `write NAME text` or `append`, that
+> is what was typed when it was measured.
+
 > **Status: built**, in QEMU, and used once on the real Pi 4 to replace the kernel on its own card
 > (below), which it then started from after its power was cut and restored. 0.0.28.
 
@@ -28,7 +34,7 @@ starts from.
 
 The firmware reads `CONFIG.TXT`, `CMDLINE.TXT` and every `.ELF`, `.DAT`, `.DTB`, `.BIN` and `.IMG` before
 any kernel runs. A wrong one stops the board until its card is mended on another machine. Over SSH,
-`write`, `append`, `copy` onto and `remove` now refuse those names: they are changed with `put`, which
+`write`, `replace`, `move`, `copy` onto and `remove` now refuse those names: they are changed with `put`, which
 checks every byte, or at the serial console.
 
 `put` itself needs an owner's key. Every key is a person's today. When agents have keys of their own

@@ -23,6 +23,7 @@ import ssh_sha256 as sha;
 //    k[4179] what the key that logged in may do: 2 an owner's, 1 a reader's
 //    k[4258] bytes of a file still to come (`put`; 0: none is being received)   k[4259] bytes of it that came
 //    k[4260] how many of them `step` has just left in `rline` (it then answers 4)
+//    k[4268] 1: what is being received is a program's input, which ends when the client closes its side (kernel.cho)
 //    k[4184] k[4185] the first eight bytes of that key's SHA-256 fingerprint, as two 32-bit numbers
 
 pub fn ints() -> [] int {
@@ -208,6 +209,7 @@ pub fn step[&s, &t, &g, &h, &l, &w, &i, &b, &x](k: &!s [int], tcp: &!t [int], bu
             k[32] = 0;
             k[4152] = 0;
             k[4258] = 0;
+            k[4268] = 0;
             if ssh.session(si) == ssh.session_command() {
                 // `ssh host command`: the one line, and the session ends with it
                 var n = 0;
@@ -335,6 +337,11 @@ pub fn step[&s, &t, &g, &h, &l, &w, &i, &b, &x](k: &!s [int], tcp: &!t [int], bu
             if whole {
                 return 1;
             }
+        } else if k[4163] != 0 && ssh.peer_eof(si) && k[27] == 0 && k[4268] == 1 {
+            // the client will send no more, and what it sent was a program's input: none is left to come
+            k[4258] = 0;
+            k[4260] = 0;
+            return 4;
         } else if k[4163] != 0 && ssh.peer_eof(si) && k[27] == 0 {
             // the client will send no more (its input was a file, say): the session ends
             k[4152] = 1;

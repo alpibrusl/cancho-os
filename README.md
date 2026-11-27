@@ -17,9 +17,11 @@ the typing is scripted ([`docs/demo/session.py`](docs/demo/session.py)); re-rend
   - it reads two real SO-101 arms (which servos are there, where each is), through a second board that has their
     USB adapters. It cannot move them.
 - **In QEMU, on every change:** all of that, as a Pi 3 and QEMU's `virt` machine.
-- **In QEMU, not yet on the board:** four of [cancho-tools](https://github.com/alpibrusl/cancho-tools) (`hash`, `peek`,
-  `seek`, `list`) are built into the kernel as they are written, and answer the same bytes as on a Mac
-  ([docs/tools.md](docs/tools.md)). The build needs a checkout of them: `git clone https://github.com/alpibrusl/cancho-tools ../cancho-tools`.
+- **Tools an agent calls:** six of [cancho-tools](https://github.com/alpibrusl/cancho-tools) are built into the
+  kernel as they are written, and answer the same bytes as on a Mac ([docs/tools.md](docs/tools.md)). `hash`, `peek`,
+  `seek` and `list` read, and run on the board. `replace` changes a file, through the same writer as `put` (the old
+  contents kept, a line in the record), and `move` a name, and `write` makes one from what it is sent; all run on the board. The build needs a checkout of them:
+  `git clone https://github.com/alpibrusl/cancho-tools ../cancho-tools`.
 - **Not yet:** separate programs, moving a servo, keys and grants for agents, USB, the Pi 5 (its code is written
   from the board's device tree and has never run).
 
@@ -320,8 +322,10 @@ card is taken out.
 
 The kernel reads a FAT16 or FAT32 disk ([docs/storage.md](docs/storage.md)): QEMU's `virt` disk, or a
 Pi's SD card ([docs/sdcard.md](docs/sdcard.md)):
-`disk`, `ls`, `cat <name>`, `sum <name>`, and it can change one: `write <name> <text>`,
-`append <name> <text>`, `copy <from> <to>`, `remove <name>`. Nothing is lost by any of them
+`disk`, `ls`, `cat <name>`, `sum <name>`, and it can change one: `copy <from> <to>`, `remove <name>`, and
+cancho-tools' own `write`, `replace` and `move`, built in ([docs/tools.md](docs/tools.md)): `write --create --stdin <name>`,
+then the text, then Ctrl-D. A file that is there is written over only by one who gives its hash (`--if-sha256`).
+Nothing is lost by any of them
 ([docs/permissions.md](docs/permissions.md)): what a file held before a `write` or a `remove` stays in
 the directory `OLD` (`versions` lists them, `copy OLD/<name> <new>` brings one back), and every change
 has a line in `LOG.TXT` that says who made it, each line chained to the one before by SHA-256 (`record`
