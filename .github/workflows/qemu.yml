@@ -466,36 +466,36 @@ jobs:
           cat replace-want.txt
           test "$(wc -l < replace-want.txt)" = 9
           test "$(grep -c '"changed":true' replace-want.txt)" = 4
-          mkfs.fat -F 32 -s 1 -C w-fat32.img 65536 > /dev/null
-          mkfs.fat -F 16 -C w-fat16.img 16384 > /dev/null
+          mkfs.fat -F 32 -s 1 -C tw-fat32.img 65536 > /dev/null
+          mkfs.fat -F 16 -C tw-fat16.img 16384 > /dev/null
           for img in fat32 fat16; do
-            mcopy -s -i w-$img.img wsrc/TEXT.TXT wsrc/NOTE.TXT wsrc/SUB wsrc/longer_name_file.text ::
-            MACHINE=virt DISKRW=w-$img.img ./test.sh 'replace --old needle --new thimble TEXT.TXT' 'replace --old hello --new goodbye --expect 3 SUB/INNER.TXT' 'replace --old hello --new goodbye longer_name_file.text' 'replace --old hello --new goodbye NOTE.TXT' 'replace --old hello --new goodbye NOTE.TXT' 'replace --old goodbye --new x --if-sha256 00 NOTE.TXT' 'replace --old x --new y NONE.TXT' 'replace --old x --new y ../NOTE.TXT' 'replace --old goodbye --new hello --dry-run NOTE.TXT' 'replace --old a --new b HOSTKEY.BIN' record versions 'echo still here' > replace-$img.raw
+            mcopy -s -i tw-$img.img wsrc/TEXT.TXT wsrc/NOTE.TXT wsrc/SUB wsrc/longer_name_file.text ::
+            MACHINE=virt DISKRW=tw-$img.img ./test.sh 'replace --old needle --new thimble TEXT.TXT' 'replace --old hello --new goodbye --expect 3 SUB/INNER.TXT' 'replace --old hello --new goodbye longer_name_file.text' 'replace --old hello --new goodbye NOTE.TXT' 'replace --old hello --new goodbye NOTE.TXT' 'replace --old goodbye --new x --if-sha256 00 NOTE.TXT' 'replace --old x --new y NONE.TXT' 'replace --old x --new y ../NOTE.TXT' 'replace --old goodbye --new hello --dry-run NOTE.TXT' 'replace --old a --new b HOSTKEY.BIN' record versions 'echo still here' > replace-$img.raw
             tr -d '\r' < replace-$img.raw | grep '^{' > replace-$img.txt; cat replace-$img.txt
             head -9 replace-$img.txt | diff replace-want.txt -
             sed -n 10p replace-$img.txt | grep -q '"rule":"io.permission-denied"'
             grep -q "^the record: 4 lines, each following from the one before" replace-$img.raw
             grep -q "^4 versions kept" replace-$img.raw
             grep -q "^still here" replace-$img.raw
-            fsck.fat -n w-$img.img
+            fsck.fat -n tw-$img.img
             rm -rf wout; mkdir -p wout/SUB
-            for n in TEXT.TXT NOTE.TXT SUB/INNER.TXT longer_name_file.text LOG.TXT; do mcopy -i w-$img.img "::$n" wout/$n; done
+            for n in TEXT.TXT NOTE.TXT SUB/INNER.TXT longer_name_file.text LOG.TXT; do mcopy -i tw-$img.img "::$n" wout/$n; done
             for n in TEXT.TXT NOTE.TXT SUB/INNER.TXT longer_name_file.text; do cmp wout/$n whost/$n; done
-            mcopy -i w-$img.img ::OLD/00000001.V old1.out && cmp old1.out wsrc/TEXT.TXT
+            mcopy -i tw-$img.img ::OLD/00000001.V old1.out && cmp old1.out wsrc/TEXT.TXT
             python3 tests/checklog.py wout/LOG.TXT wout > wlog.txt || { cat wlog.txt; exit 1; }
             cat wlog.txt
             grep -q "^4 lines, 0 that do not follow" wlog.txt
-            test "$(mdir -/ -b -i w-$img.img | grep -c lexsys)" = 0
+            test "$(mdir -/ -b -i tw-$img.img | grep -c lexsys)" = 0
           done
           # the Pi 3's SD card, and over SSH with the owner's key: the record says which key
-          cp w-fat32.img w-sd.img
-          SD=w-sd.img ./test.sh 'replace --old thimble --new needle TEXT.TXT' 'hash TEXT.TXT' > replace-sd.txt; cat replace-sd.txt
+          cp tw-fat32.img tw-sd.img
+          SD=tw-sd.img ./test.sh 'replace --old thimble --new needle TEXT.TXT' 'hash TEXT.TXT' > replace-sd.txt; cat replace-sd.txt
           grep -q "\"hex\":\"$(sha256sum wsrc/TEXT.TXT | cut -d' ' -f1)\"" replace-sd.txt
-          MACHINE=virt DISKRW=w-fat16.img SSHKEY=/tmp/sshkey SSHCMD='replace --old thimble --new needle TEXT.TXT' ./test.sh 'net up' 'net ssh on' 'cat LOG.TXT' > replace-ssh.txt; cat replace-ssh.txt
+          MACHINE=virt DISKRW=tw-fat16.img SSHKEY=/tmp/sshkey SSHCMD='replace --old thimble --new needle TEXT.TXT' ./test.sh 'net up' 'net ssh on' 'cat LOG.TXT' > replace-ssh.txt; cat replace-ssh.txt
           grep -q '^ssh: {"ok":true,"command":"replace"' replace-ssh.txt
           grep -q "^5 [0-9]* key:[0-9a-f]* owner write TEXT.TXT " replace-ssh.txt
-          fsck.fat -n w-fat16.img
-          mcopy -i w-fat16.img ::TEXT.TXT back.out && cmp back.out wsrc/TEXT.TXT
+          fsck.fat -n tw-fat16.img
+          mcopy -i tw-fat16.img ::TEXT.TXT back.out && cmp back.out wsrc/TEXT.TXT
       - name: a tool renames a file
         # docs/tools.md. cancho-tools' move, built in as it is: a name is changed to one that is not taken, a
         # directory's too, and never over another. The same commands by the same tool on this machine must answer
@@ -506,21 +506,21 @@ jobs:
           (cd mhost && { /tmp/tool-move NOTE.TXT NOTE2.TXT; /tmp/tool-move TEXT.TXT longer_name_file.text; /tmp/tool-move SUB/INNER.TXT a_new_long_name.txt; /tmp/tool-move longer_name_file.text SHORT.TXT; /tmp/tool-move NONE.TXT X.TXT; /tmp/tool-move NOTE2.TXT a/b; /tmp/tool-move SUB SUB2; /tmp/tool-hash NOTE2.TXT SUB2/a_new_long_name.txt SHORT.TXT TEXT.TXT; } > ../move-want.txt 2>&1 || true)
           cat move-want.txt
           test "$(grep -c '"changed":true' move-want.txt)" = 4
-          mkfs.fat -F 32 -s 1 -C m-fat32.img 65536 > /dev/null
-          mkfs.fat -F 16 -C m-fat16.img 16384 > /dev/null
+          mkfs.fat -F 32 -s 1 -C tm-fat32.img 65536 > /dev/null
+          mkfs.fat -F 16 -C tm-fat16.img 16384 > /dev/null
           for img in fat32 fat16; do
-            mcopy -s -i m-$img.img wsrc/TEXT.TXT wsrc/NOTE.TXT wsrc/SUB wsrc/longer_name_file.text ::
-            MACHINE=virt DISKRW=m-$img.img ./test.sh 'move NOTE.TXT NOTE2.TXT' 'move TEXT.TXT longer_name_file.text' 'move SUB/INNER.TXT a_new_long_name.txt' 'move longer_name_file.text SHORT.TXT' 'move NONE.TXT X.TXT' 'move NOTE2.TXT a/b' 'move SUB SUB2' 'hash NOTE2.TXT SUB2/a_new_long_name.txt SHORT.TXT TEXT.TXT' 'move SHORT.TXT KERNEL8.IMG' record 'echo still here' > move-$img.raw
+            mcopy -s -i tm-$img.img wsrc/TEXT.TXT wsrc/NOTE.TXT wsrc/SUB wsrc/longer_name_file.text ::
+            MACHINE=virt DISKRW=tm-$img.img ./test.sh 'move NOTE.TXT NOTE2.TXT' 'move TEXT.TXT longer_name_file.text' 'move SUB/INNER.TXT a_new_long_name.txt' 'move longer_name_file.text SHORT.TXT' 'move NONE.TXT X.TXT' 'move NOTE2.TXT a/b' 'move SUB SUB2' 'hash NOTE2.TXT SUB2/a_new_long_name.txt SHORT.TXT TEXT.TXT' 'move SHORT.TXT KERNEL8.IMG' record 'echo still here' > move-$img.raw
             tr -d '\r' < move-$img.raw | grep '^{' > move-$img.txt; cat move-$img.txt
             head -n "$(wc -l < move-want.txt)" move-$img.txt | diff move-want.txt -
             tail -1 move-$img.txt | grep -q '"rule":"io.permission-denied"'
             grep -q "^the record: 4 lines, each following from the one before" move-$img.raw
             grep -q "^still here" move-$img.raw
-            fsck.fat -n m-$img.img
+            fsck.fat -n tm-$img.img
             rm -rf mout; mkdir -p mout/SUB2
-            for n in TEXT.TXT NOTE2.TXT SHORT.TXT SUB2/a_new_long_name.txt LOG.TXT; do mcopy -i m-$img.img "::$n" mout/$n; done
+            for n in TEXT.TXT NOTE2.TXT SHORT.TXT SUB2/a_new_long_name.txt LOG.TXT; do mcopy -i tm-$img.img "::$n" mout/$n; done
             for n in TEXT.TXT NOTE2.TXT SHORT.TXT SUB2/a_new_long_name.txt; do cmp mout/$n mhost/$n; done
-            test "$(mdir -/ -b -i m-$img.img | grep -c 'NOTE.TXT\|INNER.TXT\|longer_name\|lexsys')" = 0
+            test "$(mdir -/ -b -i tm-$img.img | grep -c 'NOTE.TXT\|INNER.TXT\|longer_name\|lexsys')" = 0
             python3 tests/checklog.py mout/LOG.TXT mout > mlog.txt || { cat mlog.txt; exit 1; }
             cat mlog.txt
             grep -q "^4 lines, 0 that do not follow" mlog.txt
