@@ -74,7 +74,10 @@
   Python counts. In QEMU.
 - A lent system's directories (2026-11-27): `names [path]`, written against `dir_list`, `dir_next` and `dir_stat`,
   lists a directory with each name's length and time; on volumes macOS made, both are what was put there. The
-  hosted programs moved to `src/programs.cho`. Next: the tools themselves built into the image. In QEMU.
+  hosted programs moved to `src/programs.cho`. In QEMU.
+- The tools, inside the kernel (2026-11-27, docs/tools.md): cancho-tools' `hash`, `peek`, `seek` and `list`, built in as
+  they are written. On the same files they answer the same bytes as the same tools on a Mac, but for FAT's time having
+  no zone. Next: writing through `files` and the record, then keys for agents with grants. In QEMU.
 - Long names (2026-11-26, docs/storage.md): read, written, replaced and removed; the pieces made here are the
   pieces macOS makes. With directories, a source tree can live on the card.
 - Directories (2026-11-26, docs/storage.md): a name may be a path; `mkdir`, `ls <path>`.

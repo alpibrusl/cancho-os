@@ -215,7 +215,11 @@ pub fn open[&mc, &mv, &md, &s, &l, &hd, &r](con: &!mc Mmio("0x9000000..0x9000048
     if dir < 0 {
         return dir;
     }
-    let file = named(con, vio, dma, k, line, h, h[(dir - 3) * 6 + 1], path, leaf, len(path), 2);
+    var file = 0 - 21;
+    // (a path that ends in `/` or in `.` is a directory's, whatever is there)
+    if leaf < len(path) && !(leaf + 1 == len(path) && int_of(path[leaf]) == '.') {
+        file = named(con, vio, dma, k, line, h, h[(dir - 3) * 6 + 1], path, leaf, len(path), 2);
+    }
     h[(dir - 3) * 6] = 0;
     return file;
 }

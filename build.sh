@@ -11,6 +11,21 @@ mkdir -p build
 # cancho-ssh (docs/ssh.md): its eight files, from a checkout beside this one or wherever SSH says
 SSH=$(cd "${SSH:-../cancho-ssh}" 2>/dev/null && pwd)
 [ -f "$SSH/src/server.cho" ] || { echo "build.sh: no cancho-ssh at $SSH (git clone https://github.com/alpibrusl/cancho-ssh, or SSH=path)" >&2; exit 1; }
+# cancho-tools (docs/tools.md): the tools an agent reads files with, built into the image as they are. Each is a
+# program with a `main` of its own; here its file becomes a module (`tool_hash`), its `run` public and its `main`
+# left out, and the module that says how it was built gets the tool's name, since every tool has one.
+TOOLS=$(cd "${TOOLS:-../cancho-tools}" 2>/dev/null && pwd)
+[ -f "$TOOLS/tools/hash/hash.cho" ] || { echo "build.sh: no cancho-tools at $TOOLS (git clone https://github.com/alpibrusl/cancho-tools, or TOOLS=path)" >&2; exit 1; }
+mkdir -p build/tools
+TOOL_FILES=$(ls "$TOOLS"/contract/*.cho | tr '\n' ' ')
+for t in hash peek seek list; do
+    awk -v t="$t" 'NR == 1 { print; print ""; print "module tool_" t ";"; next } /^fn main\(world: World\)/ { exit } { print }' "$TOOLS/tools/$t/$t.cho" \
+        | sed -e 's/^fn run\[/pub fn run[/' -e "s/^import toolbox\.built;/import toolbox.built_$t;/" -e "s/\([^a-zA-Z_.]\)built\./\1built_$t./g" > "build/tools/tool_$t.cho"
+    sed "s/^module toolbox\.built;/module toolbox.built_$t;/" "$TOOLS/generated/$t/built.cho" > "build/tools/built_$t.cho"
+    grep -q '^pub fn run\[' "build/tools/tool_$t.cho" && grep -q "^module toolbox.built_$t;" "build/tools/built_$t.cho" && ! grep -q '^fn main' "build/tools/tool_$t.cho" \
+        || { echo "build.sh: $t of cancho-tools is not written as this expects (a \`fn run[\`, a \`fn main(world: World)\` last)" >&2; exit 1; }
+    TOOL_FILES="$TOOL_FILES build/tools/tool_$t.cho build/tools/built_$t.cho"
+done
 # Who may log in over SSH is built in: the 32 bytes of each ssh-ed25519 key in the file AUTHORIZED names
 # (a .pub file, or an authorized_keys). With none, nobody can.
 {
@@ -36,7 +51,7 @@ SSH=$(cd "${SSH:-../cancho-ssh}" 2>/dev/null && pwd)
     echo "    return ${keys:-0};"
     echo "}"
 } > build/authorized.cho
-"$CANCHO" build src/kernel.cho src/feetech.cho src/calibration.cho src/kinematics.cho src/so101.cho src/safety.cho src/inet.cho src/base.cho src/network.cho src/sshd.cho src/fat.cho src/disk.cho src/ledger.cho src/files.cho src/sdcard.cho src/keys.cho src/ksys.cho src/programs.cho src/boot.cho src/record.cho build/authorized.cho "$SSH"/src/*.cho --std --target aarch64-none-elf --emit obj --clang "$(command -v "$CLANG")" -o build/kernel.o
+"$CANCHO" build src/kernel.cho src/feetech.cho src/calibration.cho src/kinematics.cho src/so101.cho src/safety.cho src/inet.cho src/base.cho src/network.cho src/sshd.cho src/fat.cho src/disk.cho src/ledger.cho src/files.cho src/sdcard.cho src/keys.cho src/ksys.cho src/programs.cho $TOOL_FILES src/boot.cho src/record.cho build/authorized.cho "$SSH"/src/*.cho --std --target aarch64-none-elf --emit obj --clang "$(command -v "$CLANG")" -o build/kernel.o
 "$CLANG" --target=aarch64-none-elf -c board/boot.S -o build/boot.o
 # whatever main does not reach is dropped
 ld.lld --defsym=RAM_BASE=0 -T board/link.ld --gc-sections -o build/kernel8.elf build/boot.o build/kernel.o

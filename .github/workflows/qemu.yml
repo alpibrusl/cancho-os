@@ -5,6 +5,8 @@ env:
   CANCHO_REF: main
   # cancho-ssh (docs/ssh.md) is taken at one commit: a newer one is a change to try, not to drift into
   SSH_REF: e2e8386d29e1d182ff7349d66cf8b2ea9692f311
+  # cancho-tools (docs/tools.md), the same way
+  TOOLS_REF: cc18da95bcbd11dd5b9e0bb7f4307b36bb824387
 jobs:
   boot:
     runs-on: ubuntu-24.04
@@ -22,11 +24,15 @@ jobs:
         run: |
           git clone https://github.com/alpibrusl/cancho-ssh /tmp/cancho-ssh
           git -C /tmp/cancho-ssh checkout -q "$SSH_REF"
+      - name: cancho-tools, at the commit this kernel was tried with
+        run: |
+          git clone https://github.com/alpibrusl/cancho-tools /tmp/cancho-tools
+          git -C /tmp/cancho-tools checkout -q "$TOOLS_REF"
       - name: build
         # with a key made here as the one that may log in over SSH
         run: |
           ssh-keygen -q -t ed25519 -N "" -C "cancho-os CI" -f /tmp/sshkey
-          SSH=/tmp/cancho-ssh AUTHORIZED=/tmp/sshkey.pub CANCHO=/tmp/cancho-out/cancho ./build.sh
+          SSH=/tmp/cancho-ssh TOOLS=/tmp/cancho-tools AUTHORIZED=/tmp/sshkey.pub CANCHO=/tmp/cancho-out/cancho ./build.sh
       - name: the network stack, on this machine
         # src/inet.cho holds no hardware, so its tests run here: published checksum vectors, packets a
         # second implementation built, and every one-byte damage to a packet (nothing traps)
@@ -45,7 +51,7 @@ jobs:
           # the gateway, datagrams, names and a given address
           /tmp/cancho-out/cancho test tests/addr_test.cho src/inet.cho --std
       - name: what the kernel can touch
-        run: SSH=/tmp/cancho-ssh CANCHO=/tmp/cancho-out/cancho ./authority.sh
+        run: SSH=/tmp/cancho-ssh TOOLS=/tmp/cancho-tools CANCHO=/tmp/cancho-out/cancho ./authority.sh
       - name: boot and drive the shell
         run: |
           ./test.sh about 'echo ci' ticks crash about > out.txt
@@ -397,6 +403,35 @@ jobs:
           MACHINE=virt DISK=n-fat16.img SSHKEY=/tmp/sshkey SSHCMD='names SUB' ./test.sh 'net up' 'net ssh on' > names-ssh.txt; cat names-ssh.txt
           while IFS= read -r line; do grep -q "^ssh: $line" names-ssh.txt; done < names-want.txt
           grep -q "^ssh: 4 names" names-ssh.txt
+      - name: the tools, inside the kernel and on this machine
+        # docs/tools.md. cancho-tools' hash, peek, seek and list are built into the image as they are, and built for
+        # this machine by the same compiler. The same six commands are run in both on the same files (the volumes of
+        # the step before, the directory they were copied from), and every line of the answers must be the same:
+        # hashes, matches, names, lengths and, with the zone UTC, times. Then over SSH, and many times in one boot.
+        run: |
+          export TZ=UTC
+          for t in hash peek seek list; do
+            (cd /tmp/cancho-tools && /tmp/cancho-out/cancho build contract/*.cho tools/$t/$t.cho generated/$t/built.cho --std -o /tmp/tool-$t)
+          done
+          rm -rf host && mkdir -p host/SUB && cp -p lst/* host/SUB/ && cp -p hello.txt host/hello.txt
+          (cd host && { /tmp/tool-hash SUB/FIVE.BIN SUB/NOTE.TXT SUB/EMPTY hello.txt nothere; /tmp/tool-peek SUB/NOTE.TXT; /tmp/tool-seek hello SUB/NOTE.TXT SUB/FIVE.BIN hello.txt; /tmp/tool-seek hello SUB; /tmp/tool-list --long SUB; /tmp/tool-hash ../x; } > ../tools-want.txt 2>&1 || true)
+          cat tools-want.txt
+          test "$(wc -l < tools-want.txt)" -ge 20
+          for img in fat32 fat16; do
+            MACHINE=virt DISK=n-$img.img ./test.sh 'hash SUB/FIVE.BIN SUB/NOTE.TXT SUB/EMPTY hello.txt nothere' 'peek SUB/NOTE.TXT' 'seek hello SUB/NOTE.TXT SUB/FIVE.BIN hello.txt' 'seek hello SUB' 'list --long SUB' 'hash ../x' 'echo still here' > tools-$img.raw
+            tr -d '\r' < tools-$img.raw | grep '^{' > tools-$img.txt; cat tools-$img.txt
+            diff tools-want.txt tools-$img.txt
+            grep -q "^still here" tools-$img.raw
+          done
+          want=$(/tmp/tool-hash big.bin | head -1 | sed 's/big.bin/BIG.BIN/')
+          test "$(echo "$want" | grep -c "$(sha256sum big.bin | cut -d' ' -f1)")" = 1
+          MACHINE=virt DISK=fat32.img SSHKEY=/tmp/sshkey SSHCMD='hash BIG.BIN' ./test.sh 'net up' 'net ssh on' > tools-ssh.txt; cat tools-ssh.txt
+          grep -qF "ssh: $want" tools-ssh.txt
+          set -- ; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do set -- "$@" 'hash hello.txt' 'list --long SUB'; done
+          MACHINE=virt DISK=n-fat16.img ./test.sh "$@" 'echo still here' > tools-many.txt
+          test "$(grep -c '"command":"hash","schema":"hash.v1","complete":true' tools-many.txt)" = 20
+          test "$(grep -c '"command":"list","schema":"list.v1","complete":true' tools-many.txt)" = 20
+          grep -q "^still here" tools-many.txt
       - name: the heap
         # cancho docs/freestanding.md, section 8: a JSON object made on the heap and printed, growing buffers read
         # back, and a block made and given back so many times that it must have been used again.

@@ -113,6 +113,11 @@ Rules of the road
   A trap in a hosted program is a trap of the kernel: one that takes a path from a person refuses `..` itself (`count` does),
   because the language traps on it. The kernel's rows carry `io_write`, `args`, `fs_read("")`, `dir_read`, `file_read` up to
   `main` until the compiler discharges them, and `docs/authority.txt` shows that.
+- The tools (docs/tools.md): cancho-tools' `hash`, `peek`, `seek` and `list` are built in as they are, from `../cancho-tools`
+  (or `TOOLS=`), pinned by `TOOLS_REF` in the workflow: change a tool there, never here. build.sh turns each into a module in
+  `build/tools/` (text only: a `module` line, `run` made public, `main` left out); `program` in kernel.cho says which word runs
+  which. Only tools that read are built in, and a new one is believed when its answers are the same bytes as the same tool's
+  on another machine (the CI step does that). authority.sh needs build.sh to have run.
 - BOOT.TXT (docs/boot.md): `src/boot.cho` (pure) holds the list of lines the kernel may type to itself at its
   start. Adding a command to that list is a decision: nothing that changes the disk, loads a kernel or restarts.
   The file is written at the console only (`files.boot_name`, `files.put_name`). A key in the first second stops it.
