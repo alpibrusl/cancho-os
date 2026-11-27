@@ -240,7 +240,12 @@ What this part is not:
 - **Not a statement signed by a person's key.** "The shape" says an agent's key comes with one. Here the grant is a
   line of a file only an owner or the console may write, and the chain back to a person is the record's line for
   that write. A grant cannot yet be passed on narrower by the agent itself.
-- **No "until when".** The kernel has no clock that knows the date. A grant lasts until its line is changed.
+- **"Until when" is a day, and is only as good as the date.** `until:YYYY-MM-DD` after a line's grants ends them
+  when that day (UTC) is over (0.0.47). The board is told the date by a machine on its network and believes it
+  ([`clock.md`](clock.md)): a board not told the date takes the grant to have ended, a date may not go back
+  before the record's last line, and a word that begins `until:` and is not a day grants nothing rather than for
+  ever. Whoever can answer for the time server's address can still make a day end early, or late by any date after
+  the record's.
 - **Two rights of the six.** There is no `append`, `delete`, `purge` or `control` for an agent: no tool does them.
 - **No approval step** for what cannot be undone: an agent can do nothing of that kind yet.
 - **Owners and readers are not asked about grants.** Their sessions are as they were; a reader still may not write.

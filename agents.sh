@@ -9,7 +9,9 @@
 #   where it may only read, KEYS.TXT itself, and every command of the shell's that is not a tool (`ls` and `cat`
 #   are tools, and are refused what is not granted).
 # The record must say an agent's key made the changes. Then the owner writes the file again without the grant to
-# write, and the same write is refused. Exit 0 if all of that held.
+# write, and the same write is refused. Last, a grant that ends on a day: refused when the day is over, refused
+# while the board does not know the date, and (with SNTP=<port> of a machine that tells the time) allowed once it
+# does. Exit 0 if all of that held.
 set -u
 cd "$(dirname "$0")"
 DISK=$1; OWNER=$2; AGENT=$3
@@ -86,8 +88,26 @@ sent "$OWNER" "agent ssh-ed25519 $akey read:DOCS read:WORK/OUT the builder" "wri
     as "$AGENT" 'hash WORK/OUT/DONE.TXT'
 } > build/agents-after.out
 as "$OWNER" 'ls WORK/OUT' > build/agents-ls.out
+# a grant that ends on a day (docs/permissions.md): one whose day is over grants nothing; one whose day is to come
+# grants nothing either while the board has not been told the date; and once it has (SNTP names the port of a machine
+# that says what time it is, tests/sntp.py: without it this part is left out), it grants what it says.
+sha() { { sha256sum 2>/dev/null || shasum -a 256; } | cut -d' ' -f1; }
+line2="agent ssh-ed25519 $akey read:DOCS read:WORK/OUT the builder"
+line3="agent ssh-ed25519 $akey read:DOCS until:2020-01-01 the builder"
+line4="agent ssh-ed25519 $akey read:DOCS until:2999-12-31 the builder"
+{
+    sent "$OWNER" "$line3" "write --if-sha256 $(printf '%s\n' "$line2" | sha) --max-diff-lines 0 --stdin KEYS.TXT"
+    as "$AGENT" 'list DOCS'
+    sent "$OWNER" "$line4" "write --if-sha256 $(printf '%s\n' "$line3" | sha) --max-diff-lines 0 --stdin KEYS.TXT"
+    as "$AGENT" 'list DOCS'
+} > build/agents-until.out
+: > build/agents-dated.out
+if [ -n "${SNTP:-}" ]; then
+    say "net time 10.0.0.1 $SNTP" 3
+    as "$AGENT" 'list DOCS' > build/agents-dated.out
+fi
 stop
-cat build/agents-yes.out build/agents-no.out build/agents-shell.out build/agents-log.out build/agents-change.out build/agents-after.out build/agents-ls.out | cut -c1-240
+cat build/agents-yes.out build/agents-no.out build/agents-shell.out build/agents-log.out build/agents-change.out build/agents-after.out build/agents-ls.out build/agents-until.out build/agents-dated.out | cut -c1-240
 ok=0
 # what is granted
 [ "$(grep -c '"ok":true' build/agents-yes.out)" = 6 ] || ok=1
@@ -114,4 +134,11 @@ grep -q '"ok":false' build/agents-after.out || ok=1
 grep -q '"type":"hash","path":"WORK/OUT/DONE.TXT"' build/agents-after.out || ok=1
 grep -q 'DONE.TXT' build/agents-ls.out || ok=1
 grep -q 'R2.TXT\|NEW.TXT' build/agents-ls.out && ok=1
+# a grant whose day is over, and one whose day cannot be told to have come: both refused, nothing listed
+[ "$(grep -c '"path":"KEYS.TXT","changed":true' build/agents-until.out)" = 2 ] || ok=1
+[ "$(grep -c 'io.permission-denied' build/agents-until.out)" = 2 ] || ok=1
+grep -q '"type":"entry"' build/agents-until.out && ok=1
+if [ -n "${SNTP:-}" ]; then
+    grep -q '"type":"entry","path":"DOCS/README.TXT"' build/agents-dated.out || ok=1
+fi
 exit $ok

@@ -41,7 +41,7 @@ jobs:
           # TCP: whole conversations against segments the second implementation built, with the time made up
           /tmp/cancho-out/cancho test tests/tcp_test.cho src/inet.cho --std
           # who may log in: lines of a keys file, with keys ssh-keygen made
-          /tmp/cancho-out/cancho test tests/keys_test.cho src/keys.cho --std
+          /tmp/cancho-out/cancho test tests/keys_test.cho src/keys.cho src/clock.cho --std
           /tmp/cancho-out/cancho test tests/clock_test.cho src/clock.cho --std
           # the file system: sectors of volumes macOS's tools made, read by a second implementation
           /tmp/cancho-out/cancho test tests/fat_test.cho src/fat.cho --std
@@ -575,6 +575,25 @@ jobs:
             grep -q "^10.0.0.1 did not say what time it is" clock-$how.txt
             grep -q "^the board has not been told the date" clock-$how.txt
           done
+          # the date does not go back: the disk above has a record dated 14:40 on 27 November. A machine that says the
+          # 18th is not believed; at the console, `back` takes it. And a machine that says later than a record is believed.
+          python3 tests/sntp.py 12300 1795000000 & echo $! > sntp.pid
+          sleep 1
+          MACHINE=virt DISKRW=c.img ./test.sh 'net up' 'net time 10.0.0.1 12300' time 'net time 10.0.0.1 12300 back' time > clock-back.txt; cat clock-back.txt
+          kill "$(cat sntp.pid)"
+          grep -q "^not believed: 10.0.0.1 says it is 2026-11-18 11:06:4[0-9], and the record on this disk was added to at 2026-11-27 14:4" clock-back.txt
+          grep -q "^the board has not been told the date" clock-back.txt
+          grep -q "^it is 2026-11-18 11:06:4[0-9] (UTC), by 10.0.0.1, which is believed" clock-back.txt
+          python3 tests/sntp.py 12300 1795790600 & echo $! > sntp.pid
+          sleep 1
+          cp fat16.img c2.img
+          MACHINE=virt DISKRW=c2.img ./test.sh 'net up' 'net time 10.0.0.1 12300' 'write --create --stdin T.TXT' x '^D' > /dev/null
+          kill "$(cat sntp.pid)"
+          python3 tests/sntp.py 12300 1795790700 & echo $! > sntp.pid
+          sleep 1
+          MACHINE=virt DISKRW=c2.img ./test.sh 'net up' 'net time 10.0.0.1 12300' > clock-on.txt; cat clock-on.txt
+          kill "$(cat sntp.pid)"
+          grep -q "^it is 2026-11-27 14:45:0[0-9] (UTC), by 10.0.0.1, which is believed" clock-on.txt
           MACHINE=virt ./test.sh 'net up' 'net time' 'net time 10.0.0.1 x' > clock-usage.txt; cat clock-usage.txt
           test "$(grep -c "^net time <address> \[port\]" clock-usage.txt)" -ge 1
       - name: the heap
@@ -639,7 +658,9 @@ jobs:
           ssh-keygen -q -t ed25519 -N "" -C "an agent" -f /tmp/agentkey
           for img in fat32 fat16; do
             cp $img.img a-$img.img
-            ./agents.sh a-$img.img /tmp/sshkey /tmp/agentkey > agents-$img.txt 2>&1 || { cat agents-$img.txt; exit 1; }
+            python3 tests/sntp.py 12300 1795790412 & echo $! > sntp.pid
+            SNTP=12300 ./agents.sh a-$img.img /tmp/sshkey /tmp/agentkey > agents-$img.txt 2>&1 || { cat agents-$img.txt; kill "$(cat sntp.pid)"; exit 1; }
+            kill "$(cat sntp.pid)"
             cat agents-$img.txt
             fsck.fat -n a-$img.img
             rm -rf aout; mkdir -p aout/WORK/OUT aout/DOCS

@@ -98,6 +98,37 @@ pub fn fields[&o](unix: int, out: &!o [int]) -> [] int {
     return 0;
 }
 
+// The first second of the day `year`-`month`-`day`, or -1 if that is not a day of the calendar from 1970 to 9999.
+pub fn day_start(year: int, month: int, day: int) -> [] int {
+    if year < 1970 || year > 9999 || month < 1 || month > 12 || day < 1 || day > 31 {
+        return 0 - 1;
+    }
+    var y = year;
+    if month <= 2 {
+        y = y - 1;
+    }
+    let era = y / 400;
+    let yoe = y - era * 400;
+    var mp = month - 3;
+    if month <= 2 {
+        mp = month + 9;
+    }
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let unix = (era * 146097 + doe - 719468) * 86400;
+    // a day the month does not have (the 31st of June) comes back as another date
+    var same = false;
+    region r {
+        let f = alloc_slice[r](6, 0);
+        fields(unix, f);
+        same = f[0] == year && f[1] == month && f[2] == day;
+    }
+    if !same {
+        return 0 - 1;
+    }
+    return unix;
+}
+
 // The date FAT keeps for `unix`, sixteen bits: the year from 1980, the month, the day. Before 1980, and after 2107,
 // which FAT cannot say, the first day of 1980.
 pub fn fat_date(unix: int) -> [] int {

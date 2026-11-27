@@ -1,8 +1,8 @@
 # The date
 
-> **Status: built**, in QEMU and on the Raspberry Pi 4. What uses the date so far is small: the times of files
-> the kernel writes, a line in the record, and the `time` command. A grant that ends on a day
-> ([`permissions.md`](permissions.md)) and the checking of a certificate are what it is for, and are not built.
+> **Status: built**, in QEMU and on the Raspberry Pi 4. What uses the date: the times of files the kernel writes,
+> a line in the record, the `time` command, and a grant that ends on a day ([`permissions.md`](permissions.md)).
+> The checking of a certificate is not built.
 
 ## What was missing
 
@@ -39,10 +39,14 @@ A machine on the network is asked (SNTP, RFC 4330): one datagram to its port 123
 - **It is believed, not proved.** Nothing in SNTP shows that the answer is the server's. Whoever can answer for that
   address on the board's network can tell it any date after 2023. The number in the question stops an answer from
   someone who cannot see the question, and nothing more.
-- **The date may go backwards.** A second `net time` replaces the first, and nothing on the card is consulted.
-  Before anything is refused or allowed by the date (a grant's "until"), two rules have to be built: the board
-  keeps the latest date it has seen and takes none before it, and a board that has not been told the date treats
-  what ends on a day as ended.
+- **The date does not go back, as far as the card can tell** (0.0.47). The record's entry in the top directory
+  is dated each time a line is added, so its date is a moment the board has lived through; `net time` does not
+  take a date more than two seconds before it, and says both dates. `net time <address> [port] back`, typed at the
+  console, takes it all the same: a board once told a date in the future could otherwise never be put right. It is
+  not a line `BOOT.TXT` may have. Someone who can write the card can change that entry, as they can change
+  everything else on it.
+- **A board that has not been told the date takes what ends on a day to have ended**: an agent's grant with
+  `until:` grants nothing ([`permissions.md`](permissions.md)).
 - **It is asked once.** The board's count from then on is its processor's counter: it is not corrected afterwards.
 - **Whole seconds**, and FAT keeps even ones.
 - **Before the date is known** everything is as it was: files of 1980, and `time` says so.
@@ -69,3 +73,14 @@ date, and `time` three seconds later was one second from what the Mac's clock sa
 then is dated, by `ls`, four seconds before the Mac's clock when it was read. The Pi 5 has no time server of its
 own running: for the board to know the date at every start, `BOOT.TXT` needs a `net time` line and a machine that
 answers on port 123.
+
+The date not going back, and a grant that ends on a day (2026-11-27, 0.0.47), in QEMU as `virt`:
+
+| done | seen |
+|---|---|
+| a file written with the date known (27 November, 14:40); the same disk started again; a machine that says 18 November | "not believed", with both dates; `time` says the date is not known |
+| `net time ... back`, typed at the console | taken |
+| a machine that says a minute later than the record | taken |
+| an agent's line with `until:2020-01-01` | `list DOCS` refused |
+| the line with `until:2999-12-31`, the board not told the date | refused |
+| the same line, after `net time` | `list DOCS` answered |
