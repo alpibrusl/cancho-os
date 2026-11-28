@@ -3,6 +3,9 @@
 # assembled, and the link script places both. No C anywhere.
 #   ./build.sh    one kernel8.img for Pi 3 and Pi 4 (and QEMU raspi3b / raspi4b): the kernel asks the CPU which it is
 # Needs a cancho with `--target aarch64-none-elf` (docs/issues/01, 03), clang, ld.lld, llvm-objcopy.
+#   BACKEND=native ./build.sh   the same two images made by cancho's own backend (cancho docs/native-backend.md, sections 16
+#                               and 17): no clang, no linker, no objcopy for the kernel. board/pi.layout and board/virt.layout
+#                               say what board/link.ld says; board/boot.S is assembled by cancho. Needs a cancho with `--layout`.
 set -eu
 cd "$(dirname "$0")"
 CANCHO=${CANCHO:-cancho}
@@ -36,14 +39,21 @@ SSH=$(cd "${SSH:-../cancho-ssh}" 2>/dev/null && pwd)
     echo "    return ${keys:-0};"
     echo "}"
 } > build/authorized.cho
-"$CANCHO" build src/kernel.cho src/feetech.cho src/calibration.cho src/kinematics.cho src/so101.cho src/safety.cho src/inet.cho src/base.cho src/network.cho src/sshd.cho src/fat.cho src/disk.cho src/ledger.cho src/files.cho src/sdcard.cho src/keys.cho src/record.cho build/authorized.cho "$SSH"/src/*.cho --std --target aarch64-none-elf --emit obj --clang "$(command -v "$CLANG")" -o build/kernel.o
-"$CLANG" --target=aarch64-none-elf -c board/boot.S -o build/boot.o
-# whatever main does not reach is dropped
-ld.lld --defsym=RAM_BASE=0 -T board/link.ld --gc-sections -o build/kernel8.elf build/boot.o build/kernel.o
-llvm-objcopy -O binary build/kernel8.elf build/kernel8.img
-ls -l build/kernel8.img
-# the same two objects for QEMU's virt machine, whose RAM starts at 1 GB; QEMU loads the ELF itself
-ld.lld --defsym=RAM_BASE=0x40000000 -T board/link.ld --gc-sections -o build/kernel-virt.elf build/boot.o build/kernel.o
+if [ "${BACKEND:-llvm}" = native ]; then
+    # cancho's own backend writes both images itself (cancho docs/native-backend.md section 16): nothing else is started
+    "$CANCHO" build src/kernel.cho src/feetech.cho src/calibration.cho src/kinematics.cho src/so101.cho src/safety.cho src/inet.cho src/base.cho src/network.cho src/sshd.cho src/fat.cho src/disk.cho src/ledger.cho src/files.cho src/sdcard.cho src/keys.cho src/record.cho build/authorized.cho "$SSH"/src/*.cho --std --target aarch64-none-elf --backend native --layout board/pi.layout -o build/kernel8.img
+    ls -l build/kernel8.img
+    "$CANCHO" build src/kernel.cho src/feetech.cho src/calibration.cho src/kinematics.cho src/so101.cho src/safety.cho src/inet.cho src/base.cho src/network.cho src/sshd.cho src/fat.cho src/disk.cho src/ledger.cho src/files.cho src/sdcard.cho src/keys.cho src/record.cho build/authorized.cho "$SSH"/src/*.cho --std --target aarch64-none-elf --backend native --layout board/virt.layout --emit exe -o build/kernel-virt.elf
+else
+    "$CANCHO" build src/kernel.cho src/feetech.cho src/calibration.cho src/kinematics.cho src/so101.cho src/safety.cho src/inet.cho src/base.cho src/network.cho src/sshd.cho src/fat.cho src/disk.cho src/ledger.cho src/files.cho src/sdcard.cho src/keys.cho src/record.cho build/authorized.cho "$SSH"/src/*.cho --std --target aarch64-none-elf --emit obj --clang "$(command -v "$CLANG")" -o build/kernel.o
+    "$CLANG" --target=aarch64-none-elf -c board/boot.S -o build/boot.o
+    # whatever main does not reach is dropped
+    ld.lld --defsym=RAM_BASE=0 -T board/link.ld --gc-sections -o build/kernel8.elf build/boot.o build/kernel.o
+    llvm-objcopy -O binary build/kernel8.elf build/kernel8.img
+    ls -l build/kernel8.img
+    # the same two objects for QEMU's virt machine, whose RAM starts at 1 GB; QEMU loads the ELF itself
+    ld.lld --defsym=RAM_BASE=0x40000000 -T board/link.ld --gc-sections -o build/kernel-virt.elf build/boot.o build/kernel.o
+fi
 # the simulated servo bus for ./test.sh: an ordinary program for this machine (it is not in the image)
 "$CANCHO" build sim/servos.cho src/feetech.cho -o build/servos
 # the other end of the network link, the same way
