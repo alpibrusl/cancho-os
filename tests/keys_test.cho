@@ -308,3 +308,106 @@ fn test_a_grant_that_ends_on_a_day_holds_through_it_and_not_after() -> [] int {
     }
     return 0;
 }
+
+// The agent's key of `agent_file`, on a line that grants two machines and a directory.
+fn net_file() -> [] &static [byte] {
+    return "agent ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ9IxfNjM2SnUvQB+IWaJ0yLTkq0mozBPdgGMSd8GJ0F net:10.42.0.1:8000 net:*.Example.org:443 read:DOCS net:nowhere net:a:0 net:b:65536 net:c:x1\n";
+}
+
+fn test_a_net_grant_names_one_machine_and_one_port_and_is_no_file() -> [] int {
+    region a {
+        let key = alloc_slice[a](32, byte_of(0));
+        let gr = alloc_slice[a](keys.grant_room(), 0);
+        let f = net_file();
+        test.assert_eq(key_of(1, key), keys.agent());
+        // three grants; `net:nowhere` has no port and ends them, so the words after it are for people
+        test.assert_eq(keys.grants_for(f, len(f), key, gr, 0), 3);
+        test.assert(keys.net_allows(gr, "10.42.0.1", 8000));
+        test.assert(!keys.net_allows(gr, "10.42.0.1", 8001));
+        test.assert(!keys.net_allows(gr, "10.42.0.12", 8000));
+        test.assert(!keys.net_allows(gr, "10.42.0.", 8000));
+        // one label in front of the tail, its letters in any case
+        test.assert(keys.net_allows(gr, "api.example.org", 443));
+        test.assert(keys.net_allows(gr, "API.EXAMPLE.ORG", 443));
+        test.assert(!keys.net_allows(gr, "a.b.example.org", 443));
+        test.assert(!keys.net_allows(gr, "example.org", 443));
+        test.assert(!keys.net_allows(gr, "api.example.org", 80));
+        test.assert(!keys.net_allows(gr, "", 443));
+        // a machine is not a directory: the net grants give nothing on the disk, and the read grant no machine
+        test.assert(keys.covers(gr, 1, "DOCS/a.txt"));
+        test.assert(!keys.covers(gr, 1, "10.42.0.1:8000"));
+        test.assert(!keys.covers(gr, 2, "10.42.0.1:8000"));
+        test.assert(!keys.reaches(gr, "10.42.0.1:8000"));
+        test.assert(!keys.net_allows(gr, "DOCS", 0));
+    }
+    region b {
+        let key = alloc_slice[b](32, byte_of(0));
+        let gr = alloc_slice[b](keys.grant_room(), 0);
+        // the agent of `agent_file` has no net grant: it reaches no machine
+        let f = agent_file();
+        test.assert_eq(key_of(1, key), keys.agent());
+        test.assert_eq(keys.grants_for(f, len(f), key, gr, 0), 3);
+        test.assert(!keys.net_allows(gr, "10.42.0.1", 8000));
+    }
+    return 0;
+}
+
+// Words that look like a `net:` grant and are not one.
+fn not_net(i: int) -> [] &static [byte] {
+    if i == 0 {
+        return "net:nowhere";
+    }
+    if i == 1 {
+        return "net:a:0";
+    }
+    if i == 2 {
+        return "net:b:65536";
+    }
+    if i == 3 {
+        return "net:c:x1";
+    }
+    if i == 4 {
+        return "net:";
+    }
+    if i == 5 {
+        return "net::80";
+    }
+    if i == 6 {
+        return "net:a/b:80";
+    }
+    if i == 7 {
+        return "net:a:123456";
+    }
+    if i == 8 {
+        return "net:**.x:1";
+    }
+    return "net:a_b:80";
+}
+
+fn test_what_is_not_a_net_grant_is_not_one() -> [] int {
+    region a {
+        let gr = alloc_slice[a](keys.grant_room(), 0);
+        let key = alloc_slice[a](32, byte_of(0));
+        test.assert_eq(key_of(1, key), keys.agent());
+        let head = "agent ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ9IxfNjM2SnUvQB+IWaJ0yLTkq0mozBPdgGMSd8GJ0F ";
+        let line = alloc_slice[a](200, byte_of(0));
+        var i = 0;
+        while i < 10 {
+            let w = not_net(i);
+            var n = 0;
+            while n < len(head) {
+                line[n] = head[n];
+                n = n + 1;
+            }
+            var j = 0;
+            while j < len(w) {
+                line[n] = w[j];
+                n = n + 1;
+                j = j + 1;
+            }
+            test.assert_eq(keys.grants_for(line, n, key, gr, 0), 0);
+            i = i + 1;
+        }
+    }
+    return 0;
+}

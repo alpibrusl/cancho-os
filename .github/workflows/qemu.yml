@@ -702,6 +702,22 @@ jobs:
             grep -q " 0 that do not follow" alog.txt
             if mdir -/ -b -i a-$img.img | grep -q 'NEW.TXT\|TOP.TXT\|GONE.TXT\|R2.TXT\|lexsys'; then exit 1; fi
           done
+      - name: a program connects out
+        # docs/network-out.md: `fetch`, a cancho program written as it would be for Linux, connects through the kernel's
+        # TCP to Python's HTTP server on this runner. The agent's key is granted one port: what comes back there is the
+        # page byte for byte; a second port is refused with the rule named, and QEMU's capture of every frame the board
+        # sent shows no connection asked of it; a reader is refused; the owner and the console reach a third. Then the
+        # record has a line for each with who and the bytes each way, and Python's judge holds its chain.
+        run: |
+          mkfs.fat -F 16 -C n-fat16.img 16384 > /dev/null
+          ./netout.sh n-fat16.img /tmp/sshkey /tmp/agentkey 8765 /tmp/readerkey > netout.txt 2>&1 || { cat netout.txt; exit 1; }
+          cat netout.txt | cut -c1-200
+          fsck.fat -n n-fat16.img
+          rm -rf nout; mkdir -p nout
+          mcopy -i n-fat16.img ::LOG.TXT nout/LOG.TXT
+          python3 tests/checklog.py nout/LOG.TXT nout > nlog.txt || { cat nlog.txt; exit 1; }
+          cat nlog.txt
+          grep -q " 0 that do not follow" nlog.txt
       - name: a kernel loaded over the serial console
         # the running kernel takes another (this build, renamed 0.0.99) and starts it: a wrong checksum
         # must forget it, the right one must run it, and the fault report must still work afterwards

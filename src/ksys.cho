@@ -6,7 +6,9 @@ import base;
 import disk;
 import fat;
 import files;
+import inet;
 import keys;
+import network;
 import ssh_sha256 as sha;
 
 // ksys.cho -- the system the kernel lends to a program that was written for one (cancho docs/bare-system.md).
@@ -14,10 +16,11 @@ import ssh_sha256 as sha;
 // session); its input is `key`'s; and its arguments are the words of the line that was typed, `line[0..k[4266]]`.
 // Its files are the disk's: `h` holds what is open (`handles`), and what it writes is at the end of this file.
 // Each function is called by the compiler's own code, with what is lent before the operation's own arguments:
-// `system ksys(con, vio, dma, stage, pm, cpu, k, line, h) in { .. }`, the console, the disk's two capabilities, the kernel's state,
-// the line and the open files.
+// `system ksys(con, vio, dma, stage, pm, cpu, k, line, h, bus, ns, frame, reply, wire, tcp, bufs, inbox) in { .. }`: the
+// console, the disk's two capabilities, the kernel's state, the line, the open files, and the network's link and state
+// (what `network.net_pump` turns), for a connection out (docs/network-out.md).
 
-pub fn out[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &p](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], p: &p [byte]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048")] int {
+pub fn out[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &nu, &nn, &nf, &nr, &nw, &nt, &ng, &nh, &p](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], bus: &!nu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), ns: &!nn [int], frame: &!nf [byte], reply: &!nr [byte], wire: &!nw [byte], tcp: &!nt [int], bufs: &!ng [byte], inbox: &!nh [byte], p: &p [byte]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048")] int {
     var i = 0;
     while i < len(p) {
         if int_of(p[i]) == 10 {
@@ -29,15 +32,15 @@ pub fn out[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &p](con: &!mc Mmio("0x9000
     return i;
 }
 
-pub fn err[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &p](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], p: &p [byte]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048")] int {
-    return out(con, vio, dma, stage, pm, cpu, k, line, h, p);
+pub fn err[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &nu, &nn, &nf, &nr, &nw, &nt, &ng, &nh, &p](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], bus: &!nu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), ns: &!nn [int], frame: &!nf [byte], reply: &!nr [byte], wire: &!nw [byte], tcp: &!nt [int], bufs: &!ng [byte], inbox: &!nh [byte], p: &p [byte]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048")] int {
+    return out(con, vio, dma, stage, pm, cpu, k, line, h, bus, ns, frame, reply, wire, tcp, bufs, inbox, p);
 }
 
 // The next byte of the program's input, or -1 at its end. Over SSH the input is what the client sent before it closed
 // its side, which the kernel collected before the program began (k[4268] is 2, k[4269] bytes of it, k[4270] of them
 // read; it waits in `stage`, a megabyte in). At the console it is what is typed, shown as it is typed, until Ctrl-D.
 // A program started any other way has no input.
-pub fn key[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x220000..0x420000,0x40220000..0x40420000"), mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028")] int {
+pub fn key[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &nu, &nn, &nf, &nr, &nw, &nt, &ng, &nh](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], bus: &!nu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), ns: &!nn [int], frame: &!nf [byte], reply: &!nr [byte], wire: &!nw [byte], tcp: &!nt [int], bufs: &!ng [byte], inbox: &!nh [byte]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x220000..0x420000,0x40220000..0x40420000"), mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028")] int {
     base.watchdog(pm, k, base.patience());
     if k[4268] == 2 {
         if k[4270] >= k[4269] {
@@ -85,7 +88,7 @@ pub fn line_at() -> [] int {
 // `clock_ms` (`wall` 0): milliseconds since the board started, which only go up. `clock_unix_ms` (1): milliseconds
 // since 1970 if the board has been told the date (docs/clock.md), else 0: a program is given no date the board does
 // not have.
-pub fn clock[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], wall: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0")] int  {
+pub fn clock[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &nu, &nn, &nf, &nr, &nw, &nt, &ng, &nh](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], bus: &!nu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), ns: &!nn [int], frame: &!nf [byte], reply: &!nr [byte], wire: &!nw [byte], tcp: &!nt [int], bufs: &!ng [byte], inbox: &!nh [byte], wall: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0")] int  {
     let up = base.uptime_ms(cpu);
     if wall == 0 {
         return up;
@@ -97,7 +100,7 @@ pub fn clock[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd](con: &!mc Mmio("0x900000
 }
 
 // What is written has already gone to `putc`.
-pub fn flush[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int]) -> [] int {
+pub fn flush[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &nu, &nn, &nf, &nr, &nw, &nt, &ng, &nh](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], bus: &!nu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), ns: &!nn [int], frame: &!nf [byte], reply: &!nr [byte], wire: &!nw [byte], tcp: &!nt [int], bufs: &!ng [byte], inbox: &!nh [byte]) -> [] int {
     return 0;
 }
 
@@ -123,7 +126,7 @@ fn word_at[&s, &l](k: &!s [int], line: &!l [byte], n: int) -> [] int {
     return 0 - 1;
 }
 
-pub fn arguments[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int]) -> [] int {
+pub fn arguments[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &nu, &nn, &nf, &nr, &nw, &nt, &ng, &nh](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], bus: &!nu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), ns: &!nn [int], frame: &!nf [byte], reply: &!nr [byte], wire: &!nw [byte], tcp: &!nt [int], bufs: &!ng [byte], inbox: &!nh [byte]) -> [] int {
     var n = 0;
     while word_at(k, line, n) >= 0 {
         n = n + 1;
@@ -132,7 +135,7 @@ pub fn arguments[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd](con: &!mc Mmio("0x90
 }
 
 // Word `n` of the line into `into`: how many bytes it is.
-pub fn argument[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &t](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], n: int, into: &!t [byte]) -> [] int {
+pub fn argument[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &nu, &nn, &nf, &nr, &nw, &nt, &ng, &nh, &t](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], bus: &!nu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), ns: &!nn [int], frame: &!nf [byte], reply: &!nr [byte], wire: &!nw [byte], tcp: &!nt [int], bufs: &!ng [byte], inbox: &!nh [byte], n: int, into: &!t [byte]) -> [] int {
     let from = word_at(k, line, n);
     var i = 0;
     while from >= 0 && from + i < k[4266] && from + i < len(line) && int_of(line[from + i]) != 32 && i < len(into) {
@@ -144,7 +147,8 @@ pub fn argument[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &t](con: &!mc Mmio("0
 
 // ---- files, to read ------------------------------------------------------------------------------
 // A hosted program's files are the disk's (docs/storage.md). What is open is in `h`, six whole numbers each:
-//   0 what it is (0 nothing, 1 a directory, 2 a file, 3 a listing of a directory, 4 the draft, 5 a lock, 6 random bytes)   1 its first cluster (0: the top directory)
+//   0 what it is (0 nothing, 1 a directory, 2 a file, 3 a listing of a directory, 4 the draft, 5 a lock, 6 random bytes,
+//   7 a connection: then 1 is its place in the kernel's TCP and 2 its line in the log of connections)   1 its first cluster (0: the top directory)
 //   2 its length   3 where the next `read` begins   4 5 a cluster of it and which one that is, so that reading
 //   on does not walk the chain from its start.
 // A handle is its place plus 3. Every answer that is not a handle or a count is minus the reason, as the
@@ -158,7 +162,7 @@ pub fn handles() -> [] int {
 // After the handles, in `h`: for each, the path of what it is from the top of the disk, its length and then 256
 // bytes (`paths`); and the draft (`draft`), a file a program is writing that the disk does not have yet.
 pub fn handle_room() -> [] int {
-    return draft() + 3 + 512;
+    return log_at() + 1 + connections_logged() * 68;
 }
 
 fn paths() -> [] int {
@@ -268,7 +272,7 @@ fn may[&s, &hd, &r](k: &!s [int], h: &!hd [int], dir: int, name: &r [byte], want
 }
 
 // The name `text[from..to]` in directory `dir`, as a `kind` (1 a directory, 2 a file): a handle, or minus why not.
-fn named[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], dir: int, text: &r [byte], from: int, to: int, kind: int) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000")] int {
+fn named[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &nu, &nn, &nf, &nr, &nw, &nt, &ng, &nh, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], bus: &!nu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), ns: &!nn [int], frame: &!nf [byte], reply: &!nr [byte], wire: &!nw [byte], tcp: &!nt [int], bufs: &!ng [byte], inbox: &!nh [byte], dir: int, text: &r [byte], from: int, to: int, kind: int) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000")] int {
     if to <= from || int_of(text[from]) == '.' {
         return 0 - 2;
     }
@@ -302,7 +306,7 @@ fn named[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &r](con: &!mc Mmio("0x900000
 
 // The path `path[0..to]`, every part a directory, walked from the top: a handle of the last, or minus why not.
 // `/`, `.` and nothing are the top directory; a `/` or `./` before the first name is passed over.
-fn walked[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], path: &r [byte], to: int) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000")] int {
+fn walked[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &nu, &nn, &nf, &nr, &nw, &nt, &ng, &nh, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], bus: &!nu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), ns: &!nn [int], frame: &!nf [byte], reply: &!nr [byte], wire: &!nw [byte], tcp: &!nt [int], bufs: &!ng [byte], inbox: &!nh [byte], path: &r [byte], to: int) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000")] int {
     var at = 0;
     if at < to && int_of(path[at]) == '.' && (at + 1 == to || int_of(path[at + 1]) == '/') {
         at = at + 1;
@@ -318,7 +322,7 @@ fn walked[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &r](con: &!mc Mmio("0x90000
         }
         var under = 0 - 13;
         if may(k, h, dir, path[at..end], 0) {
-            under = named(con, vio, dma, stage, pm, cpu, k, line, h, h[(dir - 3) * 6 + 1], path, at, end, 1);
+            under = named(con, vio, dma, stage, pm, cpu, k, line, h, bus, ns, frame, reply, wire, tcp, bufs, inbox, h[(dir - 3) * 6 + 1], path, at, end, 1);
         }
         if under >= 0 && !path_join(h, under, dir, path, at, end) {
             h[(under - 3) * 6] = 0;
@@ -335,15 +339,15 @@ fn walked[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &r](con: &!mc Mmio("0x90000
 }
 
 // `open_dir(fs, path)`.
-pub fn folder[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], path: &r [byte]) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000")] int {
-    return walked(con, vio, dma, stage, pm, cpu, k, line, h, path, len(path));
+pub fn folder[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &nu, &nn, &nf, &nr, &nw, &nt, &ng, &nh, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], bus: &!nu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), ns: &!nn [int], frame: &!nf [byte], reply: &!nr [byte], wire: &!nw [byte], tcp: &!nt [int], bufs: &!ng [byte], inbox: &!nh [byte], path: &r [byte]) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000")] int {
+    return walked(con, vio, dma, stage, pm, cpu, k, line, h, bus, ns, frame, reply, wire, tcp, bufs, inbox, path, len(path));
 }
 
 // A name under an open directory: `which` 0 a directory (`dir_enter`), 1 a file to read (`dir_open_read`), 2 a file
 // that must not be there yet (`dir_open_new`): the draft; 3 a file to add to (`dir_open_append`), which is served
 // for one kind of name only, the `.lexsys-lock` a tool holds while it writes: nothing else runs while a program
 // does, so the lock is held by being asked for, and no file is made for it.
-pub fn step[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], dir: int, name: &r [byte], which: int) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028")] int {
+pub fn step[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &nu, &nn, &nf, &nr, &nw, &nt, &ng, &nh, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], bus: &!nu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), ns: &!nn [int], frame: &!nf [byte], reply: &!nr [byte], wire: &!nw [byte], tcp: &!nt [int], bufs: &!ng [byte], inbox: &!nh [byte], dir: int, name: &r [byte], which: int) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028")] int {
     base.watchdog(pm, k, base.patience());
     let at = held(h, dir, 1);
     if at < 0 {
@@ -376,7 +380,7 @@ pub fn step[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &r](con: &!mc Mmio("0x900
         if h[draft()] != 0 {
             return 0 - 24;
         }
-        let there = stat(con, vio, dma, stage, pm, cpu, k, line, h, dir, name, 0);
+        let there = stat(con, vio, dma, stage, pm, cpu, k, line, h, bus, ns, frame, reply, wire, tcp, bufs, inbox, dir, name, 0);
         if there >= 0 {
             return 0 - 17;
         }
@@ -402,7 +406,7 @@ pub fn step[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &r](con: &!mc Mmio("0x900
     if which != 0 && which != 1 {
         return 0 - 30;
     }
-    var under = named(con, vio, dma, stage, pm, cpu, k, line, h, h[at + 1], name, 0, len(name), 1 + which);
+    var under = named(con, vio, dma, stage, pm, cpu, k, line, h, bus, ns, frame, reply, wire, tcp, bufs, inbox, h[at + 1], name, 0, len(name), 1 + which);
     if under >= 0 && which == 0 && !path_join(h, under, dir, name, 0, len(name)) {
         h[(under - 3) * 6] = 0;
         under = 0 - 36;
@@ -411,7 +415,7 @@ pub fn step[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &r](con: &!mc Mmio("0x900
 }
 
 // `open_read(fs, path)`; any other way of opening is refused.
-pub fn open[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], path: &r [byte], mode: int) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000")] int {
+pub fn open[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &nu, &nn, &nf, &nr, &nw, &nt, &ng, &nh, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], bus: &!nu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), ns: &!nn [int], frame: &!nf [byte], reply: &!nr [byte], wire: &!nw [byte], tcp: &!nt [int], bufs: &!ng [byte], inbox: &!nh [byte], path: &r [byte], mode: int) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000")] int {
     if mode != 0 {
         return 0 - 30;
     }
@@ -425,14 +429,14 @@ pub fn open[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &r](con: &!mc Mmio("0x900
     while leaf > 0 && int_of(path[leaf - 1]) != '/' {
         leaf = leaf - 1;
     }
-    let dir = walked(con, vio, dma, stage, pm, cpu, k, line, h, path, leaf);
+    let dir = walked(con, vio, dma, stage, pm, cpu, k, line, h, bus, ns, frame, reply, wire, tcp, bufs, inbox, path, leaf);
     if dir < 0 {
         return dir;
     }
     var file = 0 - 21;
     // (a path that ends in `/` or in `.` is a directory's, whatever is there)
     if leaf < len(path) && !(leaf + 1 == len(path) && int_of(path[leaf]) == '.') {
-        file = named(con, vio, dma, stage, pm, cpu, k, line, h, h[(dir - 3) * 6 + 1], path, leaf, len(path), 2);
+        file = named(con, vio, dma, stage, pm, cpu, k, line, h, bus, ns, frame, reply, wire, tcp, bufs, inbox, h[(dir - 3) * 6 + 1], path, leaf, len(path), 2);
     }
     h[(dir - 3) * 6] = 0;
     return file;
@@ -518,7 +522,7 @@ fn random_read[&hd, &t](h: &!hd [int], at: int, into: &!t [byte]) -> [] int {
     return got;
 }
 
-pub fn read_at[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &t](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], file: int, from: int, into: &!t [byte]) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028")] int {
+pub fn read_at[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &nu, &nn, &nf, &nr, &nw, &nt, &ng, &nh, &t](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], bus: &!nu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), ns: &!nn [int], frame: &!nf [byte], reply: &!nr [byte], wire: &!nw [byte], tcp: &!nt [int], bufs: &!ng [byte], inbox: &!nh [byte], file: int, from: int, into: &!t [byte]) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028")] int {
     base.watchdog(pm, k, base.patience());
     let rnd = held(h, file, 6);
     if rnd >= 0 {
@@ -599,22 +603,22 @@ pub fn read_at[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &t](con: &!mc Mmio("0x
 }
 
 // The next bytes of an open file.
-pub fn read[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &t](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], file: int, into: &!t [byte]) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028")] int {
+pub fn read[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &nu, &nn, &nf, &nr, &nw, &nt, &ng, &nh, &t](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], bus: &!nu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), ns: &!nn [int], frame: &!nf [byte], reply: &!nr [byte], wire: &!nw [byte], tcp: &!nt [int], bufs: &!ng [byte], inbox: &!nh [byte], file: int, into: &!t [byte]) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028")] int {
     if held(h, file, 6) >= 0 {
-        return read_at(con, vio, dma, stage, pm, cpu, k, line, h, file, 0, into);
+        return read_at(con, vio, dma, stage, pm, cpu, k, line, h, bus, ns, frame, reply, wire, tcp, bufs, inbox, file, 0, into);
     }
     let at = held(h, file, 2);
     if at < 0 {
         return 0 - 9;
     }
-    let got = read_at(con, vio, dma, stage, pm, cpu, k, line, h, file, h[at + 3], into);
+    let got = read_at(con, vio, dma, stage, pm, cpu, k, line, h, bus, ns, frame, reply, wire, tcp, bufs, inbox, file, h[at + 3], into);
     if got > 0 {
         h[at + 3] = h[at + 3] + got;
     }
     return got;
 }
 
-pub fn size[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], file: int) -> [] int {
+pub fn size[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &nu, &nn, &nf, &nr, &nw, &nt, &ng, &nh](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], bus: &!nu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), ns: &!nn [int], frame: &!nf [byte], reply: &!nr [byte], wire: &!nw [byte], tcp: &!nt [int], bufs: &!ng [byte], inbox: &!nh [byte], file: int) -> [] int {
     let at = held(h, file, 2);
     if at < 0 {
         return 0 - 9;
@@ -623,9 +627,12 @@ pub fn size[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd](con: &!mc Mmio("0x9000000
 }
 
 // A file or a directory, closed.
-pub fn close[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], handle: int) -> [] int {
+pub fn close[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &nu, &nn, &nf, &nr, &nw, &nt, &ng, &nh](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], bus: &!nu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), ns: &!nn [int], frame: &!nf [byte], reply: &!nr [byte], wire: &!nw [byte], tcp: &!nt [int], bufs: &!ng [byte], inbox: &!nh [byte], handle: int) -> [] int {
     if handle < 3 || handle >= 3 + handles() || h[(handle - 3) * 6] == 0 {
         return 0 - 9;
+    }
+    if h[(handle - 3) * 6] == 7 {
+        inet.tcp_close(tcp, h[(handle - 3) * 6 + 1]);
     }
     h[(handle - 3) * 6] = 0;
     return 0;
@@ -637,7 +644,7 @@ pub fn close[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd](con: &!mc Mmio("0x900000
 // between two calls, so a listing costs no more than its handle, and a directory is short. A name that begins
 // with a dot is not given: `.` and `..` are entries of every directory but the top one, and `named` opens none.
 
-pub fn list[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], dir: int) -> [] int {
+pub fn list[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &nu, &nn, &nf, &nr, &nw, &nt, &ng, &nh](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], bus: &!nu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), ns: &!nn [int], frame: &!nf [byte], reply: &!nr [byte], wire: &!nw [byte], tcp: &!nt [int], bufs: &!ng [byte], inbox: &!nh [byte], dir: int) -> [] int {
     let at = held(h, dir, 1);
     if at < 0 {
         return 0 - 9;
@@ -650,7 +657,7 @@ pub fn list[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd](con: &!mc Mmio("0x9000000
 
 // The next name of a listing into `into`: its length and 65536 times its kind (1 a file, 2 a directory); 0 at the
 // end; minus why not (36: the name is longer than `into`).
-pub fn next[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &t](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], listing: int, into: &!t [byte]) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028")] int {
+pub fn next[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &nu, &nn, &nf, &nr, &nw, &nt, &ng, &nh, &t](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], bus: &!nu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), ns: &!nn [int], frame: &!nf [byte], reply: &!nr [byte], wire: &!nw [byte], tcp: &!nt [int], bufs: &!ng [byte], inbox: &!nh [byte], listing: int, into: &!t [byte]) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028")] int {
     base.watchdog(pm, k, base.patience());
     let at = held(h, listing, 3);
     if at < 0 {
@@ -723,7 +730,7 @@ pub fn next[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &t](con: &!mc Mmio("0x900
 
 // A name under an open directory, and one thing about it: `which` 0 its kind (1 a file, 2 a directory), 1 its
 // length in bytes (0 for a directory), 2 when it was last written (`fat.changed`).
-pub fn stat[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &q](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], dir: int, name: &q [byte], which: int) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000")] int {
+pub fn stat[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &nu, &nn, &nf, &nr, &nw, &nt, &ng, &nh, &q](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], bus: &!nu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), ns: &!nn [int], frame: &!nf [byte], reply: &!nr [byte], wire: &!nw [byte], tcp: &!nt [int], bufs: &!ng [byte], inbox: &!nh [byte], dir: int, name: &q [byte], which: int) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000")] int {
     let at = held(h, dir, 1);
     if at < 0 {
         return 0 - 9;
@@ -829,7 +836,7 @@ fn pathed[&hd, &r, &f](h: &!hd [int], dir: int, name: &r [byte], full: &!f [byte
 }
 
 // Bytes for the draft: how many were taken, which is all of them, or minus why not (27: more than the megabyte it has).
-pub fn write[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &p](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], file: int, bytes: &p [byte]) -> [mmio("0x220000..0x420000,0x40220000..0x40420000"), mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028")] int {
+pub fn write[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &nu, &nn, &nf, &nr, &nw, &nt, &ng, &nh, &p](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], bus: &!nu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), ns: &!nn [int], frame: &!nf [byte], reply: &!nr [byte], wire: &!nw [byte], tcp: &!nt [int], bufs: &!ng [byte], inbox: &!nh [byte], file: int, bytes: &p [byte]) -> [mmio("0x220000..0x420000,0x40220000..0x40420000"), mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028")] int {
     base.watchdog(pm, k, base.patience());
     if held(h, file, 4) < 0 || h[draft()] == 0 || k[4278] == 0 {
         return 0 - 9;
@@ -848,14 +855,14 @@ pub fn write[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &p](con: &!mc Mmio("0x90
 }
 
 // A draft, a lock or a directory, kept: there is nothing to do before the rename, and the rename leaves nothing undone.
-pub fn sync[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], handle: int) -> [] int {
+pub fn sync[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &nu, &nn, &nf, &nr, &nw, &nt, &ng, &nh](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], bus: &!nu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), ns: &!nn [int], frame: &!nf [byte], reply: &!nr [byte], wire: &!nw [byte], tcp: &!nt [int], bufs: &!ng [byte], inbox: &!nh [byte], handle: int) -> [] int {
     if held(h, handle, 4) < 0 && held(h, handle, 5) < 0 && held(h, handle, 1) < 0 {
         return 0 - 9;
     }
     return 0;
 }
 
-pub fn lock[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], file: int) -> [] int {
+pub fn lock[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &nu, &nn, &nf, &nr, &nw, &nt, &ng, &nh](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], bus: &!nu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), ns: &!nn [int], frame: &!nf [byte], reply: &!nr [byte], wire: &!nw [byte], tcp: &!nt [int], bufs: &!ng [byte], inbox: &!nh [byte], file: int) -> [] int {
     if held(h, file, 5) < 0 {
         return 0 - 9;
     }
@@ -865,7 +872,7 @@ pub fn lock[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd](con: &!mc Mmio("0x9000000
 // The draft `from` becomes the file `to`, both under `dir`; `fresh` 1 refuses a name that is taken (17). A file of
 // the disk is renamed only with `fresh` 1 (`files.rename`): one is never renamed over another (30). What a name may
 // be is what `put` may write (13 if not).
-pub fn rename[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &p, &q](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], dir: int, from: &p [byte], to: &q [byte], fresh: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x220000..0x420000,0x40220000..0x40420000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+pub fn rename[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &nu, &nn, &nf, &nr, &nw, &nt, &ng, &nh, &p, &q](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], bus: &!nu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), ns: &!nn [int], frame: &!nf [byte], reply: &!nr [byte], wire: &!nw [byte], tcp: &!nt [int], bufs: &!ng [byte], inbox: &!nh [byte], dir: int, from: &p [byte], to: &q [byte], fresh: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x220000..0x420000,0x40220000..0x40420000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
     if held(h, dir, 1) < 0 {
         return 0 - 9;
     }
@@ -878,7 +885,7 @@ pub fn rename[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &p, &q](con: &!mc Mmio(
     if !drafted(h, dir, from) {
         // a file of the disk: its name is changed, and only to one that is not taken
         if fresh == 0 {
-            if stat(con, vio, dma, stage, pm, cpu, k, line, h, dir, from, 0) >= 0 {
+            if stat(con, vio, dma, stage, pm, cpu, k, line, h, bus, ns, frame, reply, wire, tcp, bufs, inbox, dir, from, 0) >= 0 {
                 return 0 - 30;
             }
             return 0 - 2;
@@ -901,7 +908,7 @@ pub fn rename[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &p, &q](con: &!mc Mmio(
         }
         return moved;
     }
-    let kind = stat(con, vio, dma, stage, pm, cpu, k, line, h, dir, to, 0);
+    let kind = stat(con, vio, dma, stage, pm, cpu, k, line, h, bus, ns, frame, reply, wire, tcp, bufs, inbox, dir, to, 0);
     if kind == 2 {
         return 0 - 21;
     }
@@ -957,7 +964,7 @@ pub fn rename[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &p, &q](con: &!mc Mmio(
 }
 
 // A name under a directory, removed: the draft is forgotten. A file of the disk is not removed by a program (30).
-pub fn remove[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &p](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], dir: int, name: &p [byte]) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000")] int {
+pub fn remove[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &nu, &nn, &nf, &nr, &nw, &nt, &ng, &nh, &p](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], bus: &!nu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), ns: &!nn [int], frame: &!nf [byte], reply: &!nr [byte], wire: &!nw [byte], tcp: &!nt [int], bufs: &!ng [byte], inbox: &!nh [byte], dir: int, name: &p [byte]) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000")] int {
     if held(h, dir, 1) < 0 {
         return 0 - 9;
     }
@@ -971,8 +978,263 @@ pub fn remove[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &p](con: &!mc Mmio("0x9
         h[draft()] = 0;
         return 0;
     }
-    if stat(con, vio, dma, stage, pm, cpu, k, line, h, dir, name, 0) >= 0 {
+    if stat(con, vio, dma, stage, pm, cpu, k, line, h, bus, ns, frame, reply, wire, tcp, bufs, inbox, dir, name, 0) >= 0 {
         return 0 - 30;
     }
     return 0 - 2;
+}
+
+// ---- connections out (docs/network-out.md) ----------------------------------------------------------
+// A program connects over the kernel's own TCP: while it waits, it turns the network itself (`network.net_pump`, as
+// the shell's loop does), which keeps an SSH session it was started from answered too. Every connection it asks
+// for, made or refused, has a line in the log at the end of `h`, which the kernel writes into the record when the
+// program ends (`kernel.hosted`): 0 how it went (1 made, 2 refused by a rule, 3 not made), 1 the bytes sent, 2 the
+// bytes received, 3 how long its name is, and from 4 `host:port` as it was asked.
+
+pub fn connections_logged() -> [] int {
+    return 8;
+}
+
+pub fn log_at() -> [] int {
+    return draft() + 3 + 512;
+}
+
+// The most connections a program holds at once.
+fn connections_open() -> [] int {
+    return 4;
+}
+
+// How long a connection is waited for, and bytes or room on one, in milliseconds.
+fn connect_patience() -> [] int {
+    return 5000;
+}
+
+fn wait_patience() -> [] int {
+    return 10000;
+}
+
+// A line for `host:port` in the log: its place, or -1 if the log is full (then the connection is not made either:
+// what is not recorded is not done).
+fn log_entry[&hd, &n](h: &!hd [int], host: &n [byte], port: int) -> [] int {
+    let at = log_at();
+    if h[at] >= connections_logged() {
+        return 0 - 1;
+    }
+    let e = at + 1 + h[at] * 68;
+    h[at] = h[at] + 1;
+    h[e] = 3;
+    h[e + 1] = 0;
+    h[e + 2] = 0;
+    var n = 0;
+    while n < len(host) && n < 56 {
+        h[e + 4 + n] = int_of(host[n]);
+        n = n + 1;
+    }
+    h[e + 4 + n] = 58;
+    n = n + 1;
+    // the port in decimal
+    var digits = 1;
+    var p = port;
+    while p >= 10 {
+        digits = digits * 10;
+        p = p / 10;
+    }
+    p = port;
+    while digits > 0 {
+        h[e + 4 + n] = 48 + p / digits % 10;
+        n = n + 1;
+        digits = digits / 10;
+    }
+    h[e + 3] = n;
+    return e;
+}
+
+// May this program connect to `host` on `port`? The console and an owner's key may reach any machine; a reader's key
+// none, since a reader watches; an agent's key the ones its `net:` grants name (`keys.net_allows`).
+fn may_connect[&s, &n](k: &!s [int], host: &n [byte], port: int) -> [] bool {
+    if k[26] == 0 {
+        return true;
+    }
+    if k[4179] == 2 {
+        return true;
+    }
+    if k[4179] != 3 || len(k) < 4280 + keys.grant_room() {
+        return false;
+    }
+    return keys.net_allows(k[4280..4280 + keys.grant_room()], host, port);
+}
+
+// `tcp_connect(out, host, port)`: the language has already held `host` and `port` to the bound of the program's `Out`.
+// A handle, or minus why: 13 a rule refuses it (and a line on the program's error output says which), 24 four are
+// open or the log is full, 101 the board has no network, 110 nobody answered in five seconds, 111 refused there, 113
+// no address for that name or nobody on the way to it.
+pub fn dial[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &nu, &nn, &nf, &nr, &nw, &nt, &ng, &nh, &n](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], bus: &!nu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), ns: &!nn [int], frame: &!nf [byte], reply: &!nr [byte], wire: &!nw [byte], tcp: &!nt [int], bufs: &!ng [byte], inbox: &!nh [byte], host: &n [byte], port: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028")] int {
+    base.watchdog(pm, k, base.patience());
+    let e = log_entry(h, host, port);
+    if e < 0 {
+        return 0 - 24;
+    }
+    if !may_connect(k, host, port) {
+        h[e] = 2;
+        out(con, vio, dma, stage, pm, cpu, k, line, h, bus, ns, frame, reply, wire, tcp, bufs, inbox, "refused: net.not-granted ");
+        region r {
+            let said = alloc_slice[r](64, byte_of(0));
+            var i = 0;
+            while i < h[e + 3] && i < 64 {
+                said[i] = byte_of(h[e + 4 + i]);
+                i = i + 1;
+            }
+            out(con, vio, dma, stage, pm, cpu, k, line, h, bus, ns, frame, reply, wire, tcp, bufs, inbox, said[0..i]);
+        }
+        out(con, vio, dma, stage, pm, cpu, k, line, h, bus, ns, frame, reply, wire, tcp, bufs, inbox, "\n");
+        return 0 - 13;
+    }
+    if k[4154] == 0 {
+        return 0 - 101;
+    }
+    var open = 0;
+    var i = 0;
+    while i < handles() {
+        if h[i * 6] == 7 {
+            open = open + 1;
+        }
+        i = i + 1;
+    }
+    if open >= connections_open() {
+        return 0 - 24;
+    }
+    let fd = fresh(h, 7, 0, e);
+    if fd < 0 {
+        return 0 - 24;
+    }
+    // what the kernel's own lookups say is for its console, not the program's: kept quiet
+    let quiet = k[4267];
+    k[4267] = 1;
+    var target = network.address(host, 0, len(host));
+    if target < 0 {
+        target = network.net_lookup(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, host, 0, len(host));
+    }
+    var card = 0 - 1;
+    if target >= 0 {
+        card = network.resolve(cpu, con, bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, target);
+    }
+    k[4267] = quiet;
+    base.watchdog(pm, k, base.patience());
+    if target < 0 || card < 0 {
+        h[fd * 6 - 18] = 0;
+        return 0 - 113;
+    }
+    // a number nobody can guess to begin at, if there is one; and a port of ours not used a moment ago
+    var first = cpu_read(cpu, "cntvct_el0");
+    if k[37] > 0 {
+        k[37] = k[37] - 1;
+        first = k[4136 + k[37]];
+    }
+    k[23] = k[23] + 1;
+    let c = inet.tcp_dial(tcp, bufs, inbox, target, port, 49152 + k[23] % 16384, base.uptime_ms(cpu), first, card);
+    if c < 0 {
+        h[fd * 6 - 18] = 0;
+        return 0 - 24;
+    }
+    let began = base.uptime_ms(cpu);
+    while inet.tcp_state(tcp, c) == 6 && base.uptime_ms(cpu) - began < connect_patience() {
+        network.net_pump(bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, base.uptime_ms(cpu), cpu_read(cpu, "cntvct_el0"));
+    }
+    let state = inet.tcp_state(tcp, c);
+    if state != 2 && state != 3 {
+        h[fd * 6 - 18] = 0;
+        if state == 6 {
+            inet.tcp_close(tcp, c);
+            return 0 - 110;
+        }
+        return 0 - 111;
+    }
+    h[fd * 6 - 17] = c;
+    h[e] = 1;
+    return fd;
+}
+
+// `conn_read`: the bytes that have come, waiting for some; 0 once the other end has finished and all of it was
+// read; minus why: 9 not a connection, 104 it was broken off, 110 nothing came in ten seconds.
+pub fn receive[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &nu, &nn, &nf, &nr, &nw, &nt, &ng, &nh, &b](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], bus: &!nu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), ns: &!nn [int], frame: &!nf [byte], reply: &!nr [byte], wire: &!nw [byte], tcp: &!nt [int], bufs: &!ng [byte], inbox: &!nh [byte], handle: int, into: &!b [byte]) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028")] int {
+    let p = held(h, handle, 7);
+    if p < 0 {
+        return 0 - 9;
+    }
+    let c = h[p + 1];
+    let e = h[p + 2];
+    let began = base.uptime_ms(cpu);
+    while true {
+        let n = inet.tcp_read(tcp, inbox, c, into, len(into));
+        if n > 0 {
+            h[e + 2] = h[e + 2] + n;
+            // the window it opened is said at once
+            network.net_pump(bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, base.uptime_ms(cpu), cpu_read(cpu, "cntvct_el0"));
+            return n;
+        }
+        let state = inet.tcp_state(tcp, c);
+        if state == 3 || state == 4 {
+            return 0;
+        }
+        if state != 2 && state != 5 {
+            return 0 - 104;
+        }
+        if base.uptime_ms(cpu) - began >= wait_patience() {
+            return 0 - 110;
+        }
+        base.watchdog(pm, k, base.patience());
+        network.net_pump(bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, base.uptime_ms(cpu), cpu_read(cpu, "cntvct_el0"));
+    }
+    return 0;
+}
+
+// `conn_write`: all of `data` is taken, waiting for room as long as some is made within ten seconds; how many were
+// taken, or minus why: 9 not a connection, 32 the other end no longer reads, 110 no room was made in ten seconds.
+pub fn send[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &nu, &nn, &nf, &nr, &nw, &nt, &ng, &nh, &b](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], bus: &!nu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), ns: &!nn [int], frame: &!nf [byte], reply: &!nr [byte], wire: &!nw [byte], tcp: &!nt [int], bufs: &!ng [byte], inbox: &!nh [byte], handle: int, data: &b [byte]) -> [cpu("cntfrq_el0"), cpu("cntvct_el0"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028")] int {
+    let p = held(h, handle, 7);
+    if p < 0 {
+        return 0 - 9;
+    }
+    let c = h[p + 1];
+    let e = h[p + 2];
+    var taken = 0;
+    var waited = base.uptime_ms(cpu);
+    while taken < len(data) {
+        let state = inet.tcp_state(tcp, c);
+        if state != 2 && state != 3 {
+            if taken > 0 {
+                return taken;
+            }
+            return 0 - 32;
+        }
+        let w = inet.tcp_write(tcp, bufs, c, data, taken, len(data) - taken);
+        if w > 0 {
+            taken = taken + w;
+            h[e + 1] = h[e + 1] + w;
+            waited = base.uptime_ms(cpu);
+        } else if base.uptime_ms(cpu) - waited >= wait_patience() {
+            if taken > 0 {
+                return taken;
+            }
+            return 0 - 110;
+        }
+        base.watchdog(pm, k, base.patience());
+        network.net_pump(bus, vio, dma, k, ns, frame, reply, wire, tcp, bufs, inbox, base.uptime_ms(cpu), cpu_read(cpu, "cntvct_el0"));
+    }
+    return taken;
+}
+
+// What a program left open when it ended is closed, in the kernel's TCP, which finishes the closing behind the shell.
+pub fn close_connections[&hd, &t](h: &!hd [int], tcp: &!t [int]) -> [] int {
+    var i = 0;
+    var closed = 0;
+    while i < handles() {
+        if h[i * 6] == 7 {
+            inet.tcp_close(tcp, h[i * 6 + 1]);
+            h[i * 6] = 0;
+            closed = closed + 1;
+        }
+        i = i + 1;
+    }
+    return closed;
 }
