@@ -162,5 +162,9 @@ then judges with `fsck.fat` and `tests/checklog.py`:
   `keys.cho` (a `net:` grant read as a path, `*.` taking any number of labels, the port not compared) each fail it.
 - `keys.sh`, `agents.sh` and `authority.sh` pass as before.
 
-Not measured: the real Pi 4 (GENET), names looked up through a real name server, and a server that is slow or that
-breaks the connection off.
+On the real Raspberry Pi 4, 0.0.53 from its own card, over its Ethernet card (GENET): the owner's `fetch 10.42.0.1 8765
+/small.txt` over SSH from the Pi 5's Python HTTP server gave the page, the same 2,979 bytes as the file; a port with no
+server said `refused`; the board's record has `owner net 10.42.0.1:8765 - 63 3167` and `owner net-failed 10.42.0.1:9`.
+
+Not measured: an agent's key on the real board, names looked up through a real name server, and a server that is slow
+or that breaks the connection off.
