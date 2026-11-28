@@ -709,12 +709,12 @@ jobs:
         # sent shows no connection asked of it; a reader is refused; the owner and the console reach a third. Then the
         # record has a line for each with who and the bytes each way, and Python's judge holds its chain.
         run: |
-          mkfs.fat -F 16 -C n-fat16.img 16384 > /dev/null
-          ./netout.sh n-fat16.img /tmp/sshkey /tmp/agentkey 8765 /tmp/readerkey > netout.txt 2>&1 || { cat netout.txt; exit 1; }
+          rm -f netout.img; mkfs.fat -F 16 -C netout.img 16384 > /dev/null
+          ./netout.sh netout.img /tmp/sshkey /tmp/agentkey 8765 /tmp/readerkey > netout.txt 2>&1 || { cat netout.txt; exit 1; }
           cat netout.txt | cut -c1-200
-          fsck.fat -n n-fat16.img
+          fsck.fat -n netout.img
           rm -rf nout; mkdir -p nout
-          mcopy -i n-fat16.img ::LOG.TXT nout/LOG.TXT
+          mcopy -i netout.img ::LOG.TXT nout/LOG.TXT
           python3 tests/checklog.py nout/LOG.TXT nout > nlog.txt || { cat nlog.txt; exit 1; }
           cat nlog.txt
           grep -q " 0 that do not follow" nlog.txt
