@@ -177,11 +177,12 @@ pub fn load[&t, &b, &r, &s](text: &t [byte], n: int, table: &!b [byte], roles: &
 
 // ---- grants (docs/permissions.md, slice 5) ---------------------------------------------------------
 // An agent's line has, after its key, what it is granted: words `read:<path>` and `write:<path>`, a path being a
-// directory of the disk and everything under it (`/` is the whole disk). `write` is `read` too. The first word that
-// is not one of those ends them: the rest of the line is for people to read.
+// directory of the disk and everything under it (`/` is the whole disk), and `net:<host>:<port>`, a machine a program
+// may connect to (docs/network-out.md). `write` is `read` too; `net` is neither. The first word that is not one of
+// those ends them: the rest of the line is for people to read.
 //
-// Grants are kept as whole numbers, `gr[0]` how many and then 64 for each: 1 read or 2 write, the path's length, and
-// its bytes (62 at most), without a `/` at either end.
+// Grants are kept as whole numbers, `gr[0]` how many and then 64 for each: 1 read, 2 write or 3 net, the length of
+// what follows, and its bytes (62 at most): a path without a `/` at either end, or `host:port`.
 
 pub fn grant_room() -> [] int {
     return 1 + 4 * 64;
@@ -205,6 +206,8 @@ fn grant_word[&t, &g](text: &t [byte], at: int, end: int, gr: &!g [int], e: int)
     } else if is(text, at, end, "write:") {
         kind = 2;
         from = at + 6;
+    } else if is(text, at, end, "net:") {
+        return net_word(text, at + 4, end, gr, e);
     } else {
         return false;
     }
@@ -237,6 +240,54 @@ fn grant_word[&t, &g](text: &t [byte], at: int, end: int, gr: &!g [int], e: int)
     gr[base + 1] = to - from;
     i = from;
     while i < to {
+        gr[base + 2 + i - from] = int_of(text[i]);
+        i = i + 1;
+    }
+    return true;
+}
+
+// `net:` then `text[from..end]` as a grant: a host (letters, digits, `.`, `-`, and `*.` in front for one label), a `:`,
+// and a port from 1 to 65535. 62 bytes at most.
+fn net_word[&t, &g](text: &t [byte], from: int, end: int, gr: &!g [int], e: int) -> [] bool {
+    if end - from > 62 || end - from < 3 {
+        return false;
+    }
+    var colon = end - 1;
+    while colon > from && int_of(text[colon]) != 58 {
+        colon = colon - 1;
+    }
+    if colon <= from || colon + 1 >= end || end - colon - 1 > 5 {
+        return false;
+    }
+    var port = 0;
+    var i = colon + 1;
+    while i < end {
+        let c = int_of(text[i]);
+        if c < 48 || c > 57 {
+            return false;
+        }
+        port = port * 10 + c - 48;
+        i = i + 1;
+    }
+    if port < 1 || port > 65535 {
+        return false;
+    }
+    i = from;
+    if colon - from > 2 && int_of(text[from]) == 42 && int_of(text[from + 1]) == 46 {
+        i = from + 2;
+    }
+    while i < colon {
+        let c = lower(int_of(text[i]));
+        if !(c >= 97 && c <= 122 || c >= 48 && c <= 57 || c == 46 || c == 45) {
+            return false;
+        }
+        i = i + 1;
+    }
+    let base = 1 + e * 64;
+    gr[base] = 3;
+    gr[base + 1] = end - from;
+    i = from;
+    while i < end {
         gr[base + 2 + i - from] = int_of(text[i]);
         i = i + 1;
     }
@@ -371,7 +422,7 @@ pub fn covers[&g, &p](gr: &g [int], want: int, path: &p [byte]) -> [] bool {
     while e < gr[0] && 1 + (e + 1) * 64 <= len(gr) {
         let base = 1 + e * 64;
         let n = gr[base + 1];
-        if gr[base] >= want && n >= 0 && n <= 62 && n <= to - from {
+        if gr[base] >= want && gr[base] <= 2 && n >= 0 && n <= 62 && n <= to - from {
             var same = true;
             var i = 0;
             while i < n && same {
@@ -406,7 +457,7 @@ pub fn reaches[&g, &p](gr: &g [int], path: &p [byte]) -> [] bool {
     while e < gr[0] && 1 + (e + 1) * 64 <= len(gr) {
         let base = 1 + e * 64;
         let n = gr[base + 1];
-        if n > m && n <= 62 {
+        if gr[base] <= 2 && n > m && n <= 62 {
             var same = true;
             var i = 0;
             while i < m && same {
@@ -415,6 +466,64 @@ pub fn reaches[&g, &p](gr: &g [int], path: &p [byte]) -> [] bool {
             }
             if same && (m == 0 || gr[base + 2 + m] == 47) {
                 return true;
+            }
+        }
+        e = e + 1;
+    }
+    return false;
+}
+
+// Do the grants `gr` let a program connect to `host` (as it was asked, a name or an address) on `port`? One does if it
+// is a `net:` grant of that port and that host, letters compared without their case; `*.example.org` stands for one
+// label in front of `example.org`, as the language's bound does (cancho's `docs/net-bounds.md`).
+pub fn net_allows[&g, &n](gr: &g [int], host: &n [byte], port: int) -> [] bool {
+    if len(gr) < 1 || len(host) == 0 {
+        return false;
+    }
+    var e = 0;
+    while e < gr[0] && 1 + (e + 1) * 64 <= len(gr) {
+        let base = 1 + e * 64;
+        let n = gr[base + 1];
+        if gr[base] == 3 && n >= 3 && n <= 62 {
+            var colon = n - 1;
+            while colon > 0 && gr[base + 2 + colon] != 58 {
+                colon = colon - 1;
+            }
+            var p = 0;
+            var i = colon + 1;
+            while i < n {
+                p = p * 10 + gr[base + 2 + i] - 48;
+                i = i + 1;
+            }
+            if p == port && colon > 0 {
+                var same = false;
+                if colon > 2 && gr[base + 2] == 42 && gr[base + 3] == 46 {
+                    // `*.` and a tail: one label, with no dot in it, then the tail with its dot
+                    let tail = colon - 1;
+                    if len(host) > tail {
+                        let label = len(host) - tail;
+                        same = true;
+                        i = 0;
+                        while i < len(host) && same {
+                            if i < label {
+                                same = int_of(host[i]) != 46;
+                            } else {
+                                same = lower(int_of(host[i])) == lower(gr[base + 3 + i - label]);
+                            }
+                            i = i + 1;
+                        }
+                    }
+                } else if colon == len(host) {
+                    same = true;
+                    i = 0;
+                    while i < colon && same {
+                        same = lower(int_of(host[i])) == lower(gr[base + 2 + i]);
+                        i = i + 1;
+                    }
+                }
+                if same {
+                    return true;
+                }
             }
         }
         e = e + 1;

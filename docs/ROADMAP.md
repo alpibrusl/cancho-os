@@ -102,6 +102,9 @@
   are dated and the record has a line for it. Believed, not proved.
 - The clock and random bytes, lent to a program (2026-11-28, 0.0.52, epic #60 task #50): `clock_ms` and
   `clock_unix_ms` answered by the kernel; `/dev/urandom` from the board's generator; `now` and `random` are programs.
+- A program connects out (2026-11-28, 0.0.53, epic #60 task #51, docs/network-out.md): `tcp_connect`, `conn_read`,
+  `conn_write` and `conn_close` answered over the kernel's TCP; `net:<host>:<port>` grants for an agent's key, refused
+  before a packet leaves; a line in the record for each connection with the bytes each way; `fetch` is a program.
 - What a tool is comes from the compiler (2026-11-27, 0.0.49, epic #60 task #49, the kernel's half): who may run a
   tool, and whether it is lent anything to write with, follow from its effect row, read at build time. `tally` and
   `jsonq` built in by two words in a list.

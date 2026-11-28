@@ -855,7 +855,7 @@ fn run[&f, &mc, &mu, &mt, &mx, &mz, &s, &r, &nv, &nd, &nn, &na, &nb, &nw, &nt, &
         return 0;
     }
     if same(line, n, "help") {
-        base.puts(con, k, "commands: help, about, echo <text>, uptime, ticks, mem, board, random, disk, ls [path], cat <path>, sum <path> (list, peek and hash, in text), copy <from> <to>, remove <name>, mkdir <path>, ls <path>, versions, purge <number>, record, put <name> <bytes> <sha256> (over SSH), restart, heap, tell <words>, fail trap|spin|memory, watch on|off (at the console), net [up|down|eth|dhcp], net ssh [on|off], net time <address> [port] [back], time, lookup <name>, ping <address or name>, http <address or name> <port>, servo via <address> <port>|off, servo scan, servo pos, arm zero, arm pose, arm check <5 angles>, crash [null|write], load <bytes>\r\n");
+        base.puts(con, k, "commands: help, about, echo <text>, uptime, ticks, mem, board, random [n], now, fetch <host> <port> [path], disk, ls [path], cat <path>, sum <path> (list, peek and hash, in text), copy <from> <to>, remove <name>, mkdir <path>, ls <path>, versions, purge <number>, record, put <name> <bytes> <sha256> (over SSH), restart, heap, tell <words>, fail trap|spin|memory, watch on|off (at the console), net [up|down|eth|dhcp], net ssh [on|off], net time <address> [port] [back], time, lookup <name>, ping <address or name>, http <address or name> <port>, servo via <address> <port>|off, servo scan, servo pos, arm zero, arm pose, arm check <5 angles>, crash [null|write], load <bytes>\r\n");
         // the tools are not listed by hand: their names, and which of them change a file, are the compiler's word
         base.puts(con, k, "tools, of cancho-tools (each says how it is used if it is run with nothing):");
         var t = 0;
@@ -869,7 +869,7 @@ fn run[&f, &mc, &mu, &mt, &mx, &mz, &s, &r, &nv, &nd, &nn, &na, &nb, &nw, &nt, &
         }
         base.puts(con, k, "\r\n(* changes a file: not for a key that may only read)\r\n");
     } else if same(line, n, "about") {
-        base.puts(con, k, "cancho-os 0.0.52: a kernel written in cancho (");
+        base.puts(con, k, "cancho-os 0.0.53: a kernel written in cancho (");
         if k[1] >= 3 {
             base.puts(con, k, "Raspberry Pi ");
             base.put_dec(con, k, k[1]);
@@ -1056,10 +1056,15 @@ fn load_grants[&mv, &md, &s, &x](vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000
 }
 
 // Which of the programs built into the image the line asks for (`hosted` runs it), or -1: 0 `tell`, the kernel's own
-// check of a lent system; 1 `fail`, which goes wrong on purpose; 2 `now`, the clock as a program sees it; 3 `random`, bytes of the board's generator; and from 4 the tools of cancho-tools, in the order
+// check of a lent system; 1 `fail`, which goes wrong on purpose; 2 `now`, the clock as a program sees it; 3 `random`, bytes of the board's generator;
+// 4 `fetch`, a page from another machine (docs/network-out.md); and from `first_tool()` the tools of cancho-tools, in the order
 // build.sh lists them. Nothing about a tool is written here: its name, whether it can change a file and whether it
 // reads its input are in `tool_rows`, which build.sh makes from what the compiler says each tool performs
 // (docs/tools.md).
+fn first_tool() -> [] int {
+    return 5;
+}
+
 fn program[&r](line: &r [byte], n: int) -> [] int {
     if same(line, n, "tell") || n > 5 && same(line, 5, "tell ") {
         return 0;
@@ -1073,12 +1078,15 @@ fn program[&r](line: &r [byte], n: int) -> [] int {
     if same(line, n, "random") || n > 7 && same(line, 7, "random ") {
         return 3;
     }
+    if same(line, n, "fetch") || n > 6 && same(line, 6, "fetch ") {
+        return 4;
+    }
     var i = 0;
     while i < tool_rows.count() {
         let name = tool_rows.name(i);
         let m = len(name);
         if same(line, n, name) || n > m + 1 && same(line, m, name) && int_of(line[m]) == 32 {
-            return 4 + i;
+            return first_tool() + i;
         }
         i = i + 1;
     }
@@ -1087,7 +1095,7 @@ fn program[&r](line: &r [byte], n: int) -> [] int {
 
 // Can program `which` change a file? A tool whose row says so; and `fail`, which is not a reader's to run either.
 fn changes(which: int) -> [] bool {
-    return which == 1 || which >= 4 && tool_rows.writes(which - 4);
+    return which == 1 || which >= first_tool() && tool_rows.writes(which - first_tool());
 }
 
 // `fail trap|spin|memory`: a program that goes wrong on purpose, as `crash` is a kernel that does (docs/tools.md).
@@ -1110,7 +1118,7 @@ fn say_time[&mc, &s](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048
 }
 
 fn takes_input(which: int) -> [] bool {
-    return which >= 4 && tool_rows.reads_input(which - 4);
+    return which >= first_tool() && tool_rows.reads_input(which - first_tool());
 }
 
 // May a key that can only read run this line? The commands that change nothing and reach nowhere.
@@ -1302,7 +1310,7 @@ fn heap_try[&mc, &s, &hp](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f2
 // The one place the kernel lends itself as a system: for the length of the block, what a hosted program asks of
 // its `Io`, its `Args` and its `Fs` is answered by `ksys`, with the console, the disk, the kernel's state, the line
 // and what is open. `which` is what `program` answered.
-fn hosted[&cq, &mc, &mv, &md, &mg, &mk, &s, &l, &hd, &i, &g, &f, &hp, &ck](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], io: &!i Io, args: &g Args, fs: &f Fs(""), heap: &!hp Heap, which: int, clk: &ck Clock) -> [heap, mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x220000..0x420000,0x40220000..0x40420000"), mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu("cntfrq_el0"), cpu("cntvct_el0")] int {
+fn hosted[&cq, &mc, &mv, &md, &mg, &mk, &s, &l, &hd, &i, &g, &f, &hp, &ck, &nu, &nn, &nf, &nr, &nw, &nt, &ng, &nh, &no](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], io: &!i Io, args: &g Args, fs: &f Fs(""), heap: &!hp Heap, which: int, clk: &ck Clock, bus: &!nu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), ns: &!nn [int], frame: &!nf [byte], reply: &!nr [byte], wire: &!nw [byte], tcp: &!nt [int], bufs: &!ng [byte], inbox: &!nh [byte], up: &no Out("")) -> [heap, mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x220000..0x420000,0x40220000..0x40420000"), mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu("cntfrq_el0"), cpu("cntvct_el0")] int {
     var said = 0;
     // nothing is open before a program starts: one that ended without closing left nothing behind
     var j = 0;
@@ -1314,26 +1322,62 @@ fn hosted[&cq, &mc, &mv, &md, &mg, &mk, &s, &l, &hd, &i, &g, &f, &hp, &ck](con: 
     k[4271] = 0;
     // what the program is lent to change: files, only if its own row says it writes them (ksys.cho refuses the rest)
     k[4278] = 0;
-    if which >= 4 && tool_rows.writes(which - 4) {
+    if which >= first_tool() && tool_rows.writes(which - first_tool()) {
         k[4278] = 1;
     }
     // a program that never ends would stop the board: the watchdog counts while one runs (ksys.cho)
     base.watchdog(pm, k, base.patience());
-    system ksys(con, vio, dma, stage, pm, cpu, k, line, h) in {
+    system ksys(con, vio, dma, stage, pm, cpu, k, line, h, bus, ns, frame, reply, wire, tcp, bufs, inbox) in {
         if which == 2 {
             said = programs.now(io, clk);
         } else if which == 1 {
             said = programs.fail(heap, args, io);
         } else if which == 3 {
             said = programs.random(io, args, fs);
-        } else if which >= 4 {
-            said = tool_rows.run(which - 4, heap, args, fs, io);
+        } else if which == 4 {
+            said = programs.fetch(io, args, up);
+        } else if which >= first_tool() {
+            said = tool_rows.run(which - first_tool(), heap, args, fs, io);
         } else {
             said = programs.tell(io, args);
         }
     }
     base.watchdog(pm, k, 0);
+    // what it left open is closed, and every connection it asked for is in the record (docs/network-out.md)
+    ksys.close_connections(h, tcp);
+    note_connections(con, vio, dma, k, h);
     return said;
+}
+
+// The log of connections a program asked for (ksys.cho), one line each in the record: `net` and the bytes sent and
+// received where the line's version and size are, or `net-refused`, or `net-failed`.
+fn note_connections[&mc, &mv, &md, &s, &hd](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), k: &!s [int], h: &!hd [int]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+    let at = ksys.log_at();
+    var who = 0;
+    if k[26] != 0 {
+        who = 1;
+    }
+    var i = 0;
+    while i < h[at] && i < ksys.connections_logged() {
+        let e = at + 1 + i * 68;
+        region r {
+            let target = alloc_slice[r](64, byte_of(0));
+            var n = 0;
+            while n < h[e + 3] && n < 64 {
+                target[n] = byte_of(h[e + 4 + n]);
+                n = n + 1;
+            }
+            if h[e] == 2 {
+                ledger.note_counts(con, vio, dma, k, who, "net-refused", target[0..n], 0 - 1, 0 - 1);
+            } else if h[e] == 1 {
+                ledger.note_counts(con, vio, dma, k, who, "net", target[0..n], h[e + 1], h[e + 2]);
+            } else {
+                ledger.note_counts(con, vio, dma, k, who, "net-failed", target[0..n], 0 - 1, 0 - 1);
+            }
+        }
+        i = i + 1;
+    }
+    return i;
 }
 
 // The host key as OpenSSH writes one: base64 of "ssh-ed25519" and the 32 bytes, each after its length.
@@ -1498,7 +1542,7 @@ fn load[&f, &mc, &mg, &mz, &s, &r](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x90
     return 0;
 }
 
-fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s, &mk, &hp, &oi, &oa, &hd, &of, &ck](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), irq: &!mi Mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014,0x107fff9000..0x107fffa014"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), rng: &!mr Mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), fw: &!mw Mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), tab: &!mt Mmio("0x200000..0x208000,0x40200000..0x40208000"), code: &mx Mmio("0x80001..0x200000,0x40080001..0x40200000"), probe: &!mz Mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001"), k: &!s [int], heap: &!hp Heap, io: &!oi Io, args: &oa Args, hd: &!hd [int], fs: &of Fs(""), clk: &ck Clock) -> [heap, cpu("cntfrq_el0"), cpu("cntv_cval_el0"), cpu("cntvct_el0"), cpu("wfi"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014,0x107fff9000..0x107fffa014"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x200000..0x208000,0x40200000..0x40208000"), mmio("0x80001..0x200000,0x40080001..0x40200000"), mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), mmio("0x220000..0x420000,0x40220000..0x40420000"), mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4"), mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028")] int {
+fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s, &mk, &hp, &oi, &oa, &hd, &of, &ck, &no](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), irq: &!mi Mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014,0x107fff9000..0x107fffa014"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), rng: &!mr Mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), fw: &!mw Mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), tab: &!mt Mmio("0x200000..0x208000,0x40200000..0x40208000"), code: &mx Mmio("0x80001..0x200000,0x40080001..0x40200000"), probe: &!mz Mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001"), k: &!s [int], heap: &!hp Heap, io: &!oi Io, args: &oa Args, hd: &!hd [int], fs: &of Fs(""), clk: &ck Clock, up: &no Out("")) -> [heap, cpu("cntfrq_el0"), cpu("cntv_cval_el0"), cpu("cntvct_el0"), cpu("wfi"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014,0x107fff9000..0x107fffa014"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x200000..0x208000,0x40200000..0x40208000"), mmio("0x80001..0x200000,0x40080001..0x40200000"), mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), mmio("0x220000..0x420000,0x40220000..0x40420000"), mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4"), mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028")] int {
     base.puts(con, k, "\r\ncancho-os booted. type `help`.\r\n");
     region r {
         // (128 bytes are typed; the rest is room for a short name written out: `alias`)
@@ -1509,10 +1553,10 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s, &mk, &hp
         let reply = alloc_slice[r](1600, byte_of(0));
         let wire = alloc_slice[r](2 * inet.mtu() + 2, byte_of(0));
         // the connections' state, and the one segment each may have out
-        let tcp = alloc_slice[r](4 * inet.tcp_conn(), 0);
-        let bufs = alloc_slice[r](4 * inet.tcp_segment_max(), byte_of(0));
+        let tcp = alloc_slice[r](8 * inet.tcp_conn(), 0);
+        let bufs = alloc_slice[r](8 * inet.tcp_segment_max(), byte_of(0));
         // what has arrived for the shell's port and not been read, and the line being typed there
-        let inbox = alloc_slice[r](4 * inet.tcp_inbox(), byte_of(0));
+        let inbox = alloc_slice[r](8 * inet.tcp_inbox(), byte_of(0));
         let rline = alloc_slice[r](1024, byte_of(0));
         let cmd = alloc_slice[r](1024, byte_of(0));
         // a file on its way in (`put`): [0] how long its path is, [1..61] the path, [64..128] its SHA-256 in hex
@@ -1692,7 +1736,7 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s, &mk, &hp
                         base.puts(con, k, "the input is longer than a program may be given here (983,040 bytes): nothing was run\r\n");
                     } else {
                         // what the program ends with is what the session ends with (sshd.cho), as on any system
-                        k[4279] = hosted(con, vio, dma, stage, pm, cpu, k, cmd, hd, io, args, fs, heap, program(cmd, k[31]), clk) & 255;
+                        k[4279] = hosted(con, vio, dma, stage, pm, cpu, k, cmd, hd, io, args, fs, heap, program(cmd, k[31]), clk, bus, ns, frame, reply, wire, tcp, bufs, inbox, up) & 255;
                         if changes(program(cmd, k[31])) {
                             load_keys(vio, dma, k, sx);
                         }
@@ -1754,7 +1798,7 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s, &mk, &hp
                     }
                 } else if program(line, n) >= 0 {
                     k[4266] = n;
-                    hosted(con, vio, dma, stage, pm, cpu, k, line, hd, io, args, fs, heap, program(line, n), clk);
+                    hosted(con, vio, dma, stage, pm, cpu, k, line, hd, io, args, fs, heap, program(line, n), clk, bus, ns, frame, reply, wire, tcp, bufs, inbox, up);
                     if changes(program(line, n)) {
                         // (a file was changed: it may be the one that says who may log in)
                         load_keys(vio, dma, k, sx);
@@ -1790,7 +1834,7 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s, &mk, &hp
     return 0;
 }
 
-fn kernel[&f, &mc, &mp, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &mq, &mk, &hp, &oi, &oa, &of, &ck](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), pins: &!mp Mmio("0x3f200004..0x3f200008,0xfe200004..0xfe200008"), irq: &!mi Mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014,0x107fff9000..0x107fffa014"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), rng: &!mr Mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), fw: &!mw Mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), tab: &!mt Mmio("0x200000..0x208000,0x40200000..0x40208000"), code: &mx Mmio("0x80001..0x200000,0x40080001..0x40200000"), probe: &!mz Mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001"), fault: &mq Mmio("0x208000..0x208008,0x40208000..0x40208008"), heap: &!hp Heap, io: &!oi Io, args: &oa Args, fs: &of Fs(""), clk: &ck Clock) -> [heap, cpu("cntfrq_el0"), cpu("cntv_ctl_el0"), cpu("cntv_cval_el0"), cpu("cntv_tval_el0"), cpu("cntvct_el0"), cpu("elr_el1"), cpu("esr_el1"), cpu("far_el1"), cpu("mair_el1"), cpu("midr_el1"), cpu("sctlr_el1"), cpu("tcr_el1"), cpu("tlbi_vmalle1"), cpu("ttbr0_el1"), cpu("wfi"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x3f200004..0x3f200008,0xfe200004..0xfe200008"), mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014,0x107fff9000..0x107fffa014"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x200000..0x208000,0x40200000..0x40208000"), mmio("0x80001..0x200000,0x40080001..0x40200000"), mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001"), mmio("0x208000..0x208008,0x40208000..0x40208008"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), mmio("0x220000..0x420000,0x40220000..0x40420000"), mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4"), mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028")] int {
+fn kernel[&f, &mc, &mp, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &mq, &mk, &hp, &oi, &oa, &of, &ck, &no](cpu: &!f Cpu, con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), pins: &!mp Mmio("0x3f200004..0x3f200008,0xfe200004..0xfe200008"), irq: &!mi Mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014,0x107fff9000..0x107fffa014"), bus: &!mu Mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), rng: &!mr Mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), fw: &!mw Mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), tab: &!mt Mmio("0x200000..0x208000,0x40200000..0x40208000"), code: &mx Mmio("0x80001..0x200000,0x40080001..0x40200000"), probe: &!mz Mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001"), fault: &mq Mmio("0x208000..0x208008,0x40208000..0x40208008"), heap: &!hp Heap, io: &!oi Io, args: &oa Args, fs: &of Fs(""), clk: &ck Clock, up: &no Out("")) -> [heap, cpu("cntfrq_el0"), cpu("cntv_ctl_el0"), cpu("cntv_cval_el0"), cpu("cntv_tval_el0"), cpu("cntvct_el0"), cpu("elr_el1"), cpu("esr_el1"), cpu("far_el1"), cpu("mair_el1"), cpu("midr_el1"), cpu("sctlr_el1"), cpu("tcr_el1"), cpu("tlbi_vmalle1"), cpu("ttbr0_el1"), cpu("wfi"), mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x3f200004..0x3f200008,0xfe200004..0xfe200008"), mmio("0x8000000..0x8000420,0x8010000..0x8010014,0x40000040..0x40000064,0xff841000..0xff842014,0x107fff9000..0x107fffa014"), mmio("0x3f215004..0x3f21506c,0xfe215004..0xfe21506c"), mmio("0x200000..0x208000,0x40200000..0x40208000"), mmio("0x80001..0x200000,0x40080001..0x40200000"), mmio("0x0..0x1,0x80000..0x80001,0x40080000..0x40080001"), mmio("0x208000..0x208008,0x40208000..0x40208008"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x3f104000..0x3f10400c,0xfe104000..0xfe104028"), mmio("0x220000..0x420000,0x40220000..0x40420000"), mmio("0x3f00b880..0x3f00b8a4,0xfe00b880..0xfe00b8a4"), mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028")] int {
     region r {
         // (and after its 4,280 places, what an agent's key is granted: ksys.cho)
         let k = alloc_slice[r](40 + 4096 + 16 + 128 + keys.grant_room(), 0);
@@ -1845,7 +1889,7 @@ fn kernel[&f, &mc, &mp, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &mq, &
         } else if k[1] == 4 {
             k[4253] = network.fw_clock(fw, dma, k, 12);
         }
-        shell(cpu, con, irq, bus, rng, fw, pm, stage, vio, dma, tab, code, probe, k, heap, io, args, hd, fs, clk);
+        shell(cpu, con, irq, bus, rng, fw, pm, stage, vio, dma, tab, code, probe, k, heap, io, args, hd, fs, clk, up);
     }
     return 0;
 }
@@ -1853,7 +1897,6 @@ fn kernel[&f, &mc, &mp, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &mq, &
 fn main(world: World) -> [] int {
     let Split { io, ffi, fs, heap, args, out, ports, clock, signals, exec, tty, camera, mic, speaker, mmio, cpu } = split(world);
     release(ffi);
-    release(out);
     release(ports);
     release(signals);
     release(exec);
@@ -1886,7 +1929,9 @@ fn main(world: World) -> [] int {
                                                                         borrow args as &a in {
                                                                             borrow fs as &b in {
                                                                                 borrow clock as &n in {
-                                                                                    status = kernel(r, c, p, i, u, g, m, y, w, v, d, t, x, z, q, e, o, a, b, n);
+                                                                                    borrow out as &h in {
+                                                                                        status = kernel(r, c, p, i, u, g, m, y, w, v, d, t, x, z, q, e, o, a, b, n, h);
+                                                                                    }
                                                                                 }
                                                                             }
                                                                         }
@@ -1927,5 +1972,6 @@ fn main(world: World) -> [] int {
     release(io);
     release(args);
     release(fs);
+    release(out);
     return status;
 }

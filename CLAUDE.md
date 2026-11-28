@@ -128,7 +128,14 @@ Rules of the road
   that). authority.sh needs build.sh to have run.
 - A program is lent the clock and random bytes (docs/clock.md, end): `ksys.clock` answers `clock_ms`/`clock_unix_ms`
   (0 when the date is not known); `/dev/urandom` opened through a program's `Fs` is a handle seeded from the pool
-  (kind 6). The block lends `cpu` too now (for the counter): the compiler takes up to 12 lent values.
+  (kind 6). The block lends `cpu` too now (for the counter).
+- A program connects out (docs/network-out.md): the block lends the network's link and state too (17 values; the
+  compiler takes up to 20), and `ksys.dial`/`receive`/`send` answer `tcp_connect`/`conn_read`/`conn_write` by turning
+  `network.net_pump` while they wait (kind 7; `close` is the files' own). `may_connect` is the one place a connection is
+  allowed: console and owner any, reader none, agent its `net:` grants (`keys.net_allows`; `covers`/`reaches` skip
+  kind 3). The log of connections is at `ksys.log_at()` in `h`; `hosted` closes what is left and writes a record line
+  each (`ledger.note_counts`). Program 4 is `fetch`; tools start at `first_tool()` (5). The TCP table has 8 places.
+  `./netout.sh` is the test; its capture (filter-dump) is the judge of "refused before a packet leaves".
 - The date (docs/clock.md): `src/clock.cho` is pure (SNTP's question and answer, seconds to a date) with
   `tests/clock_test.cho` against Python's dates. `net time <address> [port]` sets k[4275], the time the board started
   at; the shell puts the time a line was typed at in k[4276], and `disk.touch`/`touch_new` date what is written with

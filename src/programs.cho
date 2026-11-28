@@ -163,3 +163,121 @@ fn put_hex2[&i](io: &!i Io, v: int) -> [io_write] int {
     putchar(io, int_of(digits[v & 15]));
     return 0;
 }
+
+// `fetch <host> <port> [path]`: an HTTP/1.0 GET of `path` (`/` if none is given) from `host`, and what came back as it
+// came: the status line, the headers and the body. Written as it would be for Linux, with an `Out` and the four
+// builtins of a connection; on the board ksys answers them over the kernel's own TCP, and what it may reach is the
+// key's to say (docs/network-out.md).
+pub fn fetch[&i, &g, &o](io: &!i Io, args: &g Args, up: &o Out("")) -> [io_write, args, net_out(""), conn_read, conn_write] int {
+    if arg_count(args) < 3 || arg_count(args) > 4 {
+        write_bytes(io, "fetch <host> <port> [path]\n");
+        return 2;
+    }
+    let host = arg(args, 1);
+    let p = arg(args, 2);
+    var port = 0;
+    var i = 0;
+    while i < len(p) && int_of(p[i]) >= 48 && int_of(p[i]) <= 57 && port <= 65535 {
+        port = port * 10 + int_of(p[i]) - 48;
+        i = i + 1;
+    }
+    if i < len(p) || port < 1 || port > 65535 || len(host) == 0 {
+        write_bytes(io, "fetch: a port from 1 to 65535, after a host\n");
+        return 2;
+    }
+    var status = 0;
+    region r {
+        let ask = alloc_slice[r](1024, byte_of(0));
+        var n = put(ask, 0, "GET ");
+        if arg_count(args) == 4 {
+            n = put(ask, n, arg(args, 3));
+        } else {
+            n = put(ask, n, "/");
+        }
+        n = put(ask, n, " HTTP/1.0\r\nHost: ");
+        n = put(ask, n, host);
+        n = put(ask, n, "\r\nConnection: close\r\n\r\n");
+        match tcp_connect(up, host, port) {
+            Dialed::Ok(c) => {
+                var conn = c;
+                let into = alloc_slice[r](1024, byte_of(0));
+                borrow mut conn as &!ch in {
+                    match conn_write(ch, ask[0..n]) {
+                        Sent::Wrote(w) => {
+                            if w < n {
+                                status = 1;
+                            }
+                        }
+                        Sent::Again => {
+                            status = 1;
+                        }
+                        Sent::Failed(e) => {
+                            status = 1;
+                        }
+                    }
+                    var more = status == 0;
+                    while more {
+                        match conn_read(ch, into) {
+                            Received::Data(got) => {
+                                write_bytes(io, into[0..got]);
+                            }
+                            Received::End => {
+                                more = false;
+                            }
+                            Received::Again => {
+                                more = false;
+                            }
+                            Received::Failed(e) => {
+                                write_bytes(io, "\nfetch: the connection failed: ");
+                                say_why(io, e);
+                                status = 1;
+                                more = false;
+                            }
+                        }
+                    }
+                }
+                conn_close(conn);
+            }
+            Dialed::Failed(e) => {
+                write_bytes(io, "fetch: no connection to ");
+                write_bytes(io, host);
+                write_bytes(io, ": ");
+                say_why(io, e);
+                status = 1;
+            }
+        }
+    }
+    return status;
+}
+
+// `text` after `n` bytes of `into`, as much as fits: where it ends.
+fn put[&o, &t](into: &!o [byte], n: int, text: &t [byte]) -> [] int {
+    var i = 0;
+    while i < len(text) && n + i < len(into) {
+        into[n + i] = text[i];
+        i = i + 1;
+    }
+    return n + i;
+}
+
+// What the numbers a connection fails with say.
+fn say_why[&i](io: &!i Io, e: int) -> [io_write] int {
+    if e == 13 {
+        write_bytes(io, "not granted (net.not-granted)\n");
+    } else if e == 24 {
+        write_bytes(io, "too many connections open\n");
+    } else if e == 101 {
+        write_bytes(io, "this machine has no network\n");
+    } else if e == 104 {
+        write_bytes(io, "broken off\n");
+    } else if e == 110 {
+        write_bytes(io, "no answer in time\n");
+    } else if e == 111 {
+        write_bytes(io, "refused\n");
+    } else if e == 113 {
+        write_bytes(io, "no way to that host\n");
+    } else {
+        write_bytes(io, "it failed\n");
+    }
+    return 0;
+}
