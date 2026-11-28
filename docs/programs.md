@@ -558,7 +558,7 @@ trap, with a way back: built in this order, nothing is built twice.
 
 ## 11. Decided (2026-11-28)
 
-Each of these was open for the owner; he took what this document proposed. Where it proposed nothing, the choice
+Each of these was open for the owner, who took what this document proposed. Where it proposed nothing, the choice
 is the one stated, and the reason.
 
 1. **The words of the statement** are `runs (mem, at, size)`, as in section 3, with the rule that the body names
