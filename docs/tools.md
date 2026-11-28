@@ -152,8 +152,13 @@ tool is").
   tool does on Linux and macOS; 126 for a line the key may not run, 127 for a command there is none of. At the console
   nothing shows it.
 - **`archive`**, which makes directories, is not built in.
-- **What a tool prints is cut at 4,000 bytes over SSH** (the shell's queue). `write` and `replace` print the lines
-  that changed: `--max-diff-lines 0` keeps the answer short.
+- **What a program prints over SSH is sent while it runs** (0.0.54, cancho-os#58): when the shell's queue of 4,096
+  bytes is nearly full, `ksys.out` hands it to the session (`sshd.drain`) and turns the network until half of it has
+  gone. A listing of 5,000 names comes whole, the bytes cancho-tools' own `list` gives for the same directory on
+  another machine (CI, on a volume Linux's mtools filled; 41 s in QEMU here). The connection is not read meanwhile,
+  so what a program may print is bounded by the window OpenSSH's client opens a session with (2 MB): past it the
+  queue waits ten seconds for room and the rest is cut, as all of it past 4 KB was before. A page of 460,025 bytes
+  fetched over SSH came whole.
 - **`disk.extend`**, which added to a file in place for the shell's `append`, has no caller now.
 - **Why a write failed is mostly lost.** `files.store_as` says why in words, which are not printed for a tool, and
   answers yes or no: a full disk and a disk that could not be read are both 5 to the tool.
@@ -162,8 +167,8 @@ tool is").
 - **Grants.** A tool may write what its caller may. There are two kinds of caller, owner and reader; a key for an
   agent that may write under one directory only is docs/permissions.md, not built.
 - **Time.** FAT keeps local time and no zone; `list --long` gives it as if it were UTC.
-- **A listing walks the directory again for each name** (`ksys.next`), and `dir_stat` three times for each: a
-  directory of a thousand names would be slow. None here is that long.
+- **A listing walks the directory again for each name** (`ksys.next`), and `dir_stat` three times for each: 5,000
+  names take about forty seconds in QEMU.
 - On the real board `write`, `replace` and `move` were tried once each over SSH (below), not at its console, and
   not on the names the kernel keeps to itself: those refusals were seen in QEMU only. The four that read are: they ran on the Raspberry Pi 4 from its card on
   2026-11-27, and `hash KERNEL8.IMG` there gave what `shasum` gives the same file on a Mac.

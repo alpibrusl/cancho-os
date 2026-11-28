@@ -136,6 +136,10 @@ Rules of the road
   kind 3). The log of connections is at `ksys.log_at()` in `h`; `hosted` closes what is left and writes a record line
   each (`ledger.note_counts`). Program 4 is `fetch`; tools start at `first_tool()` (5). The TCP table has 8 places.
   `./netout.sh` is the test; its capture (filter-dump) is the judge of "refused before a packet leaves".
+- How a program is run lives in `src/run.cho` (program numbers, `hosted`, the connection log into the record);
+  kernel.cho was split to stay under 2,000 lines. The block also lends SSH's `si`/`sb` (19 values of the 20): over SSH
+  `ksys.out` empties the session's queue with `sshd.drain` when it nears 4,096 bytes, so a program's answer is not
+  cut (bounded by the client's 2 MB window, since the connection is not read while a program runs).
 - The date (docs/clock.md): `src/clock.cho` is pure (SNTP's question and answer, seconds to a date) with
   `tests/clock_test.cho` against Python's dates. `net time <address> [port]` sets k[4275], the time the board started
   at; the shell puts the time a line was typed at in k[4276], and `disk.touch`/`touch_new` date what is written with

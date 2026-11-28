@@ -10,7 +10,7 @@ set -eu
 cd "$(dirname "$0")"
 CANCHO=${CANCHO:-cancho}
 SSH=$(cd "${SSH:-../cancho-ssh}" 2>/dev/null && pwd)
-SOURCES="src/feetech.cho src/calibration.cho src/kinematics.cho src/so101.cho src/safety.cho src/inet.cho src/base.cho src/network.cho src/sshd.cho src/fat.cho src/disk.cho src/ledger.cho src/files.cho src/sdcard.cho src/keys.cho src/clock.cho src/ksys.cho src/programs.cho src/boot.cho src/record.cho build/authorized.cho $(echo "$SSH"/src/*.cho)"
+SOURCES="src/feetech.cho src/calibration.cho src/kinematics.cho src/so101.cho src/safety.cho src/inet.cho src/base.cho src/network.cho src/sshd.cho src/fat.cho src/disk.cho src/ledger.cho src/files.cho src/sdcard.cho src/keys.cho src/clock.cho src/ksys.cho src/programs.cho src/run.cho src/boot.cho src/record.cho build/authorized.cho $(echo "$SSH"/src/*.cho)"
 # cancho-tools, as build.sh left them in build/tools (run it first), and what they share
 TOOLS=$(cd "${TOOLS:-../cancho-tools}" 2>/dev/null && pwd)
 SOURCES="$SOURCES $(ls build/tools/*.cho "$TOOLS"/contract/*.cho | tr '\n' ' ')"
