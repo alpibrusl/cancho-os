@@ -137,6 +137,17 @@ SERVOS=1 ./test.sh 'servo scan'   # with the simulated servo bus on the second s
 On macOS: `brew install llvm lld qemu` and put `$(brew --prefix llvm)/bin` on `PATH`
 (Apple's clang has no `llvm-objcopy`).
 
+`BACKEND=native ./build.sh` makes the same two images with cancho's own backend (cancho
+`docs/native-backend.md`, sections 16 and 17): cancho assembles `board/boot.S`, places the
+kernel as `board/pi.layout` and `board/virt.layout` say (what `board/link.ld` says, a line a
+word), and writes `kernel8.img` and `kernel-virt.elf` itself. No clang, ld.lld or llvm-objcopy
+is started for the kernel. It needs a cancho with `--layout`. Measured in QEMU only: the kernel
+of 0.0.30, built by cancho's main (with mem2reg, cancho#873), boots, runs the shell, reports its
+faults, poses the arm, logs in over SSH with OpenSSH and loads itself (`load.sh`), in 1,335,456
+bytes against 349,232 through LLVM. The kernel of 0.0.52 (the tools, the heap) is 790,888 bytes
+through LLVM and does not fit natively yet: the image is refused 1,200,936 bytes past the 2 MB
+below the tables, since that backend's code is not yet optimised. CI runs it, allowed to fail.
+
 Shell: `help`, `about`, `echo <text>`, `uptime` (from the ARM counter), `ticks` (timer
 interrupts taken), `mem` (the memory map), and three ways to fault on purpose, each named
 by the kernel with ESR/ELR/FAR before the core halts: `crash` (out-of-bounds
@@ -392,6 +403,8 @@ That does not write the card: a power cycle brings back the card's kernel. `./lo
   it: regions take their 64 KB chunks from the memory `board/link.ld` names
   (`__cancho_heap_start` to `__cancho_heap_end`), and `memset`/`memcpy` are the module's
   own. `nm -u` on the kernel object lists those two symbols and nothing else.
+- With `BACKEND=native` the object, the link and `objcopy` are gone too: cancho writes the
+  image (above).
 - What is left outside cancho is `board/boot.S`: boot and the exception stub, which run
   before `main` or instead of it. The eleven primitives it used to export are gone:
   cancho has loads and stores behind the `Mmio` capability (edition 13) and system

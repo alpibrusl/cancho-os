@@ -13,7 +13,27 @@ KERNEL=build/kernel8.img
 [ "$MACHINE" = virt ] && { MACHINE="virt -cpu cortex-a57 -m 1G"; KERNEL=build/kernel-virt.elf; }
 # the image that is sent is always the flat one: it is copied to where the running kernel is
 if [ "$KERNEL" = build/kernel-virt.elf ]; then
-    llvm-objcopy -O binary build/kernel-virt.elf build/next.img
+    # cancho's own backend (BACKEND=native) writes an executable with one loaded part and no sections, which objcopy
+    # would copy as nothing: the flat image is that part's bytes
+    python3 - build/kernel-virt.elf build/next.img <<'PY'
+import struct, sys
+e = open(sys.argv[1], "rb").read()
+phoff, shoff = struct.unpack_from("<QQ", e, 32)
+phnum, shnum = struct.unpack_from("<H", e, 56)[0], struct.unpack_from("<H", e, 60)[0]
+if shnum != 0:
+    sys.exit(3)
+loads = [struct.unpack_from("<IIQQQQQQ", e, phoff + 56 * i) for i in range(phnum)]
+loads = [h for h in loads if h[0] == 1]
+if len(loads) != 1:
+    sys.exit("load.sh: an executable without sections must have one loaded part")
+offset, filesz = loads[0][2], loads[0][6]
+open(sys.argv[2], "wb").write(e[offset:offset + filesz])
+PY
+    case $? in
+    0) ;;
+    3) llvm-objcopy -O binary build/kernel-virt.elf build/next.img ;;
+    *) exit 1 ;;
+    esac
 else
     cp build/kernel8.img build/next.img
 fi

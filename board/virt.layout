@@ -1,0 +1,36 @@
+# The layout of the kernel for QEMU's virt machine (kernel-virt.elf): RAM starts at 1 GB, and QEMU loads the ELF itself.
+# What board/link.ld says, for cancho's own backend (BACKEND=native ./build.sh; cancho docs/native-backend.md section 16.1):
+# a line a word, read from the top with the place in hand; every address below is counted from `base`. board/pi.layout and
+# board/virt.layout differ in that line only. A change here is a change to link.ld too, and to the bounds in src/kernel.cho.
+base 0x40000000
+at 0x80000
+symbol __text_start
+boot boot.S
+text
+align 4096              # page boundaries: each part gets its own permissions (milestone 3)
+symbol __text_end
+rodata
+align 4096
+symbol __rodata_end
+data
+align 16
+symbol __bss_start
+bss
+symbol __bss_end
+limit 0x200000          # the kernel image must end before the tables: move them, and the bounds in src/kernel.cho
+at 0x200000
+symbol __tables         # eight 4 KB translation tables (`tab` in src/kernel.cho)
+skip 32768
+symbol __fault_note     # one page after the tables: its first word is the fault note (board/boot.S, `fault`)
+skip 4096
+at 0x210000             # 64 KB a device reads and writes on its own (`dma`)
+skip 0x10000
+symbol __stage          # 2 MB where a kernel sent over the serial line waits (`stage`, docs/load.md)
+skip 0x200000
+symbol __stage_end
+symbol __mapped_start = 0x1000
+symbol __copier = 0x2000
+align 4096
+symbol __cancho_heap_start
+symbol __cancho_heap_end = 0x3c000000
+entry _start

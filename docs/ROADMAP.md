@@ -5,7 +5,12 @@
   Pi 5 avoided for bare metal (I/O behind RP1 over PCIe, poorly documented).
 - **Terminal = UART.** USB keyboard on the Pi (DWC2 / VL805 xHCI) is deferred indefinitely.
 - **Toolchain:** `cancho build --target aarch64-none-elf --emit obj`, then the boot stub and `ld.lld`
-  with our own link script.
+  with our own link script. Since 2026-11-28 also `BACKEND=native ./build.sh`: cancho's own backend
+  assembles the boot stub and writes the image from `board/*.layout`, with no other tool (cancho
+  epic #840, task N8; CI runs the whole session both ways, the
+  native one allowed to fail until it fits). Measured in QEMU: the image of 0.0.30 boots and logs in over
+  SSH, 3.8 times the size of LLVM's, fitting the 2 MB below the tables only with mem2reg (cancho#873);
+  the image of 0.0.52 is refused 1,200,936 bytes past them, so it waits for N9's register allocator.
 
 ## Tracks
 1. **Pi kernel (this repo, active).**

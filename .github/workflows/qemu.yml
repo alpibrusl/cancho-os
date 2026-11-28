@@ -9,7 +9,17 @@ env:
   TOOLS_REF: cc18da95bcbd11dd5b9e0bb7f4307b36bb824387
 jobs:
   boot:
+    # The same session twice: the kernel built by cancho through LLVM (clang, ld.lld and llvm-objcopy place it), and built by
+    # cancho's own backend, which writes the image itself with board/*.layout (cancho docs/native-backend.md sections 16 and 17;
+    # alpibrusl/cancho#849). The second may fail: the kernel of 0.0.52 built natively is past the 2 MB below the tables
+    # (board/*.layout's `limit`) until cancho's backend writes smaller code (N9's register allocator). It is required once it fits.
+    name: boot in qemu (${{ matrix.backend }})
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [llvm, native]
+    continue-on-error: ${{ matrix.backend == 'native' }}
     steps:
       - uses: actions/checkout@v4
       - name: tools
@@ -32,7 +42,7 @@ jobs:
         # with a key made here as the one that may log in over SSH
         run: |
           ssh-keygen -q -t ed25519 -N "" -C "cancho-os CI" -f /tmp/sshkey
-          SSH=/tmp/cancho-ssh TOOLS=/tmp/cancho-tools AUTHORIZED=/tmp/sshkey.pub CANCHO=/tmp/cancho-out/cancho ./build.sh
+          SSH=/tmp/cancho-ssh TOOLS=/tmp/cancho-tools AUTHORIZED=/tmp/sshkey.pub CANCHO=/tmp/cancho-out/cancho BACKEND=${{ matrix.backend }} ./build.sh
       - name: the network stack, on this machine
         # src/inet.cho holds no hardware, so its tests run here: published checksum vectors, packets a
         # second implementation built, and every one-byte damage to a packet (nothing traps)
