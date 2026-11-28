@@ -84,3 +84,32 @@ The date not going back, and a grant that ends on a day (2026-11-27, 0.0.47), in
 | an agent's line with `until:2020-01-01` | `list DOCS` refused |
 | the line with `until:2999-12-31`, the board not told the date | refused |
 | the same line, after `net time` | `list DOCS` answered |
+
+## The clock and random bytes, lent to a program (0.0.52, epic #60 task #50)
+
+A program holds what it was handed (docs/tools.md). Two more things can now be handed to it.
+
+- **The clock.** A program that holds a `Clock` asks `clock_ms` (milliseconds since the board started, which only go
+  up) and `clock_unix_ms` (milliseconds since 1970). `ksys.clock` answers both from the processor's counter and the
+  date the board was told. A board not told the date answers `clock_unix_ms` with 0: no pretend date. The block that
+  lends the system discharges `clock` (cancho, the clock in `docs/bare-system.md`), so the kernel's own authority does
+  not gain it. `now` is a program that shows both.
+- **Random bytes.** A program asks for them as cancho has a program ask on any system: it opens `/dev/urandom` through
+  its `Fs` and reads (cancho `docs/narrowing-into-several.md`). No new builtin, and a program that wants them must hold
+  an `Fs` that covers that path, which its row says. On the board that path is not a file: `ksys` seeds a handle with
+  four words of the board's generator, each used once, and gives SHA-256 of the seed and a count. A board with no
+  generator answers "no such device" (19); one whose pool is used up, "try again" (11). The kernel's own `random`
+  command is gone: `random [n]` is a program that reads `/dev/urandom` and prints n bytes in hex.
+
+What it is not:
+
+- The bytes are as good as the board's generator, stretched by SHA-256 over a 128-bit seed per opening. That is a hash
+  DRBG in the plainest form, not one of NIST's constructions, and it has not been judged by a test suite of that kind.
+- A program cannot be lent the clock without the date: `clock_unix_ms` is 0 until the board is told it, and a program
+  cannot tell "not told" from the first moment of 1970 except by that 0.
+- `/dev/urandom` is the one name of its kind. A grant does not name it: reading it reveals nothing of the disk.
+
+Measured, in QEMU as `virt`: `now` before `net time` gives `"unix_ms":null`, after it the server's date in milliseconds;
+24 readings of 256 bytes are all different, 49.9% of their bits are ones, and the 256 values come as often as chance
+has them (chi-squared 277.8 with 255 degrees of freedom); on QEMU's Pi 3 the same, from its own generator; with no
+generator, "no random bytes: this machine has no generator".
