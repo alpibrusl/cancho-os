@@ -105,6 +105,8 @@
 - A program connects out (2026-11-28, 0.0.53, epic #60 task #51, docs/network-out.md): `tcp_connect`, `conn_read`,
   `conn_write` and `conn_close` answered over the kernel's TCP; `net:<host>:<port>` grants for an agent's key, refused
   before a packet leaves; a line in the record for each connection with the bytes each way; `fetch` is a program.
+- A program's whole answer over SSH (2026-11-28, 0.0.54, epic #60 task #58, its second part): the session's queue is
+  sent while the program runs; 5,000 names listed over SSH are the bytes Linux's `list` gives.
 - What a tool is comes from the compiler (2026-11-27, 0.0.49, epic #60 task #49, the kernel's half): who may run a
   tool, and whether it is lent anything to write with, follow from its effect row, read at build time. `tally` and
   `jsonq` built in by two words in a list.

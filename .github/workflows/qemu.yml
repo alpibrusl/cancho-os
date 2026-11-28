@@ -728,6 +728,20 @@ jobs:
           python3 tests/checklog.py nout/LOG.TXT nout > nlog.txt || { cat nlog.txt; exit 1; }
           cat nlog.txt
           grep -q " 0 that do not follow" nlog.txt
+      - name: a program's whole answer over SSH
+        # docs/tools.md: what a program prints over SSH is sent while it runs (sshd.drain), not cut at the shell's
+        # queue of 4,096 bytes. A directory of 5,000 names, put there by Linux's mtools, is listed over SSH, and the
+        # answer is the bytes cancho-tools' own `list` gives on this runner for the same directory.
+        run: |
+          rm -rf many many.img; mkdir -p many/MANY
+          for i in $(seq 1 5000); do : > many/MANY/F$i.TXT; done
+          mkfs.fat -F 16 -C many.img 65536 > /dev/null
+          mcopy -s -i many.img many/MANY ::
+          (cd many && /tmp/tool-list MANY) > many-want.txt
+          MACHINE=virt DISK=many.img SSHKEY=/tmp/sshkey SSHCMD='list MANY' ./test.sh 'net up' 'net ssh on' | tr -d '\r' | grep '^ssh: {' | sed 's/^ssh: //' > many-got.txt
+          wc -l many-want.txt many-got.txt
+          diff many-want.txt many-got.txt
+          test "$(wc -l < many-got.txt)" -ge 5001
       - name: a kernel loaded over the serial console
         # the running kernel takes another (this build, renamed 0.0.99) and starts it: a wrong checksum
         # must forget it, the right one must run it, and the fault report must still work afterwards

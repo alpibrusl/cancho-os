@@ -869,7 +869,7 @@ fn run[&f, &mc, &mu, &mt, &mx, &mz, &s, &r, &nv, &nd, &nn, &na, &nb, &nw, &nt, &
         }
         base.puts(con, k, "\r\n(* changes a file: not for a key that may only read)\r\n");
     } else if same(line, n, "about") {
-        base.puts(con, k, "cancho-os 0.0.53: a kernel written in cancho (");
+        base.puts(con, k, "cancho-os 0.0.54: a kernel written in cancho (");
         if k[1] >= 3 {
             base.puts(con, k, "Raspberry Pi ");
             base.put_dec(con, k, k[1]);
@@ -1608,7 +1608,7 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s, &mk, &hp
                         base.puts(con, k, "the input is longer than a program may be given here (983,040 bytes): nothing was run\r\n");
                     } else {
                         // what the program ends with is what the session ends with (sshd.cho), as on any system
-                        k[4279] = run.hosted(con, vio, dma, stage, pm, cpu, k, cmd, hd, io, args, fs, heap, run.program(cmd, k[31]), clk, bus, ns, frame, reply, wire, tcp, bufs, inbox, up) & 255;
+                        k[4279] = run.hosted(con, vio, dma, stage, pm, cpu, k, cmd, hd, io, args, fs, heap, run.program(cmd, k[31]), clk, bus, ns, frame, reply, wire, tcp, bufs, inbox, si, sb, up) & 255;
                         if run.changes(run.program(cmd, k[31])) {
                             load_keys(vio, dma, k, sx);
                         }
@@ -1670,7 +1670,7 @@ fn shell[&f, &mc, &mi, &mu, &mr, &mg, &mw, &mv, &md, &mt, &mx, &mz, &s, &mk, &hp
                     }
                 } else if run.program(line, n) >= 0 {
                     k[4266] = n;
-                    run.hosted(con, vio, dma, stage, pm, cpu, k, line, hd, io, args, fs, heap, run.program(line, n), clk, bus, ns, frame, reply, wire, tcp, bufs, inbox, up);
+                    run.hosted(con, vio, dma, stage, pm, cpu, k, line, hd, io, args, fs, heap, run.program(line, n), clk, bus, ns, frame, reply, wire, tcp, bufs, inbox, si, sb, up);
                     if run.changes(run.program(line, n)) {
                         // (a file was changed: it may be the one that says who may log in)
                         load_keys(vio, dma, k, sx);

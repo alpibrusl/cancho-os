@@ -107,8 +107,9 @@ refused connection's action is `net-refused`, one that could not be made `net-fa
 - **Out only.** A program cannot listen (`tcp_listen` stays refused on the bare target): that is #54.
 - **No TLS**: a program that wants it has to bring it, and the board has no certificates yet (#56).
 - **No UDP**: `udp_*` stay refused.
-- **Over SSH, a program's output is cut at 4,096 bytes** (the queue `putc` fills for the session is emptied only when
-  the program has ended): that is cancho-os#58, not this. A page fetched at the console comes whole.
+- **Over SSH, a program's output was cut at 4,096 bytes** in 0.0.53 (the queue `putc` fills for the session was
+  emptied only when the program had ended). Since 0.0.54 it is sent while the program runs (docs/tools.md), and
+  `netout.sh` fetches the whole page over SSH too.
 - **A connection's inbox is 256 bytes** (`inet.tcp_inbox`), so the window it offers is that: a page comes a quarter of
   a kilobyte a round trip. On the board's own network that is fast enough to measure as nothing; across the world it
   would not be.

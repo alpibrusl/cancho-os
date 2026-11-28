@@ -92,6 +92,46 @@ fn forget[&s, &i, &b](k: &!s [int], si: &!i [int], sb: &!b [byte]) -> [] int {
     return 0;
 }
 
+// What a program prints while it runs (ksys.out, docs/tools.md): the queue `putc` fills goes to the session as far as
+// the client's window and the connection's room allow, and the connection is not read meanwhile (a program's input
+// was collected before it began). How many bytes left the queue; the caller turns the network between calls.
+pub fn drain[&s, &t, &g, &w, &i, &b](k: &!s [int], tcp: &!t [int], bufs: &!g [byte], wire: &!w [byte], si: &!i [int], sb: &!b [byte]) -> [] int {
+    if k[29] == 0 || k[4163] == 0 {
+        return 0;
+    }
+    let c = k[29] - 1;
+    var taken = 0;
+    if k[27] > 0 {
+        var n = k[27];
+        if n > len(wire) {
+            n = len(wire);
+        }
+        var j = 0;
+        while j < n {
+            wire[j] = byte_of(k[40 + j] & 255);
+            j = j + 1;
+        }
+        let wrote = ssh.write(si, sb, wire[0..n]);
+        if wrote > 0 {
+            j = wrote;
+            while j < k[27] {
+                k[40 + j - wrote] = k[40 + j];
+                j = j + 1;
+            }
+            k[27] = k[27] - wrote;
+            taken = wrote;
+        }
+    }
+    let waiting = len(ssh.pending(si, sb));
+    if waiting > 0 {
+        let went = inet.tcp_write(tcp, bufs, c, ssh.pending(si, sb), 0, waiting);
+        if went > 0 {
+            ssh.sent(si, sb, went);
+        }
+    }
+    return taken;
+}
+
 // One turn of the loop. Answers 1 when a whole line is in `rline` for the shell to run, 2 when a session has
 // begun and should be greeted, 3 when the host key has just been made and should be shown on the console, 0
 // otherwise.

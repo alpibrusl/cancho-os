@@ -51,10 +51,9 @@ say 'write --create --stdin KEYS.TXT'; say "agent ssh-ed25519 $akey net:10.0.0.1
 printf '\004' >&3; sleep 1
 say 'net up'
 say 'net ssh on' 4
-# (what a program writes over SSH is cut at 4,096 bytes for now, cancho-os#58: these pages are smaller)
-as "$AGENT" "fetch 10.0.0.1 $PORT /small.txt" > build/netout-agent.out
+as "$AGENT" "fetch 10.0.0.1 $PORT /page.txt" > build/netout-agent.out
 as "$AGENT" "fetch 10.0.0.1 $P2 /small.txt" > build/netout-refused.out
-as "$OWNER" "fetch 10.0.0.1 $P3 /small.txt" > build/netout-owner.out
+as "$OWNER" "fetch 10.0.0.1 $P3 /page.txt" > build/netout-owner.out
 : > build/netout-reader.out
 [ -n "$READER" ] && as "$READER" "fetch 10.0.0.1 $PORT /small.txt" > build/netout-reader.out
 # and at the console, which may reach any machine too, the whole page of 22 KB
@@ -73,7 +72,7 @@ head -c 300 build/netout-owner.out; echo; echo ...
 grep ' net' build/netout-log.out
 ok=0
 # the pages, each time the same bytes as the file: the body is what follows the first empty line
-python3 -I - build/netout-agent.out build/netout-owner.out build/www/small.txt build/netout-console.out build/www/page.txt <<'EOF' || ok=1
+python3 -I - build/netout-agent.out build/netout-owner.out build/www/page.txt build/netout-console.out build/www/page.txt <<'EOF' || ok=1
 import sys
 bad = 0
 def judge(name, got, want):
@@ -123,7 +122,7 @@ print('connections asked for, by port:', syns)
 sys.exit(0 if syns[ports[0]] >= 1 and syns[ports[1]] == 0 and syns[ports[2]] >= 1 else 1)
 EOF
 # the record: the agent's connection with its bytes, its refusal, and the owner's
-grep -q " key:[0-9a-f]* agent net 10.0.0.1:$PORT - [0-9][0-9]* 3[0-9][0-9][0-9] - " build/netout-log.out || ok=1
+grep -q " key:[0-9a-f]* agent net 10.0.0.1:$PORT - [0-9][0-9]* 22[0-9][0-9][0-9] - " build/netout-log.out || ok=1
 grep -q " key:[0-9a-f]* agent net-refused 10.0.0.1:$P2 " build/netout-log.out || ok=1
 grep -q " key:[0-9a-f]* owner net 10.0.0.1:$P3 " build/netout-log.out || ok=1
 grep -q " console console net 10.0.0.1:$P3 - [0-9][0-9]* 22[0-9][0-9][0-9] - " build/netout-log.out || ok=1
