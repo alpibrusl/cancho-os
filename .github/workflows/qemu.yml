@@ -582,6 +582,13 @@ jobs:
           grep -q "^the board has not been told the date" clock.txt
           grep -q "^it is 2026-11-27 14:40:1[2-9] (UTC), by 10.0.0.1, which is believed" clock.txt
           grep -q "^2026-11-27 14:40:[12][0-9] (UTC), as a machine on the network said" clock.txt
+          # and as a program sees it (`now`, docs/clock.md): before the date is known it is not given one
+          python3 tests/sntp.py 12300 1795790412 & echo $! > sntp.pid
+          sleep 1
+          MACHINE=virt ./test.sh now 'net up' 'net time 10.0.0.1 12300' now > now.txt; cat now.txt
+          kill "$(cat sntp.pid)"
+          tr -d '\r' < now.txt | grep -Eq '^\{"uptime_ms":[0-9]+,"unix_ms":null,"asked_in_ms":[0-9]+\}$'
+          tr -d '\r' < now.txt | grep -Eq '^\{"uptime_ms":[0-9]+,"unix_ms":17957904[0-9]{5},"asked_in_ms":[0-9]+\}$' 
           grep -Eq "^6[[:space:]]+17957904[0-9][0-9][[:space:]]+T.TXT$" clock.txt
           grep -Eq "^0[[:space:]]+17957904[0-9][0-9][[:space:]]+D/$" clock.txt
           grep -Eq "^1[[:space:]]1 [0-9]+ kernel kernel time 179579041[2-9] " clock.txt
@@ -800,15 +807,29 @@ jobs:
           grep -q "^not without random numbers" norngssh.txt
           # randomness: the virtual generator here, the Pi 3's own on that board, none on QEMU's Pi 4 (which
           # has no such device); two draws are 32 hex digits each and differ
+          # `random` is a program that reads `/dev/urandom` (docs/clock.md): 32 bytes each time, never the same twice
           MACHINE=virt ./test.sh random random 'net up' net > rng.txt; cat rng.txt
-          test "$(grep -Ec '^random \(virtio-rng\): [0-9a-f]{32}$' rng.txt)" = 2
-          test "$(grep '^random' rng.txt | sort -u | wc -l)" = 2
+          test "$(tr -d '\r' < rng.txt | grep -Ec '^[0-9a-f]{64}$')" = 2
+          test "$(tr -d '\r' < rng.txt | grep -E '^[0-9a-f]{64}$' | sort -u | wc -l)" = 2
           grep -q "^connections begin at a random number (virtio-rng)" rng.txt
           ./test.sh random random > rng3.txt; cat rng3.txt
-          test "$(grep -Ec '^random \(the BCM2835 generator\): [0-9a-f]{32}$' rng3.txt)" = 2
-          test "$(grep '^random' rng3.txt | sort -u | wc -l)" = 2
+          test "$(tr -d '\r' < rng3.txt | grep -Ec '^[0-9a-f]{64}$')" = 2
+          test "$(tr -d '\r' < rng3.txt | grep -E '^[0-9a-f]{64}$' | sort -u | wc -l)" = 2
+          # and 6,144 bytes of it: about half the bits are ones, and the 256 values come as often as chance has them
+          set -- ; for i in $(seq 1 24); do set -- "$@" 'random 256'; done
+          MACHINE=virt ./test.sh "$@" | tr -d '\r' | grep -E '^[0-9a-f]{512}$' > rng-many.txt
+          python3 -c '
+          import sys, collections
+          d = b"".join(bytes.fromhex(l.strip()) for l in open("rng-many.txt"))
+          assert len(d) == 6144, len(d)
+          ones = sum(bin(b).count("1") for b in d) / (len(d) * 8)
+          c = collections.Counter(d); e = len(d) / 256
+          chi = sum((c.get(i, 0) - e) ** 2 / e for i in range(256))
+          print("ones", ones, "chi2", chi)
+          assert 0.48 < ones < 0.52 and 180 < chi < 340
+          ' 
           NORNG=' ' MACHINE=virt ./test.sh random 'net up' net > norng.txt; cat norng.txt
-          grep -q "^this board gave the kernel no source of randomness" norng.txt
+          grep -q "^no random bytes: this machine has no generator" norng.txt
           grep -q "^connections begin at the counter's value" norng.txt
           # the shell over SSH: seven commands typed from this machine, among them one that must be refused from
           # there, and the command that used to open the shell on port 23

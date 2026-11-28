@@ -95,6 +95,8 @@
   form. One program lists a directory, and it is the one held to grants.
 - The date (2026-11-27, docs/clock.md): `net time <address>` asks a machine on the network; files the kernel writes
   are dated and the record has a line for it. Believed, not proved.
+- The clock and random bytes, lent to a program (2026-11-28, 0.0.52, epic #60 task #50): `clock_ms` and
+  `clock_unix_ms` answered by the kernel; `/dev/urandom` from the board's generator; `now` and `random` are programs.
 - What a tool is comes from the compiler (2026-11-27, 0.0.49, epic #60 task #49, the kernel's half): who may run a
   tool, and whether it is lent anything to write with, follow from its effect row, read at build time. `tally` and
   `jsonq` built in by two words in a list.

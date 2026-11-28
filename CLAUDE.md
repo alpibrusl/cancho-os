@@ -126,6 +126,9 @@ Rules of the road
   `build/tools/` (text only: a `module` line, `run` made public, `main` left out); `program` in kernel.cho says which word runs
   which. A new one is believed when its answers are the same bytes as the same tool's on another machine (the CI steps do
   that). authority.sh needs build.sh to have run.
+- A program is lent the clock and random bytes (docs/clock.md, end): `ksys.clock` answers `clock_ms`/`clock_unix_ms`
+  (0 when the date is not known); `/dev/urandom` opened through a program's `Fs` is a handle seeded from the pool
+  (kind 6). The block lends `cpu` too now (for the counter): the compiler takes up to 12 lent values.
 - The date (docs/clock.md): `src/clock.cho` is pure (SNTP's question and answer, seconds to a date) with
   `tests/clock_test.cho` against Python's dates. `net time <address> [port]` sets k[4275], the time the board started
   at; the shell puts the time a line was typed at in k[4276], and `disk.touch`/`touch_new` date what is written with
