@@ -17,7 +17,15 @@ the typing is scripted ([`docs/demo/session.py`](docs/demo/session.py)); re-rend
   - it reads two real SO-101 arms (which servos are there, where each is), through a second board that has their
     USB adapters. It cannot move them.
 - **In QEMU, on every change:** all of that, as a Pi 3 and QEMU's `virt` machine.
-- **Not yet:** separate programs, moving a servo, keys and grants for agents, USB, the Pi 5 (its code is written
+- **Tools an agent calls:** nine of [cancho-tools](https://github.com/alpibrusl/cancho-tools) are built into the
+  kernel as they are written, and answer the same bytes as on a Mac ([docs/tools.md](docs/tools.md)). `hash`, `peek`,
+  `seek` and `list` read, and run on the board. `replace` changes a file, through the same writer as `put` (the old
+  contents kept, a line in the record), and `move` a name, and `write` makes one from what it is sent; all run on the board. The build needs a checkout of them:
+  `git clone https://github.com/alpibrusl/cancho-tools ../cancho-tools`.
+- **An agent's key:** a line of `KEYS.TXT` gives a key what it may read and what it may write, by directory. Its
+  session runs only the tools, and everything they touch is asked about in one place
+  ([docs/permissions.md](docs/permissions.md)). In QEMU, with OpenSSH; not yet on the board.
+- **Not yet:** separate programs, moving a servo, signed grants and approval, USB, the Pi 5 (its code is written
   from the board's device tree and has never run).
 
 | | |
@@ -26,6 +34,8 @@ the typing is scripted ([`docs/demo/session.py`](docs/demo/session.py)); re-rend
 | The SD card | [docs/sdcard.md](docs/sdcard.md) |
 | A kernel sent over SSH; restart | [docs/update.md](docs/update.md), [docs/restart.md](docs/restart.md) |
 | SSH, the network, the Pi 4's Ethernet | [docs/ssh.md](docs/ssh.md), [docs/network.md](docs/network.md), [docs/genet.md](docs/genet.md) |
+| Programs written for a system, and cancho-tools, inside the kernel | [docs/tools.md](docs/tools.md) |
+| The date, asked of a machine on the network | [docs/clock.md](docs/clock.md) |
 | The arms, read through another machine | [docs/netbus.md](docs/netbus.md) |
 | What the kernel can touch | [docs/authority.txt](docs/authority.txt) |
 
@@ -45,6 +55,7 @@ src/base.cho     the console's output, the clock, bytes on the second serial por
 src/network.cho  the kernel's side of the network: both links, the generator, the commands
 src/sdcard.cho   a Pi's SD card, one sector at a time
 src/keys.cho     who may log in: the lines of a keys file; holds no hardware
+src/boot.cho     which lines of BOOT.TXT are run at the start; holds no hardware
 src/feetech.cho  the Feetech servo protocol, read side only        } vendored from
 src/calibration.cho, kinematics.cho, so101.cho  ticks to degrees,  } cancho-robot,
                  and the SO-101's forward kinematics               } unchanged
@@ -54,6 +65,8 @@ src/disk.cho     a disk (virtio-blk, or a Pi's SD card: src/sdcard.cho), its tab
 src/ledger.cho   the record on the disk; src/record.cho makes and checks its lines
 src/files.cho    the commands that read and change files, and a file that comes over SSH
 src/sshd.cho     the loop between cancho-ssh and the shell
+src/ksys.cho     what the kernel answers a program written for a system (streams, arguments, files to read)
+src/programs.cho the programs of this repository written that way (tell, count, names)
 src/inet.cho     the network's packets: SLIP, Ethernet, IPv4, UDP, TCP, DHCP, DNS; holds no hardware
 sim/servos.cho   six simulated servos for QEMU: a program for the host, not in the image
 sim/expect.cho   what `arm pose` must print for them, computed on the host
@@ -128,10 +141,12 @@ On macOS: `brew install llvm lld qemu` and put `$(brew --prefix llvm)/bin` on `P
 `docs/native-backend.md`, sections 16 and 17): cancho assembles `board/boot.S`, places the
 kernel as `board/pi.layout` and `board/virt.layout` say (what `board/link.ld` says, a line a
 word), and writes `kernel8.img` and `kernel-virt.elf` itself. No clang, ld.lld or llvm-objcopy
-is started for the kernel. It needs a cancho with `--layout`. Measured in QEMU only, with a
-compiler built from cancho's main (mem2reg, cancho#873): it boots, runs the shell, reports its faults, poses the
-arm and logs in over SSH with OpenSSH; the image is 1,335,456 bytes against 349,232 through
-LLVM, since that backend's code is not yet optimised.
+is started for the kernel. It needs a cancho with `--layout`. Measured in QEMU only: the kernel
+of 0.0.30, built by cancho's main (with mem2reg, cancho#873), boots, runs the shell, reports its
+faults, poses the arm, logs in over SSH with OpenSSH and loads itself (`load.sh`), in 1,335,456
+bytes against 349,232 through LLVM. The kernel of 0.0.52 (the tools, the heap) is 790,888 bytes
+through LLVM and does not fit natively yet: the image is refused 1,200,936 bytes past the 2 MB
+below the tables, since that backend's code is not yet optimised. CI runs it, allowed to fail.
 
 Shell: `help`, `about`, `echo <text>`, `uptime` (from the ARM counter), `ticks` (timer
 interrupts taken), `mem` (the memory map), and three ways to fault on purpose, each named
@@ -322,16 +337,20 @@ card is taken out.
 
 The kernel reads a FAT16 or FAT32 disk ([docs/storage.md](docs/storage.md)): QEMU's `virt` disk, or a
 Pi's SD card ([docs/sdcard.md](docs/sdcard.md)):
-`disk`, `ls`, `cat <name>`, `sum <name>`, and it can change one: `write <name> <text>`,
-`append <name> <text>`, `copy <from> <to>`, `remove <name>`. Nothing is lost by any of them
+`disk`, and `ls`, `cat <path>`, `sum <path>` (cancho-tools' `list`, `peek` and `hash`, answering in text), and it can change one: `copy <from> <to>`, `remove <name>`, and
+cancho-tools' own `write`, `replace` and `move`, built in ([docs/tools.md](docs/tools.md)): `write --create --stdin <name>`,
+then the text, then Ctrl-D. A file that is there is written over only by one who gives its hash (`--if-sha256`).
+Nothing is lost by any of them
 ([docs/permissions.md](docs/permissions.md)): what a file held before a `write` or a `remove` stays in
 the directory `OLD` (`versions` lists them, `copy OLD/<name> <new>` brings one back), and every change
 has a line in `LOG.TXT` that says who made it, each line chained to the one before by SHA-256 (`record`
 checks the chain; so does `tests/checklog.py`, with Python alone). Only `purge <number>`, at the serial
-console, gives a version up. Short names only. A whole file, a new kernel among them, comes in over
+console, gives a version up. A name may be a path through directories (`mkdir src`, `write src/a.txt ...`,
+`ls src`), and may be long (`calibration.cho`): [docs/storage.md](docs/storage.md). A whole file, a new kernel among them, comes in over
 SSH with `board/put.sh` ([docs/update.md](docs/update.md)): it is kept only if the bytes that came and
 the bytes the disk gives back have the SHA-256 the sender gave. `restart` then starts the board again
-from the card ([docs/restart.md](docs/restart.md)).
+from the card ([docs/restart.md](docs/restart.md)), and `BOOT.TXT` on the card says what it does at
+its start: the network, SSH, where the servo bus is ([docs/boot.md](docs/boot.md)).
 
 ```
 MACHINE=virt DISK=some-fat.img ./test.sh disk ls 'sum KERNEL8.IMG'
@@ -396,11 +415,13 @@ Context and decisions: [`docs/ROADMAP.md`](docs/ROADMAP.md). Compiler issues to 
 
 ## Next
 
-1. A heap for the kernel, so that cancho's own libraries (`std.json`, `std.buffer`) build for it.
-2. The tools an agent calls ([cancho-tools](https://github.com/alpibrusl/cancho-tools)) built in, and keys for
+1. The tools an agent calls ([cancho-tools](https://github.com/alpibrusl/cancho-tools)) built in, and keys for
    agents with grants: which names a key may read, add to or write.
-3. USB on the Pi 4, so that the kernel holds the arms' bus itself.
-4. Separate programs; the Pi 5's first boot; the safety core's side that sends.
+2. USB on the Pi 4, so that the kernel holds the arms' bus itself.
+3. Separate programs; the Pi 5's first boot; the safety core's side that sends.
+
+The kernel has a heap since 0.0.31 (`heap` tries it), so cancho's own libraries (`std.json`, `std.buffer`)
+build for it: that is what the tools need first.
 
 [docs/ROADMAP.md](docs/ROADMAP.md) has the decisions and the order they were taken in.
 

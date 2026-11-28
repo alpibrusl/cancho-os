@@ -218,6 +218,386 @@ pub fn entry[&b, &m, &o](s: &b [byte], i: int, name: &!m [byte], out: &!o [int])
     return entry_file();
 }
 
+// When entry `i` of the sector was last written, as seconds since 1970. FAT keeps a date and a time of day to two
+// seconds, and does not say in which zone: they are read here as if they were UTC. A month or a day that cannot
+// be is read as the first, and an hour, minute or second past its range as written: no bytes make this trap.
+pub fn changed[&b](s: &b [byte], i: int) -> [] int {
+    if len(s) < 512 || i < 0 || i > 15 {
+        return 0;
+    }
+    let at = i * 32;
+    let time = le16(s, at + 22);
+    let date = le16(s, at + 24);
+    var y = 1980 + date / 512;
+    var m = date / 32 % 16;
+    var d = date % 32;
+    if m < 1 || m > 12 {
+        m = 1;
+    }
+    if d < 1 {
+        d = 1;
+    }
+    // days since 1970 of a date: the year is counted from March, so that the leap day is its last
+    if m <= 2 {
+        y = y - 1;
+        m = m + 12;
+    }
+    let era = y / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * (m - 3) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146097 + doe - 719468;
+    return days * 86400 + time / 2048 * 3600 + time / 32 % 64 * 60 + time % 32 * 2;
+}
+
+// ---- long names --------------------------------------------------------------------------------
+// A name longer than eight letters, a dot and three is kept in entries of its own, before the entry that has
+// the short form: thirteen characters each, the last piece first, each with a sum of the short name's eleven
+// bytes so that pieces left behind by a system that did not know them are not taken for a name.
+//
+// A walk over a directory keeps `ls`: 0 the number of the piece seen last (0: none)   1 the sum the pieces
+// carry   2 how many characters they hold. And `lname`, room for the characters: 260 bytes.
+// Only what ASCII can say is kept: another character is read as `?`.
+
+pub fn long_state() -> [] int {
+    return 3;
+}
+
+pub fn long_room() -> [] int {
+    return 260;
+}
+
+// Is entry `i` of the sector the first piece of a long name that is met (which is its last piece)?
+pub fn long_begins[&b](s: &b [byte], i: int) -> [] bool {
+    if len(s) < 512 || i < 0 || i > 15 {
+        return false;
+    }
+    let first = int_of(s[i * 32]);
+    return first != 229 && first != 0 && int_of(s[i * 32 + 11]) % 64 == 15 && first / 64 % 2 == 1;
+}
+
+fn long_char[&b, &l](s: &b [byte], at: int, lname: &!l [byte], to: int) -> [] int {
+    let c = le16(s, at);
+    if to < 0 || to >= len(lname) {
+        return 0;
+    }
+    if c == 0 || c == 65535 {
+        lname[to] = byte_of(0);
+    } else if c < 32 || c > 126 {
+        lname[to] = byte_of(63);
+    } else {
+        lname[to] = byte_of(c);
+    }
+    return 0;
+}
+
+// Entry `i` of the sector, which `entry` said is `kind`, taken into the walk. Called for every entry, in
+// order. Answers how long the long name of this entry is, in `lname`, if it is a file or a directory with a
+// whole long name before it whose sum is right; 0 otherwise.
+pub fn long[&b, &t, &l](s: &b [byte], i: int, kind: int, ls: &!t [int], lname: &!l [byte]) -> [] int {
+    if len(s) < 512 || i < 0 || i > 15 || len(ls) < 3 || len(lname) < 260 {
+        return 0;
+    }
+    let at = i * 32;
+    let first = int_of(s[at]);
+    if kind == entry_skip() && first != 229 && int_of(s[at + 11]) % 64 == 15 {
+        let piece = first % 64;
+        let sum = int_of(s[at + 13]);
+        if piece < 1 || piece > 20 {
+            ls[0] = 0;
+            return 0;
+        }
+        if first / 64 % 2 == 1 {
+            ls[1] = sum;
+            ls[2] = piece * 13;
+        } else if ls[0] != piece + 1 || ls[1] != sum {
+            ls[0] = 0;
+            return 0;
+        }
+        ls[0] = piece;
+        let to = (piece - 1) * 13;
+        var c = 0;
+        while c < 5 {
+            long_char(s, at + 1 + c * 2, lname, to + c);
+            c = c + 1;
+        }
+        c = 0;
+        while c < 6 {
+            long_char(s, at + 14 + c * 2, lname, to + 5 + c);
+            c = c + 1;
+        }
+        long_char(s, at + 28, lname, to + 11);
+        long_char(s, at + 30, lname, to + 12);
+        return 0;
+    }
+    var n = 0;
+    if (kind == entry_file() || kind == entry_directory()) && ls[0] == 1 {
+        // the sum of the short name's eleven bytes, each added after the sum is turned one bit to the right
+        var sum = 0;
+        var b = 0;
+        while b < 11 {
+            sum = (sum % 2 * 128 + sum / 2 + int_of(s[at + b])) % 256;
+            b = b + 1;
+        }
+        if sum == ls[1] {
+            while n < ls[2] && n < 260 && int_of(lname[n]) != 0 {
+                n = n + 1;
+            }
+        }
+    }
+    ls[0] = 0;
+    return n;
+}
+
+// May `text[from..to]` be written as a long name? 1 to 195 characters (fifteen pieces, so that the name and
+// its entry fit one sector and are written at once), each of them print and none of `" * / : < > ? \ |`; no
+// space or dot at either end.
+pub fn long_ok[&t](text: &t [byte], from: int, to: int) -> [] bool {
+    if from < 0 || to > len(text) || to <= from || to - from > 195 {
+        return false;
+    }
+    let a = int_of(text[from]);
+    let z = int_of(text[to - 1]);
+    if a == 32 || a == 46 || z == 32 || z == 46 {
+        return false;
+    }
+    var i = from;
+    while i < to {
+        let c = int_of(text[i]);
+        if c < 32 || c > 126 || c == 34 || c == 42 || c == 47 || c == 58 || c == 60 || c == 62 || c == 63 || c == 92 || c == 124 {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// How many pieces a long name of `n` characters is kept in.
+pub fn long_pieces(n: int) -> [] int {
+    if n <= 0 {
+        return 0;
+    }
+    return (n + 12) / 13;
+}
+
+// The short form a long name is also given, into `eleven`: what of the name before its last dot may be in a
+// short name, as many as leave room for `~` and `number`; then up to three of what follows that dot.
+// `number` is 1 to 999999, and the caller takes the first that the directory does not have. 0, or -1.
+pub fn alias[&t, &e](text: &t [byte], from: int, to: int, number: int, eleven: &!e [byte]) -> [] int {
+    if from < 0 || to > len(text) || to <= from || number < 1 || number > 999999 || len(eleven) < 11 {
+        return -1;
+    }
+    var k = 0;
+    while k < 11 {
+        eleven[k] = byte_of(32);
+        k = k + 1;
+    }
+    var dot = -1;
+    k = from;
+    while k < to {
+        if int_of(text[k]) == 46 {
+            dot = k;
+        }
+        k = k + 1;
+    }
+    var stem_end = to;
+    if dot > from {
+        stem_end = dot;
+    }
+    var digits = 1;
+    var d = number;
+    while d >= 10 {
+        digits = digits + 1;
+        d = d / 10;
+    }
+    let room = 8 - 1 - digits;
+    var n = 0;
+    k = from;
+    while k < stem_end && n < room {
+        let c = upper(int_of(text[k]));
+        if in_name(c) {
+            eleven[n] = byte_of(c);
+            n = n + 1;
+        }
+        k = k + 1;
+    }
+    if n == 0 {
+        eleven[0] = byte_of(95);
+        n = 1;
+    }
+    eleven[n] = byte_of(126);
+    n = n + 1;
+    var div = 1;
+    k = 1;
+    while k < digits {
+        div = div * 10;
+        k = k + 1;
+    }
+    while div > 0 {
+        eleven[n] = byte_of(48 + number / div % 10);
+        n = n + 1;
+        div = div / 10;
+    }
+    if dot > from {
+        var e = 0;
+        k = dot + 1;
+        while k < to && e < 3 {
+            let c = upper(int_of(text[k]));
+            if in_name(c) {
+                eleven[8 + e] = byte_of(c);
+                e = e + 1;
+            }
+            k = k + 1;
+        }
+    }
+    return 0;
+}
+
+// The sum every piece of a long name carries: of the short form's eleven bytes.
+pub fn sum11[&e](eleven: &e [byte]) -> [] int {
+    if len(eleven) < 11 {
+        return 0;
+    }
+    var sum = 0;
+    var b = 0;
+    while b < 11 {
+        sum = (sum % 2 * 128 + sum / 2 + int_of(eleven[b])) % 256;
+        b = b + 1;
+    }
+    return sum;
+}
+
+// Does entry `i` of the sector name something, with exactly these eleven bytes?
+pub fn is_raw[&b, &e](s: &b [byte], i: int, eleven: &e [byte]) -> [] bool {
+    if len(s) < 512 || i < 0 || i > 15 || len(eleven) < 11 {
+        return false;
+    }
+    let first = int_of(s[i * 32]);
+    if first == 0 || first == 229 || int_of(s[i * 32 + 11]) % 64 == 15 {
+        return false;
+    }
+    var k = 0;
+    while k < 11 {
+        if int_of(s[i * 32 + k]) != int_of(eleven[k]) {
+            return false;
+        }
+        k = k + 1;
+    }
+    return true;
+}
+
+// The first of `need` entries in a row that name nothing, in the sector. -1: there is no such row.
+pub fn free_run[&b](s: &b [byte], need: int) -> [] int {
+    if len(s) < 512 || need < 1 || need > 16 {
+        return -1;
+    }
+    var run = 0;
+    var i = 0;
+    while i < 16 {
+        let first = int_of(s[i * 32]);
+        if first == 0 || first == 229 {
+            run = run + 1;
+            if run == need {
+                return i - need + 1;
+            }
+        } else {
+            run = 0;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// Every entry of the sector that was never used is marked as one that was used and deleted. A directory ends
+// at its first never-used entry, so a sector that is passed over for a later one must not keep any: what is
+// written after it would be past the end. How many were marked.
+pub fn close_end[&b](s: &!b [byte]) -> [] int {
+    if len(s) < 512 {
+        return 0;
+    }
+    var n = 0;
+    var i = 0;
+    while i < 16 {
+        if int_of(s[i * 32]) == 0 {
+            s[i * 32] = byte_of(229);
+            n = n + 1;
+        }
+        i = i + 1;
+    }
+    return n;
+}
+
+// Piece `piece` (1 is the first thirteen characters) of the `pieces` of the long name `text[from..to]`, as
+// entry `i` of the sector. On the disk the last piece comes first, and says that it is the last.
+pub fn put_long[&b, &t](s: &!b [byte], i: int, text: &t [byte], from: int, to: int, piece: int, pieces: int, sum: int) -> [] int {
+    if len(s) < 512 || i < 0 || i > 15 || from < 0 || to > len(text) || to <= from || piece < 1 || piece > pieces || pieces > 20 || pieces != long_pieces(to - from) {
+        return -1;
+    }
+    let at = i * 32;
+    var k = 0;
+    while k < 32 {
+        s[at + k] = byte_of(0);
+        k = k + 1;
+    }
+    var order = piece;
+    if piece == pieces {
+        order = piece + 64;
+    }
+    s[at] = byte_of(order);
+    s[at + 11] = byte_of(15);
+    s[at + 13] = byte_of(sum % 256);
+    // thirteen characters of two bytes: the name's, then one zero if the name ends here, then 0xffff
+    let n = to - from;
+    k = 0;
+    while k < 13 {
+        var spot = at + 1 + k * 2;
+        if k >= 11 {
+            spot = at + 28 + (k - 11) * 2;
+        } else if k >= 5 {
+            spot = at + 14 + (k - 5) * 2;
+        }
+        let c = (piece - 1) * 13 + k;
+        if c < n {
+            s[spot] = text[from + c];
+        } else if c > n {
+            s[spot] = byte_of(255);
+            s[spot + 1] = byte_of(255);
+        }
+        k = k + 1;
+    }
+    return 0;
+}
+
+// An entry whose short form is given as its eleven bytes: what a long name's pieces are followed by.
+pub fn put_raw[&b, &e](s: &!b [byte], i: int, eleven: &e [byte], cluster: int, size: int, directory: bool) -> [] int {
+    if len(s) < 512 || i < 0 || i > 15 || len(eleven) < 11 || cluster < 0 || size < 0 {
+        return -1;
+    }
+    let at = i * 32;
+    var k = 0;
+    while k < 32 {
+        s[at + k] = byte_of(0);
+        k = k + 1;
+    }
+    k = 0;
+    while k < 11 {
+        s[at + k] = eleven[k];
+        k = k + 1;
+    }
+    s[at + 11] = byte_of(32);
+    if directory {
+        s[at + 11] = byte_of(16);
+    }
+    put16(s, at + 16, 33);
+    put16(s, at + 18, 33);
+    put16(s, at + 24, 33);
+    put16(s, at + 20, cluster / 65536);
+    put16(s, at + 26, cluster % 65536);
+    put16(s, at + 28, size % 65536);
+    put16(s, at + 30, size / 65536);
+    return 0;
+}
+
 fn upper(c: int) -> [] int {
     if c >= 97 && c <= 122 {
         return c - 32;
@@ -471,6 +851,17 @@ pub fn set_extent[&b](s: &!b [byte], i: int, cluster: int, size: int) -> [] int 
     put16(s, at + 26, cluster % 65536);
     put16(s, at + 28, size % 65536);
     put16(s, at + 30, size / 65536);
+    return 0;
+}
+
+// Entry `i` of `s` said to have been written at the date and time given, as FAT keeps them (`clock.fat_date`,
+// `clock.fat_time`): `changed` then reads them back.
+pub fn stamp[&b](s: &!b [byte], i: int, date: int, time: int) -> [] int {
+    if len(s) < 512 || i < 0 || i > 15 || date < 0 || date > 65535 || time < 0 || time > 65535 {
+        return -1;
+    }
+    put16(s, i * 32 + 22, time);
+    put16(s, i * 32 + 24, date);
     return 0;
 }
 

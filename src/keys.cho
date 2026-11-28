@@ -2,10 +2,13 @@ edition 5;
 
 module keys;
 
+import clock;
+
 // `keys` -- the file that says who may log in (docs/permissions.md): KEYS.TXT, a line a key,
 //
 //     owner ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... a name for people to read
 //     reader ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...
+//     agent ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... read:/ write:WORK/OUT a name
 //
 // the role, then the key as `ssh-keygen` writes it. Pure, like `inet` and `fat`: it is given the file's
 // bytes, never traps on any of them, and reads no disk. A line that is not a key is counted and skipped; so
@@ -17,6 +20,11 @@ pub fn reader() -> [] int {
 
 pub fn owner() -> [] int {
     return 2;
+}
+
+// An agent's key: it runs the tools and nothing else, and they reach only what its line grants it (`grants_for`).
+pub fn agent() -> [] int {
+    return 3;
 }
 
 // What a character of base64 stands for, or -1.
@@ -86,6 +94,9 @@ pub fn line[&t, &k](text: &t [byte], from: int, to: int, key: &!k [byte]) -> [] 
     } else if is(text, at, to, "reader ") {
         role = reader();
         at = at + 7;
+    } else if is(text, at, to, "agent ") {
+        role = agent();
+        at = at + 6;
     } else {
         return -1;
     }
@@ -162,4 +173,251 @@ pub fn load[&t, &b, &r, &s](text: &t [byte], n: int, table: &!b [byte], roles: &
         from = to + 1;
     }
     return count;
+}
+
+// ---- grants (docs/permissions.md, slice 5) ---------------------------------------------------------
+// An agent's line has, after its key, what it is granted: words `read:<path>` and `write:<path>`, a path being a
+// directory of the disk and everything under it (`/` is the whole disk). `write` is `read` too. The first word that
+// is not one of those ends them: the rest of the line is for people to read.
+//
+// Grants are kept as whole numbers, `gr[0]` how many and then 64 for each: 1 read or 2 write, the path's length, and
+// its bytes (62 at most), without a `/` at either end.
+
+pub fn grant_room() -> [] int {
+    return 1 + 4 * 64;
+}
+
+fn lower(c: int) -> [] int {
+    if c >= 65 && c <= 90 {
+        return c + 32;
+    }
+    return c;
+}
+
+// One word `text[at..end]` as a grant into `gr` at entry `e`: true if it is one. A path with an empty part, a part
+// that begins with a dot, or more than 62 bytes is not.
+fn grant_word[&t, &g](text: &t [byte], at: int, end: int, gr: &!g [int], e: int) -> [] bool {
+    var kind = 0;
+    var from = at;
+    if is(text, at, end, "read:") {
+        kind = 1;
+        from = at + 5;
+    } else if is(text, at, end, "write:") {
+        kind = 2;
+        from = at + 6;
+    } else {
+        return false;
+    }
+    var to = end;
+    while from < to && int_of(text[from]) == 47 {
+        from = from + 1;
+    }
+    while to > from && int_of(text[to - 1]) == 47 {
+        to = to - 1;
+    }
+    if from == at + 5 && kind == 1 && from == end || from == at + 6 && kind == 2 && from == end {
+        // `read:` with nothing after it grants nothing
+        return false;
+    }
+    if to - from > 62 {
+        return false;
+    }
+    var i = from;
+    var start = true;
+    while i < to {
+        let c = int_of(text[i]);
+        if start && (c == 47 || c == 46) {
+            return false;
+        }
+        start = c == 47;
+        i = i + 1;
+    }
+    let base = 1 + e * 64;
+    gr[base] = kind;
+    gr[base + 1] = to - from;
+    i = from;
+    while i < to {
+        gr[base + 2 + i - from] = int_of(text[i]);
+        i = i + 1;
+    }
+    return true;
+}
+
+// A word `until:YYYY-MM-DD` at `text[at..end]`: the last second of that day, in UTC; -1 if the word begins `until:`
+// and is not a day; -2 if it is another word.
+fn until_word[&t](text: &t [byte], at: int, end: int) -> [] int {
+    if !is(text, at, end, "until:") {
+        return 0 - 2;
+    }
+    if end - at != 16 || int_of(text[at + 10]) != 45 || int_of(text[at + 13]) != 45 {
+        return 0 - 1;
+    }
+    var v = 0;
+    var year = 0;
+    var month = 0;
+    var i = at + 6;
+    while i < end {
+        let c = int_of(text[i]);
+        if i == at + 10 {
+            year = v;
+            v = 0;
+        } else if i == at + 13 {
+            month = v;
+            v = 0;
+        } else if c < 48 || c > 57 {
+            return 0 - 1;
+        } else {
+            v = v * 10 + c - 48;
+        }
+        i = i + 1;
+    }
+    let start = clock.day_start(year, month, v);
+    if start < 0 {
+        return 0 - 1;
+    }
+    return start + 86399;
+}
+
+// What the file `text[0..n]` grants the key `key` (32 bytes) at the time `now`, into `gr`: how many grants. Every
+// `agent` line with that key adds its own, up to the four `gr` holds; a key with no such line is granted nothing.
+//
+// A line may end its grants with `until:YYYY-MM-DD`: they hold through that day (UTC) and not after. Such a line
+// grants nothing if the day is over, if the board has not been told the date (`now` 0: what ends on a day is taken
+// to have ended), or if the word is not a day: a line that was meant to end does not last for ever by a slip of
+// the hand. Never traps.
+pub fn grants_for[&t, &k, &g](text: &t [byte], n: int, key: &k [byte], gr: &!g [int], now: int) -> [] int {
+    if len(gr) < 1 {
+        return 0;
+    }
+    gr[0] = 0;
+    if n < 0 || n > len(text) || len(key) < 32 {
+        return 0;
+    }
+    let most = (len(gr) - 1) / 64;
+    var from = 0;
+    region r {
+        let found = alloc_slice[r](32, byte_of(0));
+        while from < n {
+            var to = from;
+            while to < n && int_of(text[to]) != 10 {
+                to = to + 1;
+            }
+            var end = to;
+            if end > from && int_of(text[end - 1]) == 13 {
+                end = end - 1;
+            }
+            if line(text, from, end, found) == agent() {
+                var same = true;
+                var b = 0;
+                while b < 32 {
+                    same = same && int_of(found[b]) == int_of(key[b]);
+                    b = b + 1;
+                }
+                // past `agent `, `ssh-ed25519 ` and the 68 characters of the key
+                var at = from;
+                while at < end && (int_of(text[at]) == 32 || int_of(text[at]) == 9) {
+                    at = at + 1;
+                }
+                at = at + 6 + 12 + 68;
+                var going = same;
+                let before = gr[0];
+                var ends = 0 - 2;
+                while going && at < end {
+                    while at < end && (int_of(text[at]) == 32 || int_of(text[at]) == 9) {
+                        at = at + 1;
+                    }
+                    var stop = at;
+                    while stop < end && int_of(text[stop]) != 32 && int_of(text[stop]) != 9 {
+                        stop = stop + 1;
+                    }
+                    if stop > at && is(text, at, stop, "until:") {
+                        ends = until_word(text, at, stop);
+                        going = false;
+                    } else {
+                        going = stop > at && gr[0] < most && grant_word(text, at, stop, gr, gr[0]);
+                        if going {
+                            gr[0] = gr[0] + 1;
+                        }
+                    }
+                    at = stop;
+                }
+                if same && ends != 0 - 2 && (ends < 0 || now <= 0 || now > ends) {
+                    // the line's grants have ended, or cannot be said to hold: they are taken back
+                    gr[0] = before;
+                }
+            }
+            from = to + 1;
+        }
+    }
+    return gr[0];
+}
+
+// Do the grants `gr` give the right `want` (1 read, 2 write) on `path`? One does if it is of that right or more and
+// its path is `path` or a directory above it. Letters are compared without their case, as FAT compares names; a `/`
+// at either end of `path` is passed over.
+pub fn covers[&g, &p](gr: &g [int], want: int, path: &p [byte]) -> [] bool {
+    if len(gr) < 1 {
+        return false;
+    }
+    var from = 0;
+    var to = len(path);
+    while from < to && int_of(path[from]) == 47 {
+        from = from + 1;
+    }
+    while to > from && int_of(path[to - 1]) == 47 {
+        to = to - 1;
+    }
+    var e = 0;
+    while e < gr[0] && 1 + (e + 1) * 64 <= len(gr) {
+        let base = 1 + e * 64;
+        let n = gr[base + 1];
+        if gr[base] >= want && n >= 0 && n <= 62 && n <= to - from {
+            var same = true;
+            var i = 0;
+            while i < n && same {
+                same = lower(gr[base + 2 + i]) == lower(int_of(path[from + i]));
+                i = i + 1;
+            }
+            if same && (n == 0 || n == to - from || int_of(path[from + n]) == 47) {
+                return true;
+            }
+        }
+        e = e + 1;
+    }
+    return false;
+}
+
+// Is `path` a directory above something that is granted? Then it may be passed through on the way there, and seen
+// to be a directory, without what else it holds being granted.
+pub fn reaches[&g, &p](gr: &g [int], path: &p [byte]) -> [] bool {
+    if len(gr) < 1 {
+        return false;
+    }
+    var from = 0;
+    var to = len(path);
+    while from < to && int_of(path[from]) == 47 {
+        from = from + 1;
+    }
+    while to > from && int_of(path[to - 1]) == 47 {
+        to = to - 1;
+    }
+    let m = to - from;
+    var e = 0;
+    while e < gr[0] && 1 + (e + 1) * 64 <= len(gr) {
+        let base = 1 + e * 64;
+        let n = gr[base + 1];
+        if n > m && n <= 62 {
+            var same = true;
+            var i = 0;
+            while i < m && same {
+                same = lower(gr[base + 2 + i]) == lower(int_of(path[from + i]));
+                i = i + 1;
+            }
+            if same && (m == 0 || gr[base + 2 + m] == 47) {
+                return true;
+            }
+        }
+        e = e + 1;
+    }
+    return false;
 }

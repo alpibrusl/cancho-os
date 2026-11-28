@@ -77,7 +77,7 @@ Rules of the road
   keep "measured in QEMU" on everything that was not seen on the board.
 - The Pi 5 (docs/pi5.md) is the one board whose code no test runs: QEMU has none. Do not describe it as
   working, and do not add a Pi 5 driver (RP1, the RNG200, USB) before the console has been seen on a real board.
-- Files, none near 2,000 lines (network.cho, at 1,560, is the one to watch): `src/kernel.cho` (boot, memory, shell, servo and arm), `src/base.cho`
+- Files, none near 2,000 lines (network.cho, at 1,560, is the one to watch): `src/kernel.cho` (boot, memory, shell, servo and arm; 1,650), `src/base.cho`
   (console output, clock, bus bytes), `src/network.cho` (links, generator, session, network commands). A
   new network command goes in `network.net_command`, never in the shell's loop.
 - The kernel's address, mask, gateway and name server are k[4154..4157] (docs/addresses.md); nothing may
@@ -90,6 +90,76 @@ Rules of the road
 - The servo bus through another machine (docs/netbus.md): `servo via` sets k[4262] (address) and k[4263] (port);
   `transact` then calls `network.bus_exchange`. `board/busbridge.py` must keep passing on ONLY packets that read
   (instructions 1, 2, 0x82): it is the one thing between a network and the arm's motors. Never add a write there.
+- The heap (cancho docs/freestanding.md, section 8): the compiler's bare runtime has `malloc` and `free` over the
+  memory the regions use, so `std.buffer`, `std.vec`, `std.json` build here. `heap` in the shell tries it. The kernel
+  holds the `Heap` capability and lends it only to what needs it: keep regions for anything with a known size, and
+  never use the heap in a path that must not fail (no memory left is a trap, not an answer).
+- Paths (docs/storage.md, "Directories"): `files.folder` walks a path and refuses a part that begins with a dot
+  (`..` would reach the kernel's own names); the kernel's names are checked for names of the TOP directory only,
+  and nothing is written under `OLD` (`under_old`). A new command that takes a name must go through `paths`.
+- Long names (docs/storage.md, "Long names"): `disk.place` decides short or long and leaves the short form in the
+  `name` buffer and the number of pieces in o[9]; `disk.named_at` writes the pieces and the entry into ONE sector.
+  A sector passed over while looking for a row must get `fat.close_end`, or the directory ends before the new
+  name (macOS's checker found that). A name is taken away with `disk.unname`, pieces first.
+- A lent system (cancho docs/bare-system.md): `hosted` in kernel.cho is the ONE `system ksys(con, vio, dma, stage, k, line, h) in { }`
+  block of the image (the compiler takes one, and no `return` inside it); `which` picks the program, and the programs are cancho-tools' and `tell`
+  (`src/programs.cho`, which imports nothing of the kernel; the kernel's own check of a lent system). `src/ksys.cho` answers a
+  hosted program's streams, arguments and files; its functions' first parameters are what is lent, in that order. Its files are
+  the disk's: read through `disk`, and changed only as the paragraph on a program's writes below says (a draft, then
+  `files.store_as`; `files.rename`). `HOSTKEY.BIN` is refused there too (`files.secret`).
+  A listing (`list`, `next`) keeps only how many names it has given and walks the directory again each time; names that begin
+  with a dot are not given, as `named` opens none. `stat` answers one thing a call (kind, length, time): `fat.changed` reads
+  FAT's date and time as UTC, and its vectors are Python's `calendar.timegm`.
+  A trap in a hosted program is a trap of the kernel: one that takes a path from a person refuses `..` itself (the tools do),
+  because the language traps on it. The kernel's rows carry `io_write`, `args`, `fs_read("")`, `dir_read`, `file_read` up to
+  `main` until the compiler discharges them, and `docs/authority.txt` shows that.
+- The block that lends the system discharges what its module answers (cancho docs/bare-system.md, section 12): do
+  NOT put a hosted label (`io_write`, `args`, `fs_read("")`, `dir_write`, ...) in the row of `hosted`, `shell` or
+  `kernel`; the compiler refuses it. `authority.sh` asks for `--target aarch64-none-elf`, and `docs/authority.txt`
+  says the kernel never touches the console, the filesystem or the command line: a tool does, through `ksys`.
+- What a tool is comes from the compiler, not from the kernel (docs/tools.md): `build.sh` has the list of names and
+  writes `build/tools/rows.cho` from `cancho authority` of each (name, whether it writes, whether it reads input, and
+  the one `run` whose row is theirs together). `program`, `changes`, `takes_input` and `help` in kernel.cho read that
+  table: do not add a tool's name, or a list of which tools write, to kernel.cho. A tool is added in build.sh's list.
+- The tools (docs/tools.md): cancho-tools' `hash`, `peek`, `seek`, `list`, `write`, `replace` and `move` are built in as they are, from `../cancho-tools`
+  (or `TOOLS=`), pinned by `TOOLS_REF` in the workflow: change a tool there, never here. build.sh turns each into a module in
+  `build/tools/` (text only: a `module` line, `run` made public, `main` left out); `program` in kernel.cho says which word runs
+  which. A new one is believed when its answers are the same bytes as the same tool's on another machine (the CI steps do
+  that). authority.sh needs build.sh to have run.
+- A program is lent the clock and random bytes (docs/clock.md, end): `ksys.clock` answers `clock_ms`/`clock_unix_ms`
+  (0 when the date is not known); `/dev/urandom` opened through a program's `Fs` is a handle seeded from the pool
+  (kind 6). The block lends `cpu` too now (for the counter): the compiler takes up to 12 lent values.
+- The date (docs/clock.md): `src/clock.cho` is pure (SNTP's question and answer, seconds to a date) with
+  `tests/clock_test.cho` against Python's dates. `net time <address> [port]` sets k[4275], the time the board started
+  at; the shell puts the time a line was typed at in k[4276], and `disk.touch`/`touch_new` date what is written with
+  it. The date is BELIEVED, not proved. It may not go back before the record's entry's own date
+  (`ledger.last_change`; `back` at the console overrides), and `keys.grants_for` takes a line with `until:` to
+  grant nothing when the day is over, the date unknown, or the word not a day: keep both when touching either. `tests/sntp.py` is the machine that is asked, in the tests.
+- A program that goes wrong (docs/tools.md): after `report_fault` a Pi up for ten seconds resets itself by its watchdog
+  (`restart`), and BOOT.TXT brings it back; sooner than that it halts. `watch on` (console or BOOT.TXT, k[4274]) makes
+  `hosted` count the watchdog while a program runs, and five functions of ksys start the count again. It cannot be
+  on by default: QEMU's Pi resets as soon as the watchdog is started. `fail trap|spin|memory` (programs.cho) is how
+  each is tried; `fail spin` only on a real board.
+- Grants (docs/permissions.md, slice 5): an `agent` line of KEYS.TXT gives a key `read:`/`write:` on directories.
+  `src/keys.cho` (pure) reads the line and says what a path is covered by; `may` in `src/ksys.cho` is the ONE place
+  that asks, and every function there that takes a name calls it first: a new one must too. An agent's session runs
+  only programs (kernel.cho), because the shell's own commands do not ask. Grants are read from the file before each
+  line (`load_grants`, into k[4280..]). `./agents.sh` is the test; a change here is believed when it passes.
+- `ls`, `cat`, `sum` are `list`, `peek`, `hash` in text (`alias` in kernel.cho, docs/tools.md): the shell has no
+  listing or reading of its own. A test that reads their output reads the tool's: anchor a check at the line's
+  start (`^[0-9]+...`), since test.sh's output also holds the commands that were typed.
+- A program's writes (docs/tools.md, the end of `src/ksys.cho`): `write`, `replace` and `move` are the tools that write, and `write` is the only way a file's contents are written:
+  the shell has no `write` or `append` (do not bring them back: they wrote over a file blind). A program never
+  writes the disk: it makes a draft in memory and the rename of the draft is one call of `files.store_as`, `put`'s
+  writer (read back, old contents to OLD, a line in the record, the name last). `move` is `files.rename`, a name changed and never over
+  another. Do not give `ksys` a third way to change the disk; what it refuses (renaming or removing a file of the disk, adding to one, the kernel's own names)
+  is listed in the doc. `k[4267]` silences `putc` while that writer runs. A program's input is `ksys.key`: typed until Ctrl-D at the
+  console (`'^D'` in test.sh), or collected by the shell from an `ssh host command` until the client closes its side
+  (`k[4268]`..`k[4272]`, `takes_input` in kernel.cho); stage memory is cut in three: a draft, the input, the kept line. A tool that writes must not be in
+  `reading` (kernel.cho): a key that may only read is refused it by the shell.
+- BOOT.TXT (docs/boot.md): `src/boot.cho` (pure) holds the list of lines the kernel may type to itself at its
+  start. Adding a command to that list is a decision: nothing that changes the disk, loads a kernel or restarts.
+  The file is written at the console only (`files.boot_name`, `files.put_name`). A key in the first second stops it.
 - `restart` (docs/restart.md) holds the `pm` capability, the watchdog's two registers; no other function may.
   It is due 50 ticks after it is asked (k[4261]; `getc` answers -6), so that what was said has left.
 - All shell output goes through `putc`: never write to the UART elsewhere. Over SSH it is queued in `k`.

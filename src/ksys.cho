@@ -1,0 +1,978 @@
+edition 14;
+
+module ksys;
+
+import base;
+import disk;
+import fat;
+import files;
+import keys;
+import ssh_sha256 as sha;
+
+// ksys.cho -- the system the kernel lends to a program that was written for one (cancho docs/bare-system.md).
+// A program's standard output and its error stream are the shell's output (`putc`, so the console or the SSH
+// session); its input is `key`'s; and its arguments are the words of the line that was typed, `line[0..k[4266]]`.
+// Its files are the disk's: `h` holds what is open (`handles`), and what it writes is at the end of this file.
+// Each function is called by the compiler's own code, with what is lent before the operation's own arguments:
+// `system ksys(con, vio, dma, stage, pm, cpu, k, line, h) in { .. }`, the console, the disk's two capabilities, the kernel's state,
+// the line and the open files.
+
+pub fn out[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &p](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], p: &p [byte]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048")] int {
+    var i = 0;
+    while i < len(p) {
+        if int_of(p[i]) == 10 {
+            base.putc(con, k, 13);
+        }
+        base.putc(con, k, int_of(p[i]));
+        i = i + 1;
+    }
+    return i;
+}
+
+pub fn err[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &p](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], p: &p [byte]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048")] int {
+    return out(con, vio, dma, stage, pm, cpu, k, line, h, p);
+}
+
+// The next byte of the program's input, or -1 at its end. Over SSH the input is what the client sent before it closed
+// its side, which the kernel collected before the program began (k[4268] is 2, k[4269] bytes of it, k[4270] of them
+// read; it waits in `stage`, a megabyte in). At the console it is what is typed, shown as it is typed, until Ctrl-D.
+// A program started any other way has no input.
+pub fn key[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int]) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x220000..0x420000,0x40220000..0x40420000"), mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028")] int {
+    base.watchdog(pm, k, base.patience());
+    if k[4268] == 2 {
+        if k[4270] >= k[4269] {
+            return 0 - 1;
+        }
+        let b = mmio_read8(stage, k[14] + 0x220000 + input_at() + k[4270]);
+        k[4270] = k[4270] + 1;
+        return b;
+    }
+    if k[26] != 0 || k[4271] != 0 {
+        return 0 - 1;
+    }
+    let uart = k[0];
+    while mmio_read32(con, uart + 0x18) & 16 != 0 {
+        // (a person may take as long as they like to type)
+        base.watchdog(pm, k, base.patience());
+    }
+    var c = mmio_read32(con, uart) & 255;
+    if c == 4 {
+        k[4271] = 1;
+        return 0 - 1;
+    }
+    if c == 13 {
+        c = 10;
+        base.putc(con, k, 13);
+    }
+    base.putc(con, k, c);
+    return c;
+}
+
+// Where in `stage` a program's input waits, how much of it there may be, and where the line that started the
+// program is kept while its input is collected.
+pub fn input_at() -> [] int {
+    return 0x100000;
+}
+
+pub fn input_room() -> [] int {
+    return 0xf0000;
+}
+
+pub fn line_at() -> [] int {
+    return 0x1f8000;
+}
+
+// `clock_ms` (`wall` 0): milliseconds since the board started, which only go up. `clock_unix_ms` (1): milliseconds
+// since 1970 if the board has been told the date (docs/clock.md), else 0: a program is given no date the board does
+// not have.
+pub fn clock[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], wall: int) -> [cpu("cntfrq_el0"), cpu("cntvct_el0")] int  {
+    let up = base.uptime_ms(cpu);
+    if wall == 0 {
+        return up;
+    }
+    if k[4275] <= 0 {
+        return 0;
+    }
+    return k[4275] * 1000 + up;
+}
+
+// What is written has already gone to `putc`.
+pub fn flush[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int]) -> [] int {
+    return 0;
+}
+
+// Where word `n` of the line begins; -1 if it has fewer. Words have spaces between them.
+fn word_at[&s, &l](k: &!s [int], line: &!l [byte], n: int) -> [] int {
+    var at = 0;
+    var seen = 0;
+    let size = k[4266];
+    while at < size && at < len(line) {
+        while at < size && at < len(line) && int_of(line[at]) == 32 {
+            at = at + 1;
+        }
+        if at < size && at < len(line) {
+            if seen == n {
+                return at;
+            }
+            seen = seen + 1;
+            while at < size && at < len(line) && int_of(line[at]) != 32 {
+                at = at + 1;
+            }
+        }
+    }
+    return 0 - 1;
+}
+
+pub fn arguments[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int]) -> [] int {
+    var n = 0;
+    while word_at(k, line, n) >= 0 {
+        n = n + 1;
+    }
+    return n;
+}
+
+// Word `n` of the line into `into`: how many bytes it is.
+pub fn argument[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &t](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], n: int, into: &!t [byte]) -> [] int {
+    let from = word_at(k, line, n);
+    var i = 0;
+    while from >= 0 && from + i < k[4266] && from + i < len(line) && int_of(line[from + i]) != 32 && i < len(into) {
+        into[i] = line[from + i];
+        i = i + 1;
+    }
+    return i;
+}
+
+// ---- files, to read ------------------------------------------------------------------------------
+// A hosted program's files are the disk's (docs/storage.md). What is open is in `h`, six whole numbers each:
+//   0 what it is (0 nothing, 1 a directory, 2 a file, 3 a listing of a directory, 4 the draft, 5 a lock, 6 random bytes)   1 its first cluster (0: the top directory)
+//   2 its length   3 where the next `read` begins   4 5 a cluster of it and which one that is, so that reading
+//   on does not walk the chain from its start.
+// A handle is its place plus 3. Every answer that is not a handle or a count is minus the reason, as the
+// numbers Linux gives them: 2 no such name, 5 the disk failed, 9 not an open handle, 13 not allowed, 20 not a
+// directory, 21 a directory, 24 too many open, 30 the files are only read.
+
+pub fn handles() -> [] int {
+    return 8;
+}
+
+// After the handles, in `h`: for each, the path of what it is from the top of the disk, its length and then 256
+// bytes (`paths`); and the draft (`draft`), a file a program is writing that the disk does not have yet.
+pub fn handle_room() -> [] int {
+    return draft() + 3 + 512;
+}
+
+fn paths() -> [] int {
+    return handles() * 6;
+}
+
+// The draft: place 0 is whether there is one, 1 how many bytes it has, 2 how long its path is, and from 3 its path.
+// Its bytes wait in `stage`, where a file sent with `put` waits (docs/update.md).
+fn draft() -> [] int {
+    return paths() + handles() * 257;
+}
+
+// The path of handle `fd` becomes the path of `parent` (-1: the top), a `/` if that is not empty, and
+// `text[from..to]`. False if it is longer than 255 bytes.
+fn path_join[&hd, &r](h: &!hd [int], fd: int, parent: int, text: &r [byte], from: int, to: int) -> [] bool {
+    let mine = paths() + (fd - 3) * 257;
+    var n = 0;
+    if parent >= 3 {
+        let theirs = paths() + (parent - 3) * 257;
+        while n < h[theirs] {
+            h[mine + 1 + n] = h[theirs + 1 + n];
+            n = n + 1;
+        }
+    }
+    if n > 0 {
+        h[mine + 1 + n] = '/';
+        n = n + 1;
+    }
+    if n + to - from > 255 {
+        h[mine] = 0;
+        return false;
+    }
+    var i = from;
+    while i < to {
+        h[mine + 1 + n] = int_of(text[i]);
+        n = n + 1;
+        i = i + 1;
+    }
+    h[mine] = n;
+    return true;
+}
+
+fn ends[&r](name: &r [byte], word: &static [byte]) -> [] bool {
+    if len(name) < len(word) {
+        return false;
+    }
+    var i = 0;
+    while i < len(word) {
+        if int_of(name[len(name) - len(word) + i]) != int_of(word[i]) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn fresh[&hd](h: &!hd [int], kind: int, cluster: int, size: int) -> [] int {
+    var i = 0;
+    while i < handles() {
+        if h[i * 6] == 0 {
+            h[i * 6] = kind;
+            h[i * 6 + 1] = cluster;
+            h[i * 6 + 2] = size;
+            h[i * 6 + 3] = 0;
+            h[i * 6 + 4] = cluster;
+            h[i * 6 + 5] = 0;
+            h[paths() + i * 257] = 0;
+            return i + 3;
+        }
+        i = i + 1;
+    }
+    return 0 - 24;
+}
+
+// The place in `h` of handle `fd` if it is open and is a `kind`; -1.
+fn held[&hd](h: &!hd [int], fd: int, kind: int) -> [] int {
+    if fd < 3 || fd >= 3 + handles() || h[(fd - 3) * 6] != kind {
+        return 0 - 1;
+    }
+    return (fd - 3) * 6;
+}
+
+// ---- grants (docs/permissions.md, slice 5) ---------------------------------------------------------
+// An agent's key (k[4179] is 3, over SSH) reaches only what its line of KEYS.TXT grants it: the shell has put those
+// grants in k[4280..] before the program began (`keys.grants_for`). Every name a program opens, lists, asks about,
+// makes or renames comes through one of the functions below, and each asks here first. `want` is 1 to read and 2 to
+// write; 0 is to pass through a directory or to ask what a name is, which is also allowed above what is granted.
+// Anyone else, an owner, a reader or the console, is not asked: what they may do is the shell's to say.
+fn may[&s, &hd, &r](k: &!s [int], h: &!hd [int], dir: int, name: &r [byte], want: int) -> [] bool {
+    if k[4179] != 3 || k[26] == 0 {
+        return true;
+    }
+    var yes = false;
+    region r {
+        let full = alloc_slice[r](600, byte_of(0));
+        let n = pathed(h, dir, name, full);
+        if n >= 0 && len(k) >= 4280 + keys.grant_room() {
+            let gr = k[4280..4280 + keys.grant_room()];
+            if want == 0 {
+                yes = keys.covers(gr, 1, full[0..n]) || keys.reaches(gr, full[0..n]);
+            } else {
+                yes = keys.covers(gr, want, full[0..n]);
+            }
+        }
+    }
+    return yes;
+}
+
+// The name `text[from..to]` in directory `dir`, as a `kind` (1 a directory, 2 a file): a handle, or minus why not.
+fn named[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], dir: int, text: &r [byte], from: int, to: int, kind: int) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000")] int {
+    if to <= from || int_of(text[from]) == '.' {
+        return 0 - 2;
+    }
+    if dir == 0 && files.secret(text, from, to) {
+        return 0 - 13;
+    }
+    var answer = 0 - 5;
+    region r {
+        let sec = alloc_slice[r](512, byte_of(0));
+        let tab = alloc_slice[r](512, byte_of(0));
+        let info = alloc_slice[r](fat.facts(), 0);
+        let name = alloc_slice[r](12, byte_of(0));
+        let out = alloc_slice[r](3, 0);
+        let o = alloc_slice[r](12, 0);
+        if disk.volume(vio, dma, k, sec, info) == 0 && disk.look(vio, dma, k, sec, tab, info, name, out, o, dir, text, from, to) == 0 {
+            if o[0] == 0 {
+                answer = 0 - 2;
+            } else if kind == 1 && o[8] != fat.entry_directory() {
+                answer = 0 - 20;
+            } else if kind == 2 && o[8] == fat.entry_directory() {
+                answer = 0 - 21;
+            } else if kind == 2 && o[8] != fat.entry_file() {
+                answer = 0 - 2;
+            } else {
+                answer = fresh(h, kind, o[3], o[4]);
+            }
+        }
+    }
+    return answer;
+}
+
+// The path `path[0..to]`, every part a directory, walked from the top: a handle of the last, or minus why not.
+// `/`, `.` and nothing are the top directory; a `/` or `./` before the first name is passed over.
+fn walked[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], path: &r [byte], to: int) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000")] int {
+    var at = 0;
+    if at < to && int_of(path[at]) == '.' && (at + 1 == to || int_of(path[at + 1]) == '/') {
+        at = at + 1;
+    }
+    while at < to && int_of(path[at]) == '/' {
+        at = at + 1;
+    }
+    var dir = fresh(h, 1, 0, 0);
+    while dir >= 0 && at < to {
+        var end = at;
+        while end < to && int_of(path[end]) != '/' {
+            end = end + 1;
+        }
+        var under = 0 - 13;
+        if may(k, h, dir, path[at..end], 0) {
+            under = named(con, vio, dma, stage, pm, cpu, k, line, h, h[(dir - 3) * 6 + 1], path, at, end, 1);
+        }
+        if under >= 0 && !path_join(h, under, dir, path, at, end) {
+            h[(under - 3) * 6] = 0;
+            under = 0 - 36;
+        }
+        h[(dir - 3) * 6] = 0;
+        dir = under;
+        at = end;
+        while at < to && int_of(path[at]) == '/' {
+            at = at + 1;
+        }
+    }
+    return dir;
+}
+
+// `open_dir(fs, path)`.
+pub fn folder[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], path: &r [byte]) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000")] int {
+    return walked(con, vio, dma, stage, pm, cpu, k, line, h, path, len(path));
+}
+
+// A name under an open directory: `which` 0 a directory (`dir_enter`), 1 a file to read (`dir_open_read`), 2 a file
+// that must not be there yet (`dir_open_new`): the draft; 3 a file to add to (`dir_open_append`), which is served
+// for one kind of name only, the `.lexsys-lock` a tool holds while it writes: nothing else runs while a program
+// does, so the lock is held by being asked for, and no file is made for it.
+pub fn step[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], dir: int, name: &r [byte], which: int) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028")] int {
+    base.watchdog(pm, k, base.patience());
+    let at = held(h, dir, 1);
+    if at < 0 {
+        return 0 - 9;
+    }
+    // a program whose own row has no effect that writes is lent nothing to write with (k[4278]: kernel.cho, from
+    // what the compiler says the program performs), whoever runs it
+    if which >= 2 && k[4278] == 0 {
+        return 0 - 30;
+    }
+    // (to pass into a directory, to read a file, to make one or to hold its lock)
+    var want = which;
+    if which >= 2 {
+        want = 2;
+    }
+    if !may(k, h, dir, name, want) {
+        return 0 - 13;
+    }
+    if which == 3 {
+        if !ends(name, ".lexsys-lock") {
+            return 0 - 30;
+        }
+        return fresh(h, 5, 0, 0);
+    }
+    if which == 2 {
+        if k[4258] > 0 {
+            // a file sent with `put` is waiting where the draft would
+            return 0 - 16;
+        }
+        if h[draft()] != 0 {
+            return 0 - 24;
+        }
+        let there = stat(con, vio, dma, stage, pm, cpu, k, line, h, dir, name, 0);
+        if there >= 0 {
+            return 0 - 17;
+        }
+        let fd = fresh(h, 4, 0, 0);
+        if fd < 0 {
+            return fd;
+        }
+        if !path_join(h, fd, dir, name, 0, len(name)) {
+            h[(fd - 3) * 6] = 0;
+            return 0 - 36;
+        }
+        let mine = paths() + (fd - 3) * 257;
+        var i = 0;
+        while i < h[mine] {
+            h[draft() + 3 + i] = h[mine + 1 + i];
+            i = i + 1;
+        }
+        h[draft()] = 1;
+        h[draft() + 1] = 0;
+        h[draft() + 2] = h[mine];
+        return fd;
+    }
+    if which != 0 && which != 1 {
+        return 0 - 30;
+    }
+    var under = named(con, vio, dma, stage, pm, cpu, k, line, h, h[at + 1], name, 0, len(name), 1 + which);
+    if under >= 0 && which == 0 && !path_join(h, under, dir, name, 0, len(name)) {
+        h[(under - 3) * 6] = 0;
+        under = 0 - 36;
+    }
+    return under;
+}
+
+// `open_read(fs, path)`; any other way of opening is refused.
+pub fn open[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &r](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], path: &r [byte], mode: int) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000")] int {
+    if mode != 0 {
+        return 0 - 30;
+    }
+    if is_random(path) {
+        return random_open(k, h);
+    }
+    if !may(k, h, 0 - 1, path, 1) {
+        return 0 - 13;
+    }
+    var leaf = len(path);
+    while leaf > 0 && int_of(path[leaf - 1]) != '/' {
+        leaf = leaf - 1;
+    }
+    let dir = walked(con, vio, dma, stage, pm, cpu, k, line, h, path, leaf);
+    if dir < 0 {
+        return dir;
+    }
+    var file = 0 - 21;
+    // (a path that ends in `/` or in `.` is a directory's, whatever is there)
+    if leaf < len(path) && !(leaf + 1 == len(path) && int_of(path[leaf]) == '.') {
+        file = named(con, vio, dma, stage, pm, cpu, k, line, h, h[(dir - 3) * 6 + 1], path, leaf, len(path), 2);
+    }
+    h[(dir - 3) * 6] = 0;
+    return file;
+}
+
+// Bytes of an open file from `from` on, into `into`: how many (0 at its end), or minus why not.
+// ---- random bytes ----------------------------------------------------------------------------------
+// A program asks for random bytes the way cancho has a program ask for them on any system: it opens `/dev/urandom` and
+// reads (cancho docs/narrowing-into-several.md). That path is not a file of the disk. Opened, it is a handle of its
+// own (kind 6) seeded with 128 bits of the board's generator (four words of the pool, docs/network.md), each word used
+// once; its bytes are SHA-256 of the seed and a count, 32 at a time. A board with no generator says so (19, no such
+// device): a program is never given bytes that look random and are not. Reading it reveals nothing of the disk, so no
+// grant is asked for it.
+fn is_random[&p](path: &p [byte]) -> [] bool {
+    let want = "/dev/urandom";
+    if len(path) != len(want) {
+        return false;
+    }
+    var i = 0;
+    while i < len(want) {
+        if int_of(path[i]) != int_of(want[i]) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn random_open[&s, &hd](k: &!s [int], h: &!hd [int]) -> [] int {
+    if k[34] == 0 {
+        return 0 - 19;
+    }
+    if k[37] < 4 {
+        // the pool is filled while the shell waits for a key: a program that has used it up is told to wait
+        return 0 - 11;
+    }
+    let fd = fresh(h, 6, 0, 0);
+    if fd < 0 {
+        return fd;
+    }
+    let at = (fd - 3) * 6;
+    var i = 0;
+    while i < 4 {
+        k[37] = k[37] - 1;
+        let w = k[4136 + k[37]];
+        // (the word goes from the pool: nothing else is given it)
+        k[4136 + k[37]] = 0;
+        if i < 2 {
+            h[at + 1 + i] = w;
+        } else {
+            h[at + 2 + i] = w;
+        }
+        i = i + 1;
+    }
+    h[at + 3] = 0;
+    return fd;
+}
+
+// Random bytes into `into`: as many as it holds.
+fn random_read[&hd, &t](h: &!hd [int], at: int, into: &!t [byte]) -> [] int {
+    var got = 0;
+    region r {
+        let hs = alloc_slice[r](sha.state_len(), 0);
+        let block = alloc_slice[r](32, byte_of(0));
+        while got < len(into) {
+            sha.init(hs);
+            sha.update_u32(hs, h[at + 1] & 0xffffffff);
+            sha.update_u32(hs, h[at + 2] & 0xffffffff);
+            sha.update_u32(hs, h[at + 4] & 0xffffffff);
+            sha.update_u32(hs, h[at + 5] & 0xffffffff);
+            sha.update_u32(hs, h[at + 3] >> 32 & 0xffffffff);
+            sha.update_u32(hs, h[at + 3] & 0xffffffff);
+            sha.final(hs, block);
+            h[at + 3] = h[at + 3] + 1;
+            var i = 0;
+            while i < 32 && got < len(into) {
+                into[got] = block[i];
+                got = got + 1;
+                i = i + 1;
+            }
+        }
+    }
+    return got;
+}
+
+pub fn read_at[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &t](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], file: int, from: int, into: &!t [byte]) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028")] int {
+    base.watchdog(pm, k, base.patience());
+    let rnd = held(h, file, 6);
+    if rnd >= 0 {
+        return random_read(h, rnd, into);
+    }
+    let at = held(h, file, 2);
+    if at < 0 || from < 0 {
+        return 0 - 9;
+    }
+    var want = h[at + 2] - from;
+    if want > len(into) {
+        want = len(into);
+    }
+    if want <= 0 {
+        return 0;
+    }
+    var got = 0;
+    region r {
+        let sec = alloc_slice[r](512, byte_of(0));
+        let tab = alloc_slice[r](512, byte_of(0));
+        let info = alloc_slice[r](fat.facts(), 0);
+        var bad = disk.volume(vio, dma, k, sec, info) != 0;
+        if !bad {
+            let each = info[1] * 512;
+            // the cluster `from` is in: on from the one last read, or from the first
+            if h[at + 5] > from / each {
+                h[at + 4] = h[at + 1];
+                h[at + 5] = 0;
+            }
+            var steps = 0;
+            while !bad && h[at + 5] < from / each && steps <= info[7] {
+                let fs = fat.fat_sector(info, h[at + 4]);
+                bad = fs < 0 || disk.read(vio, dma, k, fs, tab) != 0;
+                if !bad {
+                    let then = fat.next(info, tab, h[at + 4]);
+                    bad = then < 0;
+                    if !bad {
+                        h[at + 4] = then;
+                        h[at + 5] = h[at + 5] + 1;
+                    }
+                }
+                steps = steps + 1;
+            }
+            while !bad && got < want && steps <= info[7] * 2 + 2 {
+                let first = fat.cluster_sector(info, h[at + 4]);
+                bad = first < 0;
+                var inside = (from + got) % each;
+                while !bad && got < want && inside < each {
+                    bad = disk.read(vio, dma, k, first + inside / 512, sec) != 0;
+                    var i = inside % 512;
+                    while !bad && i < 512 && got < want {
+                        into[got] = sec[i];
+                        got = got + 1;
+                        i = i + 1;
+                        inside = inside + 1;
+                    }
+                }
+                if !bad && got < want {
+                    let fs = fat.fat_sector(info, h[at + 4]);
+                    bad = fs < 0 || disk.read(vio, dma, k, fs, tab) != 0;
+                    if !bad {
+                        let then = fat.next(info, tab, h[at + 4]);
+                        bad = then < 0;
+                        if !bad {
+                            h[at + 4] = then;
+                            h[at + 5] = h[at + 5] + 1;
+                        }
+                    }
+                }
+                steps = steps + 1;
+            }
+        }
+        if bad {
+            got = 0 - 5;
+        }
+    }
+    return got;
+}
+
+// The next bytes of an open file.
+pub fn read[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &t](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], file: int, into: &!t [byte]) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028")] int {
+    if held(h, file, 6) >= 0 {
+        return read_at(con, vio, dma, stage, pm, cpu, k, line, h, file, 0, into);
+    }
+    let at = held(h, file, 2);
+    if at < 0 {
+        return 0 - 9;
+    }
+    let got = read_at(con, vio, dma, stage, pm, cpu, k, line, h, file, h[at + 3], into);
+    if got > 0 {
+        h[at + 3] = h[at + 3] + got;
+    }
+    return got;
+}
+
+pub fn size[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], file: int) -> [] int {
+    let at = held(h, file, 2);
+    if at < 0 {
+        return 0 - 9;
+    }
+    return h[at + 2];
+}
+
+// A file or a directory, closed.
+pub fn close[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], handle: int) -> [] int {
+    if handle < 3 || handle >= 3 + handles() || h[(handle - 3) * 6] == 0 {
+        return 0 - 9;
+    }
+    h[(handle - 3) * 6] = 0;
+    return 0;
+}
+
+// ---- what a directory holds ----------------------------------------------------------------------
+// A listing is a handle of its own (3): the directory's first cluster, and in place 3 how many names have been
+// given. Each `next` walks the directory from its start to the name that is due: nothing of a walk is kept
+// between two calls, so a listing costs no more than its handle, and a directory is short. A name that begins
+// with a dot is not given: `.` and `..` are entries of every directory but the top one, and `named` opens none.
+
+pub fn list[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], dir: int) -> [] int {
+    let at = held(h, dir, 1);
+    if at < 0 {
+        return 0 - 9;
+    }
+    if !may(k, h, dir, "", 1) {
+        return 0 - 13;
+    }
+    return fresh(h, 3, h[at + 1], 0);
+}
+
+// The next name of a listing into `into`: its length and 65536 times its kind (1 a file, 2 a directory); 0 at the
+// end; minus why not (36: the name is longer than `into`).
+pub fn next[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &t](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], listing: int, into: &!t [byte]) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028")] int {
+    base.watchdog(pm, k, base.patience());
+    let at = held(h, listing, 3);
+    if at < 0 {
+        return 0 - 9;
+    }
+    var answer = 0 - 5;
+    region r {
+        let sec = alloc_slice[r](512, byte_of(0));
+        let wt = alloc_slice[r](512, byte_of(0));
+        let info = alloc_slice[r](fat.facts(), 0);
+        let name = alloc_slice[r](12, byte_of(0));
+        let out = alloc_slice[r](3, 0);
+        let st = alloc_slice[r](6, 0);
+        let ls = alloc_slice[r](fat.long_state(), 0);
+        let lname = alloc_slice[r](fat.long_room(), byte_of(0));
+        if disk.volume(vio, dma, k, sec, info) == 0 {
+            disk.walk_start(info, h[at + 1], st);
+            var seen = 0;
+            var going = true;
+            answer = 0;
+            while going {
+                let spot = disk.walk_next(vio, dma, k, wt, info, st);
+                if spot <= 0 || disk.read(vio, dma, k, spot, sec) != 0 {
+                    going = false;
+                    if spot != 0 {
+                        answer = 0 - 5;
+                    }
+                }
+                var i = 0;
+                while i < 16 && going {
+                    let kind = fat.entry(sec, i, name, out);
+                    let long = fat.long(sec, i, kind, ls, lname);
+                    if kind == fat.entry_end() {
+                        going = false;
+                    } else if (kind == fat.entry_file() || kind == fat.entry_directory()) && int_of(name[0]) != '.' && !(long > 0 && int_of(lname[0]) == '.') {
+                        if seen == h[at + 3] {
+                            going = false;
+                            var n = out[0];
+                            if long > 0 {
+                                n = long;
+                            }
+                            if n > len(into) {
+                                answer = 0 - 36;
+                            } else {
+                                var j = 0;
+                                while j < n {
+                                    if long > 0 {
+                                        into[j] = lname[j];
+                                    } else {
+                                        into[j] = name[j];
+                                    }
+                                    j = j + 1;
+                                }
+                                h[at + 3] = h[at + 3] + 1;
+                                answer = n + 65536;
+                                if kind == fat.entry_directory() {
+                                    answer = n + 2 * 65536;
+                                }
+                            }
+                        }
+                        seen = seen + 1;
+                    }
+                    i = i + 1;
+                }
+            }
+        }
+    }
+    return answer;
+}
+
+// A name under an open directory, and one thing about it: `which` 0 its kind (1 a file, 2 a directory), 1 its
+// length in bytes (0 for a directory), 2 when it was last written (`fat.changed`).
+pub fn stat[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &q](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], dir: int, name: &q [byte], which: int) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000")] int {
+    let at = held(h, dir, 1);
+    if at < 0 {
+        return 0 - 9;
+    }
+    if len(name) == 0 || int_of(name[0]) == '.' {
+        return 0 - 2;
+    }
+    if !may(k, h, dir, name, 0) {
+        return 0 - 13;
+    }
+    var answer = 0 - 5;
+    region r {
+        let sec = alloc_slice[r](512, byte_of(0));
+        let tab = alloc_slice[r](512, byte_of(0));
+        let info = alloc_slice[r](fat.facts(), 0);
+        let short = alloc_slice[r](12, byte_of(0));
+        let out = alloc_slice[r](3, 0);
+        let o = alloc_slice[r](12, 0);
+        if disk.volume(vio, dma, k, sec, info) == 0 && disk.look(vio, dma, k, sec, tab, info, short, out, o, h[at + 1], name, 0, len(name)) == 0 {
+            if o[0] == 0 {
+                answer = 0 - 2;
+            } else if which == 0 {
+                answer = 1;
+                if o[8] == fat.entry_directory() {
+                    answer = 2;
+                }
+            } else if which == 1 {
+                answer = 0;
+                if o[8] == fat.entry_file() {
+                    answer = o[4];
+                }
+            } else if disk.read(vio, dma, k, o[1], sec) == 0 {
+                answer = fat.changed(sec, o[2]);
+            }
+        }
+    }
+    return answer;
+}
+
+// ---- files, written --------------------------------------------------------------------------------
+// A program does not write the disk. It makes a draft (`step`, 2), whose bytes wait in memory; it renames the draft
+// to a name; and that rename is the one write, done by `files.store_as` as `put`'s is: the bytes go to clusters
+// that were free, are read back and compared, what the name held before is kept in OLD, the record gains a line
+// that says who, and the name is changed last (docs/tools.md). A draft that is never renamed was never on the disk.
+
+// Is the draft `name` under directory handle `dir`?
+fn drafted[&hd, &r](h: &!hd [int], dir: int, name: &r [byte]) -> [] bool {
+    if h[draft()] == 0 {
+        return false;
+    }
+    let theirs = paths() + (dir - 3) * 257;
+    var n = h[theirs];
+    var i = 0;
+    while i < n {
+        if i >= h[draft() + 2] || h[draft() + 3 + i] != h[theirs + 1 + i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    if n > 0 {
+        if n >= h[draft() + 2] || h[draft() + 3 + n] != '/' {
+            return false;
+        }
+        n = n + 1;
+    }
+    if h[draft() + 2] != n + len(name) {
+        return false;
+    }
+    i = 0;
+    while i < len(name) {
+        if h[draft() + 3 + n + i] != int_of(name[i]) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// The path of `name` under directory handle `dir`, into `full`: its length, or -1 if it is longer than `full`.
+fn pathed[&hd, &r, &f](h: &!hd [int], dir: int, name: &r [byte], full: &!f [byte]) -> [] int {
+    var theirs = paths();
+    var n = 0;
+    if dir >= 3 {
+        theirs = paths() + (dir - 3) * 257;
+    }
+    while dir >= 3 && n < h[theirs] && n < len(full) {
+        full[n] = byte_of(h[theirs + 1 + n]);
+        n = n + 1;
+    }
+    if n > 0 && n < len(full) {
+        full[n] = byte_of('/');
+        n = n + 1;
+    }
+    if n + len(name) >= len(full) {
+        return 0 - 1;
+    }
+    var i = 0;
+    while i < len(name) {
+        full[n + i] = name[i];
+        i = i + 1;
+    }
+    return n + len(name);
+}
+
+// Bytes for the draft: how many were taken, which is all of them, or minus why not (27: more than the megabyte it has).
+pub fn write[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &p](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], file: int, bytes: &p [byte]) -> [mmio("0x220000..0x420000,0x40220000..0x40420000"), mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028")] int {
+    base.watchdog(pm, k, base.patience());
+    if held(h, file, 4) < 0 || h[draft()] == 0 || k[4278] == 0 {
+        return 0 - 9;
+    }
+    let size = h[draft() + 1];
+    if size + len(bytes) > input_at() - 1024 {
+        return 0 - 27;
+    }
+    var i = 0;
+    while i < len(bytes) {
+        mmio_write8(stage, k[14] + 0x220000 + 16 + size + i, int_of(bytes[i]));
+        i = i + 1;
+    }
+    h[draft() + 1] = size + len(bytes);
+    return len(bytes);
+}
+
+// A draft, a lock or a directory, kept: there is nothing to do before the rename, and the rename leaves nothing undone.
+pub fn sync[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], handle: int) -> [] int {
+    if held(h, handle, 4) < 0 && held(h, handle, 5) < 0 && held(h, handle, 1) < 0 {
+        return 0 - 9;
+    }
+    return 0;
+}
+
+pub fn lock[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], file: int) -> [] int {
+    if held(h, file, 5) < 0 {
+        return 0 - 9;
+    }
+    return 0;
+}
+
+// The draft `from` becomes the file `to`, both under `dir`; `fresh` 1 refuses a name that is taken (17). A file of
+// the disk is renamed only with `fresh` 1 (`files.rename`): one is never renamed over another (30). What a name may
+// be is what `put` may write (13 if not).
+pub fn rename[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &p, &q](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], dir: int, from: &p [byte], to: &q [byte], fresh: int) -> [mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), mmio("0x210000..0x220000,0x40210000..0x40220000"), mmio("0x220000..0x420000,0x40220000..0x40420000"), mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100")] int {
+    if held(h, dir, 1) < 0 {
+        return 0 - 9;
+    }
+    if k[4278] == 0 {
+        return 0 - 30;
+    }
+    if !may(k, h, dir, from, 2) || !may(k, h, dir, to, 2) {
+        return 0 - 13;
+    }
+    if !drafted(h, dir, from) {
+        // a file of the disk: its name is changed, and only to one that is not taken
+        if fresh == 0 {
+            if stat(con, vio, dma, stage, pm, cpu, k, line, h, dir, from, 0) >= 0 {
+                return 0 - 30;
+            }
+            return 0 - 2;
+        }
+        var moved = 0 - 36;
+        region r {
+            let a = alloc_slice[r](512, byte_of(0));
+            let b = alloc_slice[r](512, byte_of(0));
+            let an = pathed(h, dir, from, a);
+            let bn = pathed(h, dir, to, b);
+            if an >= 0 && bn >= 0 {
+                var who = 0;
+                if k[26] != 0 {
+                    who = 1;
+                }
+                k[4267] = 1;
+                moved = 0 - files.rename(con, vio, dma, k, a, 0, an, b, 0, bn, who);
+                k[4267] = 0;
+            }
+        }
+        return moved;
+    }
+    let kind = stat(con, vio, dma, stage, pm, cpu, k, line, h, dir, to, 0);
+    if kind == 2 {
+        return 0 - 21;
+    }
+    if kind == 1 && fresh != 0 {
+        return 0 - 17;
+    }
+    if kind < 0 && kind != 0 - 2 {
+        return kind;
+    }
+    var answer = 0 - 5;
+    region r {
+        let full = alloc_slice[r](512, byte_of(0));
+        let theirs = paths() + (dir - 3) * 257;
+        var n = 0;
+        while n < h[theirs] {
+            full[n] = byte_of(h[theirs + 1 + n]);
+            n = n + 1;
+        }
+        if n > 0 {
+            full[n] = byte_of('/');
+            n = n + 1;
+        }
+        if n + len(to) > 511 {
+            answer = 0 - 36;
+        } else {
+            var i = 0;
+            while i < len(to) {
+                full[n + i] = to[i];
+                i = i + 1;
+            }
+            n = n + len(to);
+            // (BOOT.TXT is the one name `put` may not write that a program may, and only one started at the console)
+            let boot = k[26] == 0 && fat.named("BOOT.TXT", 8, full, 0, n);
+            if !boot && (!files.put_name(full, 0, n) || files.tool_kept(full, 0, n)) {
+                answer = 0 - 13;
+            } else {
+                // who: a key over SSH while a line from the network is being run, else the console
+                var who = 0;
+                if k[26] != 0 {
+                    who = 1;
+                }
+                k[4267] = 1;
+                let done = files.store_as(con, vio, dma, stage, k, full, 0, n, k[14] + 0x220000 + 16, h[draft() + 1], full, who, "write", false);
+                k[4267] = 0;
+                if done == 0 {
+                    h[draft()] = 0;
+                    answer = 0;
+                }
+            }
+        }
+    }
+    return answer;
+}
+
+// A name under a directory, removed: the draft is forgotten. A file of the disk is not removed by a program (30).
+pub fn remove[&mc, &mv, &md, &mg, &mk, &cq, &s, &l, &hd, &p](con: &!mc Mmio("0x9000000..0x9000048,0x3f201000..0x3f201048,0xfe201000..0xfe201048,0x107d001000..0x107d001048"), vio: &!mv Mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), dma: &!md Mmio("0x210000..0x220000,0x40210000..0x40220000"), stage: &!mg Mmio("0x220000..0x420000,0x40220000..0x40420000"), pm: &!mk Mmio("0x3f10001c..0x3f100028,0xfe10001c..0xfe100028"), cpu: &!cq Cpu, k: &!s [int], line: &!l [byte], h: &!hd [int], dir: int, name: &p [byte]) -> [mmio("0xa000000..0xa004000,0x3f300000..0x3f300100,0xfd580000..0xfd590000,0xfe340000..0xfe340100"), mmio("0x210000..0x220000,0x40210000..0x40220000")] int {
+    if held(h, dir, 1) < 0 {
+        return 0 - 9;
+    }
+    if k[4278] == 0 {
+        return 0 - 30;
+    }
+    if !may(k, h, dir, name, 2) {
+        return 0 - 13;
+    }
+    if drafted(h, dir, name) {
+        h[draft()] = 0;
+        return 0;
+    }
+    if stat(con, vio, dma, stage, pm, cpu, k, line, h, dir, name, 0) >= 0 {
+        return 0 - 30;
+    }
+    return 0 - 2;
+}

@@ -10,9 +10,12 @@ set -eu
 cd "$(dirname "$0")"
 CANCHO=${CANCHO:-cancho}
 SSH=$(cd "${SSH:-../cancho-ssh}" 2>/dev/null && pwd)
-SOURCES="src/feetech.cho src/calibration.cho src/kinematics.cho src/so101.cho src/safety.cho src/inet.cho src/base.cho src/network.cho src/sshd.cho src/fat.cho src/disk.cho src/ledger.cho src/files.cho src/sdcard.cho src/keys.cho src/record.cho build/authorized.cho $(echo "$SSH"/src/*.cho)"
+SOURCES="src/feetech.cho src/calibration.cho src/kinematics.cho src/so101.cho src/safety.cho src/inet.cho src/base.cho src/network.cho src/sshd.cho src/fat.cho src/disk.cho src/ledger.cho src/files.cho src/sdcard.cho src/keys.cho src/clock.cho src/ksys.cho src/programs.cho src/boot.cho src/record.cho build/authorized.cho $(echo "$SSH"/src/*.cho)"
+# cancho-tools, as build.sh left them in build/tools (run it first), and what they share
+TOOLS=$(cd "${TOOLS:-../cancho-tools}" 2>/dev/null && pwd)
+SOURCES="$SOURCES $(ls build/tools/*.cho "$TOOLS"/contract/*.cho | tr '\n' ' ')"
 mkdir -p build
-"$CANCHO" authority src/kernel.cho $SOURCES --std | sed '/^provably pure/,$d' > build/authority.txt
+"$CANCHO" authority src/kernel.cho $SOURCES --std --target aarch64-none-elf | sed '/^provably pure/,$d' > build/authority.txt
 if ! diff docs/authority.txt build/authority.txt; then
     echo "authority.sh: the kernel's authority is not docs/authority.txt (update it if the change is meant)" >&2
     exit 1
@@ -20,7 +23,7 @@ fi
 # the first statement of arm_zero becomes a write to the bus through the console's capability
 awk '{ print } /^fn arm_zero\[/ { print "    base.bus_put(con, k, 0);" }' src/kernel.cho > build/steal.cho
 grep -q '^    base.bus_put(con, k, 0);$' build/steal.cho
-if "$CANCHO" check build/steal.cho $SOURCES --std --output json > build/steal.json 2>&1; then
+if "$CANCHO" check build/steal.cho $SOURCES --std --target aarch64-none-elf --output json > build/steal.json 2>&1; then
     echo "authority.sh: a function lent the console wrote to the servo bus, and the compiler accepted it" >&2
     exit 1
 fi

@@ -1,0 +1,165 @@
+edition 14;
+
+module programs;
+
+import std.buffer;
+
+// programs.cho -- the programs built into the image that were written for a system, not for this kernel: each
+// takes an `Io`, an `Args` or an `Fs` and has no word of the kernel in it (no `Mmio`, no `k`, no import of the
+// kernel's modules). `hosted` in kernel.cho runs them inside the one block that lends them `ksys`
+// (cancho docs/bare-system.md). A new one goes here, and gets a number in `hosted`.
+
+// `tell <words>`: a function written as any program for a system is, with an `Io` and an `Args` and no word of
+// this kernel in it. What it writes and the arguments it reads are answered by `ksys`, which the shell lends the
+// console, the kernel's state and the line (cancho docs/bare-system.md). It is the first thing in the image
+// that reaches the kernel only by asking it.
+pub fn tell[&i, &g](io: &!i Io, args: &g Args) -> [io_write, args] int {
+    var n = 1;
+    while n < arg_count(args) {
+        write_bytes(io, "argument ");
+        putchar(io, '0' + n % 10);
+        write_bytes(io, ": ");
+        write_bytes(io, arg(args, n));
+        putchar(io, 10);
+        n = n + 1;
+    }
+    write_bytes(io, "that was a program written for a system, answered by the kernel\n");
+    flush_out(io);
+    return n - 1;
+}
+
+// `fail trap|spin|memory`: a program that goes wrong in one of the three ways a program can, so that what the kernel
+// does then can be seen (docs/tools.md): it reads past the end of what it has, which is a trap; or never ends; or
+// asks for memory until there is none, which is a trap too. An owner's command, and the console's.
+fn greedy[&h](heap: &!h Heap, depth: int) -> [heap] int {
+    // a megabyte kept while more is asked for: the heap is the kernel's sixteen
+    var b = buffer.empty(heap, 1048576);
+    b = buffer.push(heap, b, byte_of(depth & 255));
+    let deeper = greedy(heap, depth + 1);
+    buffer.drop(heap, b);
+    return deeper + 1;
+}
+
+pub fn fail[&h, &i, &g](heap: &!h Heap, args: &g Args, io: &!i Io) -> [heap, io_write, args] int {
+    var how = 0;
+    if arg_count(args) > 1 {
+        how = int_of(arg(args, 1)[0]);
+    }
+    if how == 't' {
+        write_bytes(io, "reading past the end of four bytes\n");
+        let four = "four";
+        var at = arg_count(args) + 2;
+        return int_of(four[at]);
+    }
+    if how == 's' {
+        write_bytes(io, "never ending\n");
+        var n = 0;
+        while true {
+            n = n + 1;
+        }
+    }
+    if how == 'm' {
+        write_bytes(io, "asking for memory until there is none\n");
+        return greedy(heap, 0);
+    }
+    write_bytes(io, "fail trap|spin|memory\n");
+    return 1;
+}
+
+// `now`: the clock, as a program sees it (docs/clock.md): `clock_ms` and `clock_unix_ms`, answered by `ksys`. A program
+// that holds a `Clock` can tell how long something took and, if the board has been told the date, what time it is.
+pub fn now[&i, &c](io: &!i Io, clock: &c Clock) -> [io_write, clock] int {
+    let a = clock_ms(clock);
+    let wall = clock_unix_ms(clock);
+    let b = clock_ms(clock);
+    write_bytes(io, "{\"uptime_ms\":");
+    put_number(io, a);
+    write_bytes(io, ",\"unix_ms\":");
+    if wall > 0 {
+        put_number(io, wall);
+    } else {
+        write_bytes(io, "null");
+    }
+    write_bytes(io, ",\"asked_in_ms\":");
+    put_number(io, b - a);
+    write_bytes(io, "}\n");
+    return 0;
+}
+
+fn put_number[&i](io: &!i Io, v: int) -> [io_write] int {
+    if v < 0 {
+        putchar(io, 45);
+        return put_number(io, 0 - v);
+    }
+    if v >= 10 {
+        put_number(io, v / 10);
+    }
+    putchar(io, 48 + v % 10);
+    return 0;
+}
+
+// `random [n]`: n random bytes (32 if not given, at most 256), in hex, read as a program reads them on any system: from
+// `/dev/urandom`, opened through its `Fs` (ksys.cho says where they come from).
+pub fn random[&i, &g, &f](io: &!i Io, args: &g Args, fs: &f Fs("")) -> [io_write, args, fs_read(""), file_read] int {
+    var n = 32;
+    if arg_count(args) > 1 {
+        n = 0;
+        let a = arg(args, 1);
+        var i = 0;
+        while i < len(a) && int_of(a[i]) >= 48 && int_of(a[i]) <= 57 && n <= 256 {
+            n = n * 10 + int_of(a[i]) - 48;
+            i = i + 1;
+        }
+        if i < len(a) || n < 1 || n > 256 {
+            write_bytes(io, "random [n]: n bytes, from 1 to 256\n");
+            return 2;
+        }
+    }
+    var status = 0;
+    match open_read(fs, "/dev/urandom") {
+        Opened::Ok(opened) => {
+            var file = opened;
+            region r {
+                let b = alloc_slice[r](256, byte_of(0));
+                borrow mut file as &!h in {
+                    match file_read(h, b[0..n]) {
+                        Read::Got(got) => {
+                            var i = 0;
+                            while i < got {
+                                put_hex2(io, int_of(b[i]));
+                                i = i + 1;
+                            }
+                            putchar(io, 10);
+                        }
+                        Read::End => {
+                            status = 1;
+                        }
+                        Read::Failed(e) => {
+                            status = 1;
+                        }
+                    }
+                }
+            }
+            file_close(file);
+        }
+        Opened::Failed(e) => {
+            write_bytes(io, "no random bytes: ");
+            if e == 19 {
+                write_bytes(io, "this machine has no generator\n");
+            } else if e == 11 {
+                write_bytes(io, "the pool is used up; try again in a moment\n");
+            } else {
+                write_bytes(io, "it could not be opened\n");
+            }
+            status = 1;
+        }
+    }
+    return status;
+}
+
+fn put_hex2[&i](io: &!i Io, v: int) -> [io_write] int {
+    let digits = "0123456789abcdef";
+    putchar(io, int_of(digits[v >> 4 & 15]));
+    putchar(io, int_of(digits[v & 15]));
+    return 0;
+}

@@ -1,5 +1,11 @@
 # Storage
 
+> **Since 2026-11-27** the shell has no `write` and no `append`. A file's contents are written by cancho-tools' `write`,
+> built into the kernel: `write --create --stdin NAME`, or `--if-sha256 HEX` for a file that is there, then the text and
+> Ctrl-D at the console, or the text as the command's input over SSH ([tools.md](tools.md)). It goes through the same
+> writer: the old contents to `OLD`, a line in the record. Where a table below says `write NAME text` or `append`, that
+> is what was typed when it was measured.
+
 > **Status: reading and a first kind of writing work, in QEMU.** A file can be added, and added to; nothing
 > that is there can be changed or removed yet. No real card.
 
@@ -69,8 +75,8 @@ Not "write a sector". [`permissions.md`](permissions.md) is the design: who may 
 grants, not users), every write a new version, a record that is only added to, and an order of writes in
 which a power cut never leaves a file half changed. It was written before any code that writes.
 
-**Three slices are built**: `write <name> <text>` makes a file, `append <name> <text>` adds a line
-to one, `copy <from> <to>` makes a new file with another's contents. Since the third slice `write` to a
+**Three slices are built**: `write` makes a file (since 2026-11-27 cancho-tools' `write`; before it a command of
+the shell's, with `append`, which added a line to one), `copy <from> <to>` makes a new file with another's contents. Since the third slice `write` to a
 name that exists replaces it and `remove <name>` takes it away, and both keep what the file held, in the
 directory `OLD`; every change has a line in `LOG.TXT`. [`permissions.md`](permissions.md) has the order
 of writes and what was measured.
@@ -104,5 +110,86 @@ the shell may add files).
 
 ## What it does not do, yet
 
-- **Directories below the top, long names, FAT12, exFAT.**
+- **FAT12, exFAT.** Directories and long names are built (below).
 - **Writing a kernel to the card.** Files come in as one line of text or as a copy of another file.
+
+## Directories
+
+A name may have directories before it, with `/` between: `SRC/KERNEL.CHO`, to any depth. Every command
+that takes a name takes a path: `cat`, `sum`, `write`, `copy`, `remove`, and `put` over SSH.
+`mkdir <path>` makes a directory (its one cluster first, holding the two entries every directory begins
+with; then its name, last, with a line in the record). `ls <path>` lists one; `ls` shows directories
+with a `/` after the name.
+
+- **The kernel's own names are names of the top directory**: `HOSTKEY.BIN`, `LOG.TXT`, `KEYS.TXT`,
+  `BOOT.TXT`, and the files the board starts from. A file of the same name inside a directory is an
+  ordinary file.
+- **Nothing is written under `OLD` but by the kernel.** Versions stay there, all of them, whatever
+  directory the file was in: the record says which file a number was.
+- **A part of a path that begins with a dot is refused.** `SRC/../HOSTKEY.BIN` would otherwise be a way
+  around the names the kernel keeps for itself.
+- **A directory is not removed**, and not renamed: neither is built.
+
+Measured, in QEMU's `virt`, judged by macOS's `fsck_msdos -n` and a mount (and by `fsck.fat` and `mcopy`
+in CI):
+
+| what | result |
+|---|---|
+| `mkdir SRC`, `write SRC/A.TXT` twice, `copy BIG.BIN SRC/B.BIN`, `mkdir SRC/DEEP`, `copy SRC/B.BIN SRC/DEEP/C.BIN` | macOS lists `SRC`, `SRC/DEEP` and the files; both copies are the 300,000 bytes, byte for byte; `OLD/00000001.V` is the first text; the checker finds nothing wrong |
+| 40 files written into one directory of a FAT32 volume with 512-byte clusters | the directory grew past its first cluster; all 40 read back; the checker finds nothing wrong |
+| over SSH: a file of 403,552 bytes sent with `board/put.sh` to `SRC/K.IMG` | kept, and `sum` gives Python's checksum |
+| `write OLD/X y`, `put OLD/X.BIN ...`, `write SRC/../HOSTKEY.BIN x`, `cat NOPE/A.TXT`, `remove SRC` | refused, each with its reason |
+| the record after those | every line follows; `mkdir` has its lines |
+
+## Long names
+
+A name need not be eight letters, a dot and three. A longer one, or one with small letters to keep, is
+kept as FAT keeps it: in entries of its own before the file's entry, thirteen characters each, the last
+piece first, each carrying a sum of the short form the file is also given (`CALIBR~1.CHO`).
+
+- **Reading.** `ls` shows the long name where there is one; every command finds a file by its long name
+  or its short one, in either case of letters. Pieces whose sum is not the short form's, or with one
+  missing, are not a name: the file is then seen under its short form, as it was before.
+- **Writing.** A name that is not a short one and is 1 to 195 characters, none of `" * / : < > ? \ |`,
+  with no space or dot at either end, is written as a long one. The short form is the first letters that
+  a short name may hold, `~` and the first number no entry of the directory has. The pieces and the
+  entry are written in **one sector, once**: a name appears whole or not at all. That is why 195: fifteen
+  pieces and the entry are a sector.
+- **A sector that is passed over** because it has no row of entries long enough is left with no
+  never-used entry: a directory ends at the first one, and what is written after it would be past the end.
+  macOS's checker said exactly that ("has entries after end of directory") of the first version of this,
+  which is how it was found.
+- **Taking a name away** takes its pieces first and its entry last.
+- **Only what ASCII can say.** Another character in a name that is there is read as `?`, and such a name
+  cannot be typed; one cannot be written. A name with a space in it is read and listed, and cannot be
+  typed either: a space ends a word of a command.
+- `fat.cho` is still pure. Its pieces for `a-long-file-name.text` are the pieces macOS wrote for the same
+  name, byte for byte (`tests/fat_test.cho`; 26 tests now).
+
+Measured, in QEMU's `virt`, judged by macOS's `fsck_msdos -n` and a mount (and by `fsck.fat` and `mcopy`
+in CI, on a volume where another system made the first long name):
+
+| what | result |
+|---|---|
+| `ls`, `cat a-long-file-name.text`, the same in capitals, and by its short form | the file macOS put there, three times |
+| `write` over it, `copy` from it, `remove` of it | a version each time; afterwards macOS lists no such file and its checker finds nothing wrong (no pieces left behind) |
+| `write a-second-long-name.text ...`, `mkdir a-long-directory-name`, a file and a 300,000-byte copy inside | macOS lists them under those names; the copy is byte for byte; the checker finds nothing wrong |
+| 12 files with names of 35 characters in one directory of a FAT32 volume with 512-byte clusters, one removed, one added | the directory grew over several clusters; all read back; nothing wrong |
+| over SSH: `src/calibration.cho` of this repository sent with `board/put.sh` to `compiler/calibration.cho` | kept; `sum` gives Python's checksum |
+| `write bad:name.txt x`, `write trailing. x` | "not a name" |
+
+## On the real card
+
+The same day, on the Raspberry Pi 4 and the card it boots from, over SSH; the kernel (0.0.34) had been
+sent to that card with `board/put.sh` and the board restarted into it, with nobody at it:
+
+| what | result |
+|---|---|
+| `mkdir sources`, `write sources/a-note-with-a-long-name.text ...`, `cat` of it | made; written; read back |
+| `src/calibration.cho` of this repository sent with `board/put.sh` to `sources/calibration.cho`, then `sum` | kept; 5,542 bytes, the checksum Python gives the file |
+| `write` over the note, then `remove` of it | a version each time; `ls sources` then lists `calibration.cho` alone |
+| the firmware's own long names, which another system wrote: `ls overlays`, `cat overlays/README`, `sum bcm2711-rpi-4-b.dtb` | listed under their long names; the README's first lines; 49,090 bytes |
+| `record` | 26 lines, each following |
+
+Not done there: no other system has checked the card since. The last time one did (Linux's `fsck.fat`,
+[`sdcard.md`](sdcard.md)) was before directories and long names existed.

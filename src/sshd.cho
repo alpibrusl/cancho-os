@@ -15,14 +15,17 @@ import ssh_sha256 as sha;
 // State, besides the kernel's `k`: `si` and `sb` are cancho-ssh's own; `sx` is this file's:
 //    0..32 the host key's seed   32..64 its public half   64..96 a connection's 32 random bytes
 //    96..352 what was read from the connection and not yet taken   352..608 the keys that may log in (8)
+//    608..640 the key that logged in
 // In `k`: k[29] the connection that has the shell, plus one   k[30] the port (22)   k[4153] 1: the port is SSH's
 //    k[4160] the host key: 0 not made, 1 made and not yet shown, 2 shown   k[4161] k[4162] the unread bytes
 //    k[4163] the session running (cancho-ssh's count; 0: none)   k[4164] how many keys may log in
 //    k[4152] the session is to end when its output has gone
 //    k[4177] which of the keys are owners' (a bit each; the others may only read)
-//    k[4179] what the key that logged in may do: 2 an owner's, 1 a reader's
+//    k[4179] what the key that logged in may do: 2 an owner's, 1 a reader's, 3 an agent's (k[4273]: which keys are agents')
 //    k[4258] bytes of a file still to come (`put`; 0: none is being received)   k[4259] bytes of it that came
 //    k[4260] how many of them `step` has just left in `rline` (it then answers 4)
+//    k[4279] what the session ends with: what the program it ran ended with, 126 for a line the key may not run, else 0
+//    k[4268] 1: what is being received is a program's input, which ends when the client closes its side (kernel.cho)
 //    k[4184] k[4185] the first eight bytes of that key's SHA-256 fingerprint, as two 32-bit numbers
 
 pub fn ints() -> [] int {
@@ -34,7 +37,7 @@ pub fn bytes() -> [] int {
 }
 
 pub fn extra() -> [] int {
-    return 608;
+    return 640;
 }
 
 // The host key was read from the disk into `sx[0..32]`, not drawn: its public half is made, and it is to
@@ -183,8 +186,17 @@ pub fn step[&s, &t, &g, &h, &l, &w, &i, &b, &x](k: &!s [int], tcp: &!t [int], bu
                 }
                 if same && k[4177] >> who & 1 == 1 {
                     k[4179] = 2;
+                } else if same && k[4273] >> who & 1 == 1 && k[4179] != 2 {
+                    // an agent's key (and an owner's line for the same key is the one that counts)
+                    k[4179] = 3;
                 }
                 who = who + 1;
+            }
+            // the key itself, for the kernel to find the line that says what it is granted
+            var kb = 0;
+            while kb < 32 && 608 + kb < len(sx) {
+                sx[608 + kb] = ssh.auth_key(si, sb)[kb];
+                kb = kb + 1;
             }
             // and which key: the start of the SHA-256 OpenSSH shows for it, for the record's lines
             region f {
@@ -208,6 +220,7 @@ pub fn step[&s, &t, &g, &h, &l, &w, &i, &b, &x](k: &!s [int], tcp: &!t [int], bu
             k[32] = 0;
             k[4152] = 0;
             k[4258] = 0;
+            k[4268] = 0;
             if ssh.session(si) == ssh.session_command() {
                 // `ssh host command`: the one line, and the session ends with it
                 var n = 0;
@@ -335,12 +348,17 @@ pub fn step[&s, &t, &g, &h, &l, &w, &i, &b, &x](k: &!s [int], tcp: &!t [int], bu
             if whole {
                 return 1;
             }
+        } else if k[4163] != 0 && ssh.peer_eof(si) && k[27] == 0 && k[4268] == 1 {
+            // the client will send no more, and what it sent was a program's input: none is left to come
+            k[4258] = 0;
+            k[4260] = 0;
+            return 4;
         } else if k[4163] != 0 && ssh.peer_eof(si) && k[27] == 0 {
             // the client will send no more (its input was a file, say): the session ends
             k[4152] = 1;
         }
         if k[4163] != 0 && k[4152] != 0 && k[27] == 0 {
-            if ssh.exit_session(si, sb, 0) == 0 {
+            if ssh.exit_session(si, sb, k[4279]) == 0 {
                 k[4163] = 0;
                 k[4152] = 0;
                 moved = true;

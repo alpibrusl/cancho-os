@@ -3,7 +3,7 @@
 #   ./keys.sh <disk image> <owner key> <reader key> <a key that is in neither place>
 # The image is written to. The kernel must have been built with AUTHORIZED=<owner key>.pub.
 # The first start: KEYS.TXT is made at the console with the reader's key in it, SSH is turned on, and
-#   the owner writes a file (and the record must say which key did); the reader lists files, and is refused when it writes or asks for the host key;
+#   the owner writes a file (and the record must say which key did); the reader lists files, and is refused when it writes (by the shell or by a tool) or asks for the host key;
 #   the stranger is not let in.
 # The second start, of the same disk: the host key must be the one the first start made. Then the owner
 #   removes KEYS.TXT, and the reader is no longer let in.
@@ -33,17 +33,23 @@ stop() {
 }
 say() { printf '%s\r' "$1" >&3; sleep "${2:-1}"; }
 as() { key=$1; shift; echo "\$ ssh ($(basename "$key")) $*"; ssh -i "$key" $opts cancho@127.0.0.1 "$@" < /dev/null 2>&1 | tr -d '\r' | sed 's/^/    /'; }
+# the same with a line of input, for `write`, which reads what it is to write
+sent() { key=$1; text=$2; shift 2; echo "\$ ssh ($(basename "$key")) $*"; printf '%s\n' "$text" | ssh -i "$key" $opts cancho@127.0.0.1 "$@" 2>&1 | tr -d '\r' | sed 's/^/    /'; }
 
 mkdir -p build
 start build/keys1.out
 say 'net up'
-say "write KEYS.TXT reader ssh-ed25519 $rkey the reader"
+say 'write --create --stdin KEYS.TXT'
+say "reader ssh-ed25519 $rkey the reader"
+printf '\004' >&3; sleep 1
 say 'net ssh on' 4
 {
-    as "$OWNER" 'write O.TXT written by an owner'
+    sent "$OWNER" 'written by an owner' 'write --create --stdin O.TXT'
     as "$READER" ls
-    as "$READER" 'write R.TXT written by a reader'
+    sent "$READER" 'written by a reader' 'write --create --stdin R.TXT'
+    as "$READER" 'replace --old owner --new reader O.TXT'
     as "$READER" 'ping 10.0.0.1'
+    as "$READER" 'tally O.TXT'
     as "$READER" 'cat HOSTKEY.BIN'
     as "$OWNER" 'copy HOSTKEY.BIN STOLEN.BIN'
     as "$OWNER" 'cat O.TXT'
@@ -71,16 +77,21 @@ ok=0
 grep -q "new, and kept on the disk as HOSTKEY.BIN" build/keys1.out || ok=1
 grep -q "read from the disk: the same as before the restart" build/keys2.out || ok=1
 grep -q "and from KEYS.TXT on the disk: 1" build/keys1.out || ok=1
-grep -q "^    written: 20 bytes" build/keys-ssh.out || ok=1
-grep -q "^    O.TXT " build/keys-ssh.out || ok=1
-[ "$(grep -c "this key may only read: that needs an owner's key" build/keys-ssh.out)" = 2 ] || ok=1
-[ "$(grep -c "the host key is kept by the kernel" build/keys-ssh.out)" = 2 ] || ok=1
-[ "$(grep -c "^    written by an owner" build/keys-ssh.out)" = 2 ] || ok=1
+grep -q '^    {"ok":true,"command":"write","schema":"write.v1","data":{"path":"O.TXT","changed":true,"created":true,"bytes":20' build/keys-ssh.out || ok=1
+grep -q "^    20[[:space:]].*[[:space:]]O.TXT$" build/keys-ssh.out || ok=1
+# (the shell's `write`, the tool `replace`, which writes through a lent system, and `ping`)
+[ "$(grep -c "this key may only read: that needs an owner's key" build/keys-ssh.out)" = 3 ] || ok=1
+# (`cat` is the tool `peek`, refused the file by the kernel; `copy` is the shell's, which says why)
+[ "$(grep -c "the host key is kept by the kernel" build/keys-ssh.out)" = 1 ] || ok=1
+grep -q "^    peek: io.permission-denied" build/keys-ssh.out || ok=1
+[ "$(grep -c "^    1[[:space:]]written by an owner" build/keys-ssh.out)" = 2 ] || ok=1
 grep -q "Permission denied" build/keys-ssh.out || ok=1
+# a tool the kernel has no line for (docs/tools.md): the compiler says `tally` only reads, so a reader may run it
+grep -q '^    {"ok":true,"command":"tally"' build/keys-ssh.out || ok=1
 # and neither refused write left a file behind
 cat build/keys-ls.out
-grep -q "^    O.TXT " build/keys-ls.out || ok=1
-grep -q "^    R.TXT \|^    STOLEN.BIN " build/keys-ls.out && ok=1
+grep -q "[[:space:]]O.TXT$" build/keys-ls.out || ok=1
+grep -q "[[:space:]]R.TXT$\|[[:space:]]STOLEN.BIN$" build/keys-ls.out && ok=1
 # a key is taken away by removing the file that gave it (what the file held is kept as a version)
 cat build/keys-gone.out
 grep -q "^    removed; what it held is OLD/00000001.V" build/keys-gone.out || ok=1

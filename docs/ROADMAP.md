@@ -7,9 +7,10 @@
 - **Toolchain:** `cancho build --target aarch64-none-elf --emit obj`, then the boot stub and `ld.lld`
   with our own link script. Since 2026-11-28 also `BACKEND=native ./build.sh`: cancho's own backend
   assembles the boot stub and writes the image from `board/*.layout`, with no other tool (cancho
-  epic #840, task N8; CI runs the whole session both ways, and
-  both must pass). Measured in QEMU: the image boots and logs in over SSH; it is
-  3.8 times the size of LLVM's and fits the 2 MB below the tables only since mem2reg (cancho#873).
+  epic #840, task N8; CI runs the whole session both ways, the
+  native one allowed to fail until it fits). Measured in QEMU: the image of 0.0.30 boots and logs in over
+  SSH, 3.8 times the size of LLVM's, fitting the 2 MB below the tables only with mem2reg (cancho#873);
+  the image of 0.0.52 is refused 1,200,936 bytes past them, so it waits for N9's register allocator.
 
 ## Tracks
 1. **Pi kernel (this repo, active).**
@@ -70,6 +71,51 @@
   for a wider one (cancho `docs/mmio.md` 3), not fixed yet.
 - `load` (docs/load.md): a kernel sent over the serial console replaces the running one. A tool for bringing up
   hardware on the real boards without moving the SD card for every build; `board/send.py` is the sender.
+- A lent system (2026-11-27, cancho docs/bare-system.md): `tell`, a function written against `Io` and `Args` with
+  nothing of the kernel in it, runs inside the kernel, answered by `src/ksys.cho`. The first step towards the tools
+  of cancho-tools: streams and arguments. In QEMU.
+- A lent system's files (2026-11-27): `count <path>`, a function written against `Fs`, reads a file of the card;
+  `ksys` answers its opens and reads from the FAT volume, read only. Its count of a 300,000-byte file is what
+  Python counts. In QEMU.
+- A lent system's directories (2026-11-27): `names [path]`, written against `dir_list`, `dir_next` and `dir_stat`,
+  lists a directory with each name's length and time; on volumes macOS made, both are what was put there. The
+  hosted programs moved to `src/programs.cho`. In QEMU.
+- The tools, inside the kernel (2026-11-27, docs/tools.md): cancho-tools' `hash`, `peek`, `seek` and `list`, built in as
+  they are written. On the same files they answer the same bytes as the same tools on a Mac, but for FAT's time having
+  no zone. Next: writing through `files` and the record, then keys for agents with grants. In QEMU.
+- A tool that writes (2026-11-27, docs/tools.md): cancho-tools' `replace`, built in as it is written. Its temporary
+  file is a draft in memory and its rename is one write through `put`'s writer: read back, the old contents in OLD,
+  a line in the record. Same answers and same files as the same tool on a Mac; `fsck_msdos` and `checklog.py` judge
+  the volume. `move` the same day: a name changed, never over another, recorded. In QEMU; the four tools that read
+  ran on the real Pi 4. Then an input for programs (typed until Ctrl-D, or what an SSH client sends) and `write` in place of the shell's
+  own `write` and `append`, which are gone. `count` and `names`, the two programs written here to try a lent system's files
+  before the tools could be built in, are gone too: `hash` and `list` do what they did (0.0.42). Next: keys for agents with grants.
+- An agent's key and its grants (2026-11-27, docs/permissions.md): a line of KEYS.TXT gives a key `read:` and
+  `write:` on directories; its session runs only the tools, and everything they touch is asked about in one place.
+  In QEMU, with OpenSSH, and on the Pi 4. Next: the shell's `ls`, `cat` and `sum` as the tools; signed statements and approval.
+- A program that goes wrong no longer stops the board (2026-11-27, docs/tools.md): after a trap the kernel reports and
+  the board resets by its watchdog; with `watch on` a program that never ends is ended the same way. On the Pi 4.
+  Still wanted: the trap ending the program and not the kernel.
+- `ls`, `cat` and `sum` are the tools (2026-11-27, 0.0.45): short names for `list`, `peek` and `hash` in their text
+  form. One program lists a directory, and it is the one held to grants.
+- The date (2026-11-27, docs/clock.md): `net time <address>` asks a machine on the network; files the kernel writes
+  are dated and the record has a line for it. Believed, not proved.
+- The clock and random bytes, lent to a program (2026-11-28, 0.0.52, epic #60 task #50): `clock_ms` and
+  `clock_unix_ms` answered by the kernel; `/dev/urandom` from the board's generator; `now` and `random` are programs.
+- What a tool is comes from the compiler (2026-11-27, 0.0.49, epic #60 task #49, the kernel's half): who may run a
+  tool, and whether it is lent anything to write with, follow from its effect row, read at build time. `tally` and
+  `jsonq` built in by two words in a list.
+- A grant that ends on a day (2026-11-27, 0.0.47): `until:YYYY-MM-DD` on an agent's line; the date does not go
+  back before the record's last line; a board not told the date takes such a grant to have ended.
+- Long names (2026-11-26, docs/storage.md): read, written, replaced and removed; the pieces made here are the
+  pieces macOS makes. With directories, a source tree can live on the card.
+- Directories (2026-11-26, docs/storage.md): a name may be a path; `mkdir`, `ls <path>`.
+- BOOT.TXT (2026-11-26, docs/boot.md): the lines the board types to itself at its start (the network, SSH, where
+  the servo bus is), from a file written at the console only. With `put` and `restart`, an update needs nobody.
+- A heap (2026-11-26): cancho's bare target got `malloc` and `free` (cancho docs/freestanding.md 8), asked for
+  here so that cancho-tools, whose answers are JSON written through `std.json`, can be built into the kernel.
+  `heap` tries it: JSON made and printed, 600 buffers checked, a 64 KiB block reused 20,000 times. In QEMU.
+  Next: the tools themselves, with keys and grants for agents.
 - The servo bus through another machine (2026-11-26, docs/netbus.md): `servo via <address> <port>` and
   `board/busbridge.py`, which passes on only packets that read. For reading real arms before the kernel has
   USB or the bus on its own pins. In QEMU against a made-up bus.

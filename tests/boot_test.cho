@@ -1,0 +1,131 @@
+import std.test;
+import boot;
+
+// `boot` with no disk under it: which lines of a BOOT.TXT are run.
+
+fn ok[&t](line: &t [byte]) -> [] bool {
+    return boot.allowed(line, 0, len(line));
+}
+
+fn test_what_brings_the_board_back_is_allowed() -> [] int {
+    test.assert(ok("net up"));
+    test.assert(ok("net eth"));
+    test.assert(ok("net dhcp"));
+    test.assert(ok("net ssh on"));
+    test.assert(ok("servo via 10.42.0.1 6000"));
+    test.assert(ok("servo via off"));
+    test.assert(ok("net time 10.42.0.1"));
+    test.assert(!ok("net time 10.42.0.1 back"));
+    test.assert(!ok("net time 10.42.0.1 123 back"));
+    test.assert(ok("echo the board is up"));
+    // and what brings it back when a program does not end
+    let w = "watch on";
+    test.assert(boot.allowed(w, 0, len(w)));
+    let wo = "watch off";
+    test.assert(!boot.allowed(wo, 0, len(wo)));
+    return 0;
+}
+
+fn test_what_changes_the_disk_the_kernel_or_the_board_is_not() -> [] int {
+    test.assert(!ok("restart"));
+    test.assert(!ok("load 2000"));
+    test.assert(!ok("purge 1"));
+    test.assert(!ok("write A.TXT x"));
+    test.assert(!ok("append KEYS.TXT owner ssh-ed25519 AAAA"));
+    test.assert(!ok("remove KERNEL8.IMG"));
+    test.assert(!ok("copy A.TXT B.TXT"));
+    test.assert(!ok("net ssh off"));
+    test.assert(!ok("net down"));
+    test.assert(!ok("net"));
+    test.assert(!ok("net ssh on "));
+    test.assert(!ok("net ssh on; restart"));
+    test.assert(!ok("servo via"));
+    test.assert(!ok("echo"));
+    test.assert(!ok(""));
+    test.assert(!ok("echo a\tb"));
+    test.assert(!ok("echo 0123456789012345678901234567890123456789012345678901234567890123456789012345678901"));
+    return 0;
+}
+
+fn test_a_file_becomes_the_lines_to_type() -> [] int {
+    region a {
+        let out = alloc_slice[a](200, byte_of(0));
+        let count = alloc_slice[a](2, 0);
+        let file = "# what this board does at its start\r\n\r\n  net eth  \r\nnet dhcp\nrestart\nnet ssh on\n\tservo via 10.42.0.1 6000\nwrite A.TXT x";
+        let n = boot.script(file, len(file), out, count);
+        let want = "net eth\rnet dhcp\rnet ssh on\rservo via 10.42.0.1 6000\r";
+        test.assert_eq(n, len(want));
+        var i = 0;
+        while i < n {
+            test.assert_eq(int_of(out[i]), int_of(want[i]));
+            i = i + 1;
+        }
+        test.assert_eq(count[0], 4);
+        test.assert_eq(count[1], 2);
+        // a file of nothing, and one of comments
+        test.assert_eq(boot.script("", 0, out, count), 0);
+        test.assert_eq(boot.script("# a\n# b\n\n", 9, out, count), 0);
+        test.assert_eq(count[0] + count[1], 0);
+    }
+    return 0;
+}
+
+fn test_no_more_lines_than_the_most_and_no_more_bytes_than_there_is_room() -> [] int {
+    region a {
+        let file = alloc_slice[a](400, byte_of(0));
+        var i = 0;
+        // forty lines of `net up`
+        while i < 40 {
+            file[i * 7] = byte_of('n');
+            file[i * 7 + 1] = byte_of('e');
+            file[i * 7 + 2] = byte_of('t');
+            file[i * 7 + 3] = byte_of(32);
+            file[i * 7 + 4] = byte_of('u');
+            file[i * 7 + 5] = byte_of('p');
+            file[i * 7 + 6] = byte_of(10);
+            i = i + 1;
+        }
+        let out = alloc_slice[a](2000, byte_of(0));
+        let small = alloc_slice[a](20, byte_of(0));
+        let count = alloc_slice[a](2, 0);
+        test.assert_eq(boot.script(file, 280, out, count), boot.most() * 7);
+        test.assert_eq(count[0], boot.most());
+        test.assert_eq(count[1], 40 - boot.most());
+        test.assert_eq(boot.script(file, 280, small, count), 14);
+        test.assert_eq(count[0], 2);
+    }
+    return 0;
+}
+
+fn test_no_damage_to_the_file_makes_it_trap() -> [] int {
+    region a {
+        let good = "net eth\nnet dhcp\n# c\nservo via 10.42.0.1 6000\necho up\n";
+        let file = alloc_slice[a](len(good), byte_of(0));
+        let out = alloc_slice[a](64, byte_of(0));
+        let count = alloc_slice[a](2, 0);
+        var tried = 0;
+        var i = 0;
+        while i < len(good) {
+            var v = 0;
+            while v < 256 {
+                var j = 0;
+                while j < len(good) {
+                    file[j] = good[j];
+                    j = j + 1;
+                }
+                file[i] = byte_of(v);
+                let n = boot.script(file, len(good), out, count);
+                test.assert(n >= 0 && n <= 64 && count[0] <= boot.most());
+                // and cut at this byte
+                test.assert(boot.script(file, i, out, count) >= 0);
+                tried = tried + 1;
+                v = v + 1;
+            }
+            i = i + 1;
+        }
+        test.assert_eq(tried, len(good) * 256);
+        // a length longer than the text is not believed
+        test.assert(boot.script(good, 100000, out, count) >= 0);
+    }
+    return 0;
+}

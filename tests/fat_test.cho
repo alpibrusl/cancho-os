@@ -638,3 +638,207 @@ fn test_a_version_has_a_number_for_a_name() -> [] int {
     }
     return 0;
 }
+
+// ---- long names: the entries macOS wrote for `a-long-file-name.text` are entries 13 to 15 of `root16` ----
+
+// The long name of entry `want` of the sector, into `lname`: its length (0: it has none).
+fn long_of[&s, &l](sector: &s [byte], want: int, lname: &!l [byte]) -> [] int {
+    var found = 0;
+    region a {
+        let got = alloc_slice[a](12, byte_of(0));
+        let out = alloc_slice[a](3, 0);
+        let ls = alloc_slice[a](fat.long_state(), 0);
+        var i = 0;
+        while i <= want {
+            let n = fat.long(sector, i, fat.entry(sector, i, got, out), ls, lname);
+            if i == want {
+                found = n;
+            }
+            i = i + 1;
+        }
+    }
+    return found;
+}
+
+fn test_a_long_name_macos_wrote_is_read() -> [] int {
+    region a {
+        let s = alloc_slice[a](512, byte_of(0));
+        let lname = alloc_slice[a](fat.long_room(), byte_of(0));
+        set(s, root16());
+        test.assert_eq(long_of(s, 15, lname), 21);
+        test.assert(fat.named(lname, 21, "a-long-file-name.text", 0, 21));
+        test.assert(fat.named(lname, 21, "A-LONG-FILE-NAME.TEXT", 0, 21));
+        test.assert(!fat.named(lname, 21, "a-long-file-name.texx", 0, 21));
+        // macOS's own companion file, one piece
+        test.assert_eq(long_of(s, 3, lname), 11);
+        test.assert(fat.named(lname, 11, "._hello.txt", 0, 11));
+        // a file with no long name, and the pieces themselves
+        test.assert_eq(long_of(s, 1, lname), 0);
+        test.assert_eq(long_of(s, 14, lname), 0);
+        test.assert(fat.long_begins(s, 13));
+        test.assert(!fat.long_begins(s, 14));
+        test.assert(!fat.long_begins(s, 15));
+        // pieces whose sum is not the short name's are not a name: one byte of the short name changed
+        s[15 * 32 + 3] = byte_of('X');
+        test.assert_eq(long_of(s, 15, lname), 0);
+        // a piece missing: the second piece deleted
+        set(s, root16());
+        s[14 * 32] = byte_of(229);
+        test.assert_eq(long_of(s, 15, lname), 0);
+    }
+    return 0;
+}
+
+fn test_the_pieces_made_here_are_the_pieces_macos_made() -> [] int {
+    region a {
+        let theirs = alloc_slice[a](512, byte_of(0));
+        let ours = alloc_slice[a](512, byte_of(0));
+        let eleven = alloc_slice[a](11, byte_of(0));
+        let name = "a-long-file-name.text";
+        set(theirs, root16());
+        // the short form, with the number macOS gave it, and its sum
+        test.assert_eq(fat.alias(name, 0, len(name), 9, eleven), 0);
+        var i = 0;
+        while i < 11 {
+            test.assert_eq(int_of(eleven[i]), int_of(theirs[15 * 32 + i]));
+            i = i + 1;
+        }
+        test.assert_eq(fat.sum11(eleven), 226);
+        test.assert(fat.is_raw(theirs, 15, eleven));
+        test.assert(!fat.is_raw(theirs, 14, eleven));
+        test.assert_eq(fat.long_pieces(21), 2);
+        test.assert_eq(fat.long_pieces(13), 1);
+        test.assert_eq(fat.long_pieces(14), 2);
+        // the two pieces, in the order they are on the disk, byte for byte
+        test.assert_eq(fat.put_long(ours, 13, name, 0, len(name), 2, 2, 226), 0);
+        test.assert_eq(fat.put_long(ours, 14, name, 0, len(name), 1, 2, 226), 0);
+        i = 13 * 32;
+        while i < 15 * 32 {
+            test.assert_eq(int_of(ours[i]), int_of(theirs[i]));
+            i = i + 1;
+        }
+        // and the entry after them reads as theirs does
+        test.assert_eq(fat.put_raw(ours, 15, eleven, 670, 32, false), 0);
+        let lname = alloc_slice[a](fat.long_room(), byte_of(0));
+        test.assert_eq(long_of(ours, 15, lname), 21);
+        is_file(ours, 15, "A-LONG~9.TEX", 670, 32);
+    }
+    return 0;
+}
+
+fn test_what_may_be_a_long_name_and_where_a_row_is_free() -> [] int {
+    test.assert(fat.long_ok("calibration.cho", 0, 15));
+    test.assert(fat.long_ok("a name with spaces.txt", 0, 22));
+    test.assert(!fat.long_ok("", 0, 0));
+    test.assert(!fat.long_ok("bad:name", 0, 8));
+    test.assert(!fat.long_ok("a/b", 0, 3));
+    test.assert(!fat.long_ok("trailing.", 0, 9));
+    test.assert(!fat.long_ok(" leading", 0, 8));
+    test.assert(!fat.long_ok(".hidden", 0, 7));
+    region a {
+        let s = alloc_slice[a](512, byte_of(0));
+        let eleven = alloc_slice[a](11, byte_of(0));
+        // a name with nothing a short name may hold still has a short form; a number of six digits fits
+        test.assert_eq(fat.alias("+++.c", 0, 5, 1, eleven), 0);
+        test.assert_eq(int_of(eleven[0]), '_');
+        test.assert_eq(int_of(eleven[1]), '~');
+        test.assert_eq(fat.alias("calibration.cho", 0, 15, 123456, eleven), 0);
+        test.assert_eq(int_of(eleven[0]), 'C');
+        test.assert_eq(int_of(eleven[1]), '~');
+        test.assert_eq(int_of(eleven[7]), '6');
+        test.assert_eq(int_of(eleven[8]), 'C');
+        test.assert_eq(fat.alias("calibration.cho", 0, 15, 0, eleven), -1);
+        // an empty sector has a row anywhere; macOS's full one has none; with two deleted, a row of two
+        test.assert_eq(fat.free_run(s, 16), 0);
+        test.assert_eq(fat.free_run(s, 17), -1);
+        set(s, root16());
+        test.assert_eq(fat.free_run(s, 1), -1);
+        s[5 * 32] = byte_of(229);
+        s[6 * 32] = byte_of(229);
+        test.assert_eq(fat.free_run(s, 2), 5);
+        test.assert_eq(fat.free_run(s, 3), -1);
+        // a sector that is passed over is left with no never-used entry
+        test.assert_eq(fat.close_end(s), 0);
+        s[15 * 32] = byte_of(0);
+        test.assert_eq(fat.close_end(s), 1);
+        test.assert_eq(int_of(s[15 * 32]), 229);
+    }
+    return 0;
+}
+
+fn test_no_damage_to_a_directory_makes_reading_long_names_trap() -> [] int {
+    region a {
+        let s = alloc_slice[a](512, byte_of(0));
+        let lname = alloc_slice[a](fat.long_room(), byte_of(0));
+        var tried = 0;
+        var at = 0;
+        // every byte of the three entries that hold the long name, as every value; then every entry read
+        while at < 96 {
+            var v = 0;
+            while v < 256 {
+                set(s, root16());
+                s[13 * 32 + at] = byte_of(v);
+                var i = 0;
+                while i < 16 {
+                    let n = long_of(s, i, lname);
+                    test.assert(n >= 0 && n <= 260);
+                    i = i + 1;
+                }
+                tried = tried + 1;
+                v = v + 1;
+            }
+            at = at + 1;
+        }
+        test.assert_eq(tried, 96 * 256);
+    }
+    return 0;
+}
+
+// An entry's date and time, as seconds since 1970. What is wanted here was worked out by Python's `calendar.timegm`
+// from the same year, month, day, hour, minute and second: among them a leap day, the first and the last moment FAT
+// can write, and the two sides of the February that 2100 does not lengthen.
+fn when[&b](s: &!b [byte], date: int, time: int) -> [] int {
+    s[5 * 32 + 22] = byte_of(time % 256);
+    s[5 * 32 + 23] = byte_of(time / 256);
+    s[5 * 32 + 24] = byte_of(date % 256);
+    s[5 * 32 + 25] = byte_of(date / 256);
+    return fat.changed(s, 5);
+}
+
+fn test_an_entrys_time_is_the_seconds_another_implementation_counts() -> [] int {
+    region a {
+        let s = alloc_slice[a](512, byte_of(0));
+        test.assert_eq(when(s, 22382, 45482), 1700000000);
+        test.assert_eq(when(s, 22621, 24605), 1709208058);
+        test.assert_eq(when(s, 10143, 49021), 946684798);
+        test.assert_eq(when(s, 33, 0), 315532800);
+        test.assert_eq(when(s, 65439, 49021), 4354819198);
+        test.assert_eq(when(s, 10337, 0), 951868800);
+        test.assert_eq(when(s, 61532, 49021), 4107542398);
+        test.assert_eq(when(s, 61537, 0), 4107542400);
+        // an entry that is not one of the sixteen, and a sector that is short
+        test.assert_eq(fat.changed(s, 16), 0);
+        test.assert_eq(fat.changed(s, -1), 0);
+        test.assert_eq(fat.changed(s[0..511], 5), 0);
+    }
+    return 0;
+}
+
+fn test_no_date_and_no_time_make_reading_them_trap() -> [] int {
+    region a {
+        let s = alloc_slice[a](512, byte_of(0));
+        var tried = 0;
+        // every date with the latest time there is, and every time with the latest date: each within what FAT spans
+        var v = 0;
+        while v < 65536 {
+            let late = when(s, v, 65535);
+            test.assert(late >= 315532800 && late < 4354992000);
+            let last = when(s, 65535, v);
+            test.assert(last >= 315532800 && last < 4354992000);
+            tried = tried + 2;
+            v = v + 1;
+        }
+        test.assert_eq(tried, 131072);
+    }
+    return 0;
+}
