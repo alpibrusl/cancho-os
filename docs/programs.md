@@ -1,8 +1,9 @@
 # Programs that stay, and programs that fail
 
-> **Status: design, nothing built.** For #52 (a program that keeps running beside the shell) and #53 (a program
-> that fails ends alone), of the epic #60. Every number here says how it was got; what was not measured is listed
-> in section 8. The compiler changes it asks for are described, not made. Section 11 is what is left to the owner.
+> **Status: design, decided, nothing built.** For #52 (a program that keeps running beside the shell) and #53 (a
+> program that fails ends alone), of the epic #60. Every number here says how it was got; what was not measured is
+> listed in section 8. The compiler changes it asks for are described, not made. Section 11 was left to the owner,
+> who took what it proposed (2026-11-28); it now says what was decided.
 
 ## 1. What is missing
 
@@ -180,8 +181,8 @@ system ksys(con, vio, dma, stage, pm, k, line, h) runs (mem, at, size) as (heap,
 
 **The switch.** The registers a function must keep for its caller, by the processor's calling rules: x19 to x28,
 x29, x30, the stack pointer, and d8 to d15. Twenty-one words. They are stored in the save area of the one that
-leaves and loaded from the save area of the one that comes: twenty-five instructions (`tests/switch_probe.S` is
-exactly that run). The kernel's save area is one global of the module, `@cancho_sys_back`; a program's is in its
+leaves and loaded from the save area of the one that comes: twenty-five instructions (a probe in assembly ran exactly
+that run, section 8; it is not kept in this repository, which holds no assembly beyond `board/boot.S`). The kernel's save area is one global of the module, `@cancho_sys_back`; a program's is in its
 block. A program's very first entry loads a stack pointer and a return address the statement put there.
 
 **The functions of `syscode.cho`.** Each becomes, around the call of the module's function:
@@ -459,7 +460,8 @@ No code is written for this document. For judging its size:
 **Measured (2026-11-27).**
 
 - *A saved context is 168 bytes*: twenty-one words, counted from the calling rules of the processor (x19 to x28,
-  x29, x30, the stack pointer, d8 to d15). `tests/switch_probe.S` saves and loads exactly these and runs.
+  x29, x30, the stack pointer, d8 to d15). A probe in assembly that saves and loads exactly these ran (it was not kept:
+the switch that is built is the compiler's, and is measured again there).
 - *A switch is 25 instructions.* The probe in `qemu-system-aarch64` 11.1.3 as `virt`, with `-icount shift=0`,
   where the counter moves one for every sixteen instructions: 125,000 for a million turns of an empty loop of two
   instructions (2,000,000 instructions), 3,687,500 for a million turns with a switch there and a switch back
@@ -554,23 +556,27 @@ trap, with a way back: built in this order, nothing is built twice.
   undone as any write is.
 - **Not a way to load a new program** without building an image, or to move a servo.
 
-## 11. Open, for the owner
+## 11. Decided (2026-11-28)
 
-1. **The words of the statement** (`runs (mem, at, size)`), and the rule that the body names nothing of the
-   function around it but whole numbers copied at the start. It is the one new thing in the language.
-2. **The stack's end: a check at every function, or a page that is not mapped.** The check makes an overrun the
-   program's failure and is what statement 1 of section 5 rests on; its cost is not measured. The page costs
-   nothing while running and needs a table of 4 KiB pages for each program's stack (the kernel has eight tables
-   in all today), and an overrun then goes through the vector and resets the board. Proposed: the check.
-3. **The order**: #53's half first (section 9).
-4. **A program whose key is taken out of `KEYS.TXT` while it runs**: ended at once (why: `revoked`), or left
-   running with nothing granted. Proposed: ended, with a line in the record.
-5. **May an agent `start` a program that stays**, or only an owner. Proposed: an agent may, programs its row and
-   grants cover, and sees and ends only its own.
-6. **The slice** after which the kernel takes its turn (10 ms is the tick it has), and whether a program's row
-   could promise it asks often enough to do without the watchdog.
-7. **What is kept of a program that has no session**: 4,096 bytes of its output, proposed; or a file.
-8. **The memory programs live in**: a range of its own beside the heap, held as a capability (proposed), or
-   boxes of the kernel's heap. And the default sizes: 1 MB and a stack of 256 KiB.
-9. **The second backend** (cancho#840): the switch and the check written there when it reaches this target, or
-   this target kept on LLVM until then.
+Each of these was open for the owner; he took what this document proposed. Where it proposed nothing, the choice
+is the one stated, and the reason.
+
+1. **The words of the statement** are `runs (mem, at, size)`, as in section 3, with the rule that the body names
+   nothing of the function around it but whole numbers and booleans copied at the start. It is the one new thing in
+   the language, and is designed in the compiler's `docs/bare-system.md` before it is built.
+2. **The stack's end is a check at every function**, for this target: an overrun is the program's failure and
+   statement 1 of section 5 rests on it. Its cost is measured when it is built (slice 2), and written here.
+3. **The order is #53's half first** (section 9): a block left by a trap, then a block left to wait.
+4. **A program whose key is taken out of `KEYS.TXT` while it runs is ended** (why: `revoked`), with a line in the
+   record.
+5. **An agent may `start` a program that stays**, one its row and grants cover; it sees and ends only its own. An
+   owner and the console see and end every one.
+6. **The kernel takes its turn after 10 ms**, the tick it has, at the next call of `ksys`. No row promises to ask
+   often enough: a program that computes and asks for nothing is still the watchdog's.
+7. **A program with no session keeps its last 4,096 bytes of output** in its block, read with `said <n>`.
+8. **Programs live in a range of their own** beside the kernel's heap, held by `main` as a capability whose bound
+   `./authority.sh` shows. A program gets 1 MB and a stack of 256 KiB unless it is started with more; #57 decides
+   how large the range is.
+9. **The native backend** (cancho#840) writes the switch and the check when it builds this target with a `runs`
+   block; until then it refuses such a block (`unsupported-by-backend`), and the kernel's programs that stay are
+   built and tested with LLVM.
