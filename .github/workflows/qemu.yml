@@ -9,14 +9,13 @@ jobs:
   boot:
     # The same session twice: the kernel built by cancho through LLVM (clang, ld.lld and llvm-objcopy place it), and built by
     # cancho's own backend, which writes the image itself with board/*.layout (cancho docs/native-backend.md sections 16 and 17;
-    # alpibrusl/cancho#849). The second may fail until cancho's main has the image writer and mem2reg; it is required once green.
+    # alpibrusl/cancho#849). Both are required: cancho's main has the image writer (#871) and mem2reg (#873).
     name: boot in qemu (${{ matrix.backend }})
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         backend: [llvm, native]
-    continue-on-error: ${{ matrix.backend == 'native' }}
     steps:
       - uses: actions/checkout@v4
       - name: tools

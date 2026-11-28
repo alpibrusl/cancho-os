@@ -129,7 +129,7 @@ On macOS: `brew install llvm lld qemu` and put `$(brew --prefix llvm)/bin` on `P
 kernel as `board/pi.layout` and `board/virt.layout` say (what `board/link.ld` says, a line a
 word), and writes `kernel8.img` and `kernel-virt.elf` itself. No clang, ld.lld or llvm-objcopy
 is started for the kernel. It needs a cancho with `--layout`. Measured in QEMU only, with a
-compiler built from cancho's N9 branch: it boots, runs the shell, reports its faults, poses the
+compiler built from cancho's main (mem2reg, cancho#873): it boots, runs the shell, reports its faults, poses the
 arm and logs in over SSH with OpenSSH; the image is 1,335,456 bytes against 349,232 through
 LLVM, since that backend's code is not yet optimised.
 

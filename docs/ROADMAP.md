@@ -7,9 +7,9 @@
 - **Toolchain:** `cancho build --target aarch64-none-elf --emit obj`, then the boot stub and `ld.lld`
   with our own link script. Since 2026-11-28 also `BACKEND=native ./build.sh`: cancho's own backend
   assembles the boot stub and writes the image from `board/*.layout`, with no other tool (cancho
-  epic #840, task N8; CI runs the whole session both ways, the native one allowed to fail until
-  cancho's main has what it needs). Measured in QEMU: the image boots and logs in over SSH; it is
-  3.8 times the size of LLVM's and fits the 2 MB below the tables only since mem2reg (cancho N9).
+  epic #840, task N8; CI runs the whole session both ways, and
+  both must pass). Measured in QEMU: the image boots and logs in over SSH; it is
+  3.8 times the size of LLVM's and fits the 2 MB below the tables only since mem2reg (cancho#873).
 
 ## Tracks
 1. **Pi kernel (this repo, active).**
