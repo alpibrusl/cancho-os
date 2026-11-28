@@ -152,27 +152,29 @@ ul.why span { color: var(--muted); font-size: .95rem; }
     <h1>An operating system written in cancho, where the compiler lists everything the kernel can touch.</h1>
     <p class="lead">A kernel for the Raspberry Pi: the firmware loads one image, a page of assembly calls <code>main</code>, and everything after that is cancho, drivers included.</p>
     <p class="sub">Before the kernel runs, the compiler says every address and every processor register it is able to touch, and which function holds which device. That list is checked on every change.</p>
-    <div class="cta"><a class="btn primary" href="#video">Watch it on a real Pi 4 (37 s)</a><a class="btn ghost" href="#pi4">Put it on yours</a><a class="btn ghost" href="https://github.com/alpibrusl/cancho-os">Source</a></div>
+    <div class="cta"><a class="btn primary" href="#video">Watch it on a real Pi 4 (1 min)</a><a class="btn ghost" href="#pi4">Put it on yours</a><a class="btn ghost" href="https://github.com/alpibrusl/cancho-os">Source</a></div>
   </div>
-  <div class="term" role="img" aria-label="The console of a real Raspberry Pi 4 running cancho-os, reading its card and a robot arm"><div class="bar"><i></i><i></i><i></i></div>
-<pre><span class="c"># what a real Raspberry Pi 4 answered on 2026-11-26, running cancho-os from its own
-# card with a robot arm on a second board. Shortened; put together from two sessions.</span>
+  <div class="term" role="img" aria-label="A session over SSH with a real Raspberry Pi 4 running cancho-os: its card, a file's version, a robot arm, a restart"><div class="bar"><i></i><i></i><i></i></div>
+<pre><span class="c"># a Mac; a Raspberry Pi 4 running cancho-os from its own card. Shortened from the recording below.</span>
+$ ssh -J pi cancho@10.42.0.169
 &gt; about
 cancho-os 0.0.30: a kernel written in cancho (Raspberry Pi 4)
-&gt; disk
-an SD card of 249737216 sectors (121942 MB); a FAT32 volume at sector 8192, ...
+&gt; write NOTE.TXT second thoughts
+written: 16 bytes; what was there is OLD/00000004.V
+&gt; cat OLD/00000004.V
+first words
 &gt; record
-the record: 8 lines, each following from the one before (`cat LOG.TXT` shows them)
-&gt; servo via 10.42.0.1 6000
-the servo bus is the one at 10.42.0.1 port 6000: packets that read, passed on by that machine
+the record: 10 lines, each following from the one before (`cat LOG.TXT` shows them)
 &gt; servo pos
 servo 1: position 2555
 servo 2: position 609
-servo 3: position 3035
 <span class="c">...</span>
 &gt; arm pose
 gripper at x -63873 y 66990 z 109883 um
-&gt; restart
+&gt; exit
+$ board/put.sh -J pi cancho@10.42.0.169 build/kernel8.img KERNEL8.IMG
+kept: 382144 bytes, read back from the disk with the SHA-256 that was given; ...
+$ ssh -J pi cancho@10.42.0.169 restart
 <span class="r">restarting: the firmware starts the board again, and loads the kernel from the card</span></pre></div>
 </section>
 
@@ -185,14 +187,14 @@ gripper at x -63873 y 66990 z 109883 um
 
 <section id="video">
   <h2>On a real board</h2>
-  <p class="sub">A Mac logs in over SSH to the kernel on a Raspberry Pi 4, cabled to a home router. The board got its address from the router, looked a name up and pinged it; the random numbers are the chip's own. The recording is of version 0.0.23, from the morning of the same day: the board had no disk yet, which is what its last answer says.</p>
+  <p class="sub">A Mac logs in over SSH to the kernel on a Raspberry Pi 4. The board writes a file to its own SD card twice and shows the version it kept, says its record of changes is whole, reads the six servos of a real robot arm and works out where the gripper is. Then a new kernel is sent to its card over SSH and it is told to restart into it.</p>
   <div class="vid">
-    <video controls preload="none" playsinline poster="demo/pi4-ssh.poster.jpg" aria-label="A 37-second recording of an SSH session on cancho-os on a Raspberry Pi 4">
-      <source src="demo/pi4-ssh.mp4" type="video/mp4">
-      <source src="demo/pi4-ssh.webm" type="video/webm">
-      Your browser cannot play this video: <a href="demo/pi4-ssh.mp4">download the recording</a>.
+    <video controls preload="none" playsinline poster="demo/pi4-arm.poster.jpg" aria-label="A one-minute recording of a session with cancho-os on a Raspberry Pi 4: files, a robot arm, and a restart">
+      <source src="demo/pi4-arm.mp4" type="video/mp4">
+      <source src="demo/pi4-arm.webm" type="video/webm">
+      Your browser cannot play this video: <a href="demo/pi4-arm.mp4">download the recording</a>.
     </video>
-    <p class="caption">A real session, recorded on 2026-11-26 (<a href="demo/pi4-ssh.mp4">download</a>, or the <a href="demo/pi4-ssh.cast">asciinema cast</a> it was rendered from). What the kernel answers is whatever it answered; only the typing is scripted (<a href="https://github.com/alpibrusl/cancho-os/blob/main/docs/demo/session.py"><code>session.py</code></a>), and the ssh options that skip the host-key question are not shown: the kernel's key is new at every start, because it has nowhere to keep one yet.</p>
+    <p class="caption">A real session, recorded on 2026-11-26 (<a href="demo/pi4-arm.mp4">download</a>, or the <a href="demo/pi4-arm.cast">asciinema cast</a> it was rendered from). What the kernel answers is whatever it answered; only the typing is scripted (<a href="https://github.com/alpibrusl/cancho-os/blob/main/docs/demo/session.py"><code>session.py</code></a>), and three ssh options are passed and not shown: the key, and the two that skip the host-key question. The board is reached through a second board (<code>-J pi</code>), which has the arm's USB adapters and passes on only packets that read: the kernel cannot move the arm.</p>
   </div>
 </section>
 
